@@ -1,0 +1,54 @@
+plugins {
+    alias(libs.plugins.android.application)
+}
+
+android {
+    namespace 'com.eurobuddha.pandadex'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.eurobuddha.pandadex"
+        minSdk 28
+        targetSdk 35
+        versionCode 100
+        versionName "0.1.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildFeatures {
+        buildConfig true   // expose BuildConfig.VERSION_NAME so the footer shows the real build version
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Sign release with the debug keystore, matching the minima-core-android node app.
+            // IPC is authorized by the MINIMA_ID token, not by signature, so this is sufficient
+            // for sideloading. Swap to a dedicated release keystore if uploading to Play.
+            signingConfig signingConfigs.debug
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+
+    implementation libs.appcompat
+    implementation libs.material
+    implementation libs.activity
+    implementation libs.constraintlayout
+
+    // Tabbed exchange UI
+    implementation 'androidx.viewpager:viewpager:1.0.0'
+    // Keep-alive relauncher for GTC renewals / fill alerts while the app is closed
+    implementation 'androidx.work:work-runtime:2.9.1'
+
+    implementation files('libs/minimaapi.aar')
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}
