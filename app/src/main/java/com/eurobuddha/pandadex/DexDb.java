@@ -1,0 +1,170 @@
+package com.eurobuddha.pandadex;
+
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Local-first storage — the reason the app paints instantly (minimaSwap lesson: the chain is
+ * a sync target, not the render source). SQLite, not prefs-JSON (Limit re-parsed 200 trades
+ * per refresh on the main thread).
+ *
+ * Tables:
+ *   tape    — every observed market fill (the decentralized ticker source), capped
+ *   mytrade — my own fills (maker or taker)
+ *   book    — last-good order book snapshot (instant first paint)
+ *   meta    — key/value (last block, tracked flag, etc.)
+ */
+public final class DexDb extends SQLiteOpenHelper {
+
+    private static final String DB = "pandadex.db";
+    private static final int V = 1;
+    private static final int TAPE_CAP = 8000;
+
+    public DexDb(Context ctx) {
+        super(ctx.getApplicationContext(), DB, null, V);
+    }
+
+    @Override public void onCreate(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE tape (spentcoin TEXT PRIMARY KEY, timems INTEGER, block INTEGER,"
+                + " price TEXT, size TEXT, buy INTEGER, partial INTEGER, mine INTEGER)");
+        db.execSQL("CREATE INDEX tape_time ON tape(timems)");
+        db.execSQL("CREATE TABLE mytrade (spentcoin TEXT PRIMARY KEY, timems INTEGER, block INTEGER,"
+                + " price TEXT, size TEXT, buy INTEGER, maker INTEGER, orderid TEXT)");
+        db.execSQL("CREATE TABLE book (coinid TEXT PRIMARY KEY, json TEXT)");
+        db.execSQL("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)");
+    }
+
+    @Override public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
+        // never drop user data; additive migrations only
+    }
+
+    // ---- meta ----
+
+    public String meta(String k, String def) {
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT v FROM meta WHERE k=?", new String[]{k})) {
+            return c.moveToFirst() ? c.getString(0) : def;
+        }
+    }
+
+    public void putMeta(String k, String v) {
+        ContentValues cv = new ContentValues();
+        cv.put("k", k);
+        cv.put("v", v);
+        getWritableDatabase().insertWithOnConflict("meta", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    // ---- tape ----
+
+    /** Insert a fill keyed by the SPENT order coinid (each partial spends a distinct coin —
+     *  natural exactly-once). Returns true only for a NEW row (drives notify-once). */
+    public boolean addFill(String spentCoin, long timeMs, long block, BigDecimal price,
+                           BigDecimal size, boolean buy, boolean partial, boolean mine) {
+        ContentValues cv = new ContentValues();
+        cv.put("spentcoin", spentCoin);
+        cv.put("timems", timeMs);
+        cv.put("block", block);
+        cv.put("price", price.toPlainString());
+        cv.put("size", size.toPlainString());
+        cv.put("buy", buy ? 1 : 0);
+        cv.put("partial", partial ? 1 : 0);
+        cv.put("mine", mine ? 1 : 0);
+        long r = getWritableDatabase().insertWithOnConflict("tape", null, cv, SQLiteDatabase.CONFLICT_IGNORE);
+        if (r != -1) trimTape();
+        return r != -1;
+    }
+
+    private void trimTape() {
+        getWritableDatabase().execSQL(
+                "DELETE FROM tape WHERE spentcoin IN (SELECT spentcoin FROM tape ORDER BY timems DESC"
+                        + " LIMIT -1 OFFSET " + TAPE_CAP + ")");
+    }
+
+    public List<Candles.Fill> fills(long sinceMs) {
+        List<Candles.Fill> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT timems, price, size, buy FROM tape WHERE timems>=? ORDER BY timems ASC",
+                new String[]{String.valueOf(sinceMs)})) {
+            while (c.moveToNext()) {
+                out.add(new Candles.Fill(c.getLong(0), new BigDecimal(c.getString(1)),
+                        new BigDecimal(c.getString(2)), c.getInt(3) == 1));
+            }
+        }
+        return out;
+    }
+
+    /** Newest-first rows for the TRADES tape view: [timems, price, size, buy, mine]. */
+    public List<Object[]> tapeRows(int limit) {
+        List<Object[]> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT timems, price, size, buy, mine FROM tape ORDER BY timems DESC LIMIT " + limit, null)) {
+            while (c.moveToNext()) {
+                out.add(new Object[]{c.getLong(0), new BigDecimal(c.getString(1)),
+                        new BigDecimal(c.getString(2)), c.getInt(3) == 1, c.getInt(4) == 1});
+            }
+        }
+        return out;
+    }
+
+    // ---- my trades ----
+
+    public boolean addMyTrade(String spentCoin, long timeMs, long block, BigDecimal price,
+                              BigDecimal size, boolean buy, boolean maker, String orderId) {
+        ContentValues cv = new ContentValues();
+        cv.put("spentcoin", spentCoin);
+        cv.put("timems", timeMs);
+        cv.put("block", block);
+        cv.put("price", price.toPlainString());
+        cv.put("size", size.toPlainString());
+        cv.put("buy", buy ? 1 : 0);
+        cv.put("maker", maker ? 1 : 0);
+        cv.put("orderid", orderId);
+        return getWritableDatabase().insertWithOnConflict("mytrade", null, cv, SQLiteDatabase.CONFLICT_IGNORE) != -1;
+    }
+
+    /** Newest-first: [timems, price, size, buy, maker, orderid]. */
+    public List<Object[]> myTrades(int limit) {
+        List<Object[]> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT timems, price, size, buy, maker, orderid FROM mytrade ORDER BY timems DESC LIMIT " + limit, null)) {
+            while (c.moveToNext()) {
+                out.add(new Object[]{c.getLong(0), new BigDecimal(c.getString(1)),
+                        new BigDecimal(c.getString(2)), c.getInt(3) == 1, c.getInt(4) == 1, c.getString(5)});
+            }
+        }
+        return out;
+    }
+
+    // ---- book cache (instant first paint) ----
+
+    public void saveBook(List<String> coinJsons, List<String> coinids) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            db.execSQL("DELETE FROM book");
+            for (int i = 0; i < coinJsons.size(); i++) {
+                ContentValues cv = new ContentValues();
+                cv.put("coinid", coinids.get(i));
+                cv.put("json", coinJsons.get(i));
+                db.insertWithOnConflict("book", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    public List<String> loadBook() {
+        List<String> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT json FROM book", null)) {
+            while (c.moveToNext()) out.add(c.getString(0));
+        }
+        return out;
+    }
+}
