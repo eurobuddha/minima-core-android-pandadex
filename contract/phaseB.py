@@ -218,8 +218,9 @@ def owner_relock(st, order, new_want=None, label="renew"):
 def cancel(st, order):
     stt = d.state_of(order)
     locked = order.get("tokenamount") or order["amount"]
+    tokarg = "" if order.get("tokenid", "0x00") == "0x00" else " tokenid:" + order["tokenid"]
     steps = ["txninput id:$ID coinid:" + order["coinid"],
-             f"txnoutput id:$ID amount:{locked} address:{stt[1]} storestate:false",
+             f"txnoutput id:$ID amount:{locked} address:{stt[1]}{tokarg} storestate:false",
              "txnsign id:$ID publickey:" + stt[0], "txnbasics id:$ID", "txnpost id:$ID"]
     d.txn("cx" + str(time.time_ns() % 100000), steps)
     d.advance(4)
@@ -261,6 +262,71 @@ def lifecycle_e():
     assert find_order(st, st5[4]) is None, "expired order not swept"
     print("PROOF expiry: aged order swept to maker wallet WITHOUT owner sig (COINAGE branch)")
     print("\nPhase B chunk E: PASSED")
+
+
+def lifecycle_f():
+    """Chunk F: BUY-side order — the TOKEN coin is the locked leg (scale-36 exercise).
+    Lock 0.575 tUSDT at the covenant wanting 100 MINIMA; taker sells 60 MINIMA."""
+    st = load()
+    oid6 = "0x" + format(time.time_ns() % 0xFFFFFF, "X") + "06"
+    ostate = {"0": st["mypk"], "1": st["myaddr"], "2": "100", "3": "0x00",
+              "4": oid6, "5": "0", "6": "0.00575", "7": "1", "8": "0.01"}
+    for attempt in range(6):
+        try:
+            d.send_to(st["addr"], "0.575", tokenid=st["tok"], state=ostate)
+            break
+        except RuntimeError:
+            if attempt == 5:
+                raise
+            d.advance(3)
+    d.advance(4)
+    o = None
+    for _ in range(5):
+        o = find_order(st, oid6)
+        if o is not None:
+            break
+        d.advance(2)
+    assert o is not None, "buy order coin not found"
+    locked = Decimal(o.get("tokenamount") or o["amount"])
+    assert locked == Decimal("0.575"), f"locked {locked} != 0.575 (token-scale check)"
+    print("PROOF create-buy: locked 0.575 tUSDT wanting 100 MINIMA (tokenamount correct)")
+
+    w = Decimal("100")
+    take = Decimal("0.345")            # tUSDT taken by the taker
+    rem = locked - take                # 0.23 tUSDT remainder
+    pay = ceilg(w * take / locked)     # 60 MINIMA to maker
+    neww = ceilg(w * rem / locked)     # 40 MINIMA still wanted
+    fund = fund_coin("0x00", pay)
+    famt = Decimal(fund.get("tokenamount") or fund["amount"])
+    newstate = dict(d.state_of(o))
+    newstate[2] = str(neww)
+    steps = [
+        "txninput id:$ID coinid:" + o["coinid"],
+        "txninput id:$ID coinid:" + fund["coinid"],
+        f"txnoutput id:$ID amount:{pay} address:{d.state_of(o)[1]} storestate:false",
+        f"txnoutput id:$ID amount:{rem} address:{st['addr']} tokenid:{st['tok']} storestate:true",
+        f"txnoutput id:$ID amount:{take} address:{st['myaddr']} tokenid:{st['tok']} storestate:false",
+    ]
+    if famt - pay > 0:
+        steps.append(f"txnoutput id:$ID amount:{famt - pay} address:{st['myaddr']} storestate:false")
+    for port, val in sorted(d_int(newstate).items()):
+        steps.append(f"txnstate id:$ID port:{port} value:{val}")
+    steps += ["txnsign id:$ID publickey:auto", "txnbasics id:$ID", "txnpost id:$ID"]
+    d.txn("bf" + str(time.time_ns() % 100000), steps)
+    d.advance(4)
+    nc = None
+    for _ in range(5):
+        nc = find_order(st, oid6)
+        if nc is not None and nc["coinid"] != o["coinid"]:
+            break
+        d.advance(2)
+    assert nc is not None and nc["coinid"] != o["coinid"], "buy-side partial not mined"
+    namt = Decimal(nc.get("tokenamount") or nc["amount"])
+    assert namt == rem, f"token remainder {namt} != {rem}"
+    assert Decimal(d.state_of(nc)[2]) == neww
+    print(f"PROOF buy-side partial: taker sold {pay} MINIMA for {take} tUSDT; remainder {rem} tUSDT wants {neww} MINIMA")
+    cancel(st, nc)
+    print("\nPhase B chunk F: PASSED")
 
 
 def lifecycle():
@@ -349,45 +415,57 @@ def adversary():
         ("minrem-flip", base_partial(60, state_tweak={"8": "0"})),
     ]
     okc = 0
-    for name, steps in vectors:
-        err = d.txn_expect_fail("av" + str(time.time_ns() % 100000), steps, name)
-        # confirm the order coin is untouched
-        d.advance(2)
-        assert find_order(st, stt[4]) is not None, name + ": order coin was consumed!"
-        print("PROOF rejected:", name, "->", err[:90].replace("\n", " "))
+
+    def attempt(name, steps):
+        """A consensus-rejected txn POSTS fine and never mines — the only trustworthy proof
+        of rejection is that the order coin is still unspent afterwards."""
+        nonlocal okc
+        how = "posted-not-mined"
+        try:
+            d.txn("av" + str(time.time_ns() % 100000), steps)
+        except RuntimeError as e:
+            how = "step-failed: " + str(e)[:60].replace("\n", " ")
+        d.advance(3)
+        live = None
+        for _ in range(4):
+            live = find_order(st, stt[4])
+            if live is not None:
+                break
+            d.advance(2)
+        assert live is not None, name + ": ORDER COIN WAS CONSUMED — VULNERABILITY"
+        print("PROOF rejected:", name, "(" + how + ")")
         okc += 1
 
-    # third-party cancel (no owner sig, not expired): single-input refund attempt
+    for name, steps in vectors:
+        attempt(name, steps)
+
+    # third-party steal (no owner sig, not expired): single-input redirect to a fresh address
     locked_s = o.get("tokenamount") or o["amount"]
     thief_addr = d.newaddress()[0]
-    steps = ["txninput id:$ID coinid:" + o["coinid"],
+    attempt("third-party-steal",
+            ["txninput id:$ID coinid:" + o["coinid"],
              f"txnoutput id:$ID amount:{locked_s} address:{thief_addr} storestate:false",
-             "txnsign id:$ID publickey:auto", "txnbasics id:$ID", "txnpost id:$ID"]
-    err = d.txn_expect_fail("avt", steps, "third-party-steal")
-    d.advance(2)
-    assert find_order(st, stt[4]) is not None
-    print("PROOF rejected: third-party-steal ->", err[:90].replace("\n", " "))
-    okc += 1
+             "txnbasics id:$ID", "txnpost id:$ID"])
 
-    # non-owner atomic re-lock with price change (owner branch requires owner sig; the fill
-    # branch then applies — a relock-with-worse-want must fail the cross-multiply)
+    # relock-with-worse-want and NO payment output (a "free reprice" grief). Note: on this
+    # single-wallet node any wallet signature IS the owner key, so this vector is owner-signed
+    # here; the covenant must still reject it because the relock is not at output @INPUT+1
+    # with a payment at @INPUT — as a bare relock it hits the owner branch, where the
+    # SAMESTATE(3 5)/STATE(2) pins make a want-drop legal ONLY with the owner's signature.
+    # The UNSIGNED variant is the security-critical one:
     steps = ["txninput id:$ID coinid:" + o["coinid"],
              f"txnoutput id:$ID amount:{locked_s} address:{st['addr']} storestate:true"]
     bad = dict(stt)
     bad[2] = "0.01"
     for port, val in sorted({int(k): v for k, v in bad.items()}.items()):
         steps.append(f"txnstate id:$ID port:{port} value:{val}")
-    steps += ["txnsign id:$ID publickey:auto", "txnbasics id:$ID", "txnpost id:$ID"]
-    err = d.txn_expect_fail("avr", steps, "nonowner-relock-reprice")
-    d.advance(2)
-    assert find_order(st, stt[4]) is not None
-    print("PROOF rejected: nonowner-relock-reprice ->", err[:90].replace("\n", " "))
-    okc += 1
+    steps += ["txnbasics id:$ID", "txnpost id:$ID"]
+    attempt("unsigned-relock-reprice", steps)
 
     cancel(st, find_order(st, stt[4]))
     print(f"\nPhase B adversary: {okc}/9 vectors REJECTED, order coin never moved")
 
 
 if __name__ == "__main__":
-    {"setup": setup, "lifecycle": lifecycle, "lifecycle_d": lifecycle_d,
+    {"setup": setup, "lifecycle": lifecycle, "lifecycle_d": lifecycle_d, "lifecycle_f": lifecycle_f,
      "lifecycle_e": lifecycle_e, "adversary": adversary}[sys.argv[1]]()
