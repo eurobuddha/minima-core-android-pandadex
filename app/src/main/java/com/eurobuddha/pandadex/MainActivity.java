@@ -189,6 +189,17 @@ public class MainActivity extends AppCompatActivity {
                 txn.setIdentity(r.optString("publickey", ""), r.optString("address", ""));
                 receiveAddr = r.optString("miniaddress", r.optString("address", ""));
                 repaint();
+                // Recover this wallet's own trades from the chain. Live book-diffing only
+                // captures what THIS device was awake to witness, which is why two phones that
+                // traded with each other could show completely different 24h figures.
+                new TradeBackfill(node, db, r.optString("address", "")).runOnce(n -> {
+                    if (n > 0) {
+                        stats.invalidate();
+                        setStage("Recovered " + n + " past trade" + (n == 1 ? "" : "s")
+                                + " from the chain");
+                        repaint();
+                    }
+                });
             }
             @Override public void onError(String message) {
                 // identity is required before ANY spend — retry rather than leaving the user
@@ -370,7 +381,35 @@ public class MainActivity extends AppCompatActivity {
         return true;
     }
 
-    /** Mid-price of the live book (best bid/ask), or the last trade, or null. */
+    /** How long after a trade its price stays on the headline before reverting to the mid. */
+    public static final long LAST_TRADE_WINDOW_MS = 10 * 60_000;
+
+    /**
+     * The single price the whole app shows: [price, isLast, ageMs].
+     *
+     * The book MID by default — it is derived from resting orders, so every device with the
+     * same book computes the same number. For LAST_TRADE_WINDOW_MS after a trade it shows that
+     * trade instead (each new trade restarts the window), because while it's fresh that IS the
+     * market. Then it reverts.
+     *
+     * The bug this replaces: the last trade was shown with NO expiry and NO label, so a stale
+     * price displayed as current forever and two phones showed different quantities in the
+     * same slot with no way to tell which was which.
+     */
+    public Object[] headlinePrice() {
+        Object[] lf = stats == null ? null : stats.lastFill();
+        if (lf != null) {
+            long age = System.currentTimeMillis() - (Long) lf[0];
+            if (age >= 0 && age < LAST_TRADE_WINDOW_MS) {
+                return new Object[]{(BigDecimal) lf[1], Boolean.TRUE, age};
+            }
+        }
+        BigDecimal mid = bookMid();
+        return new Object[]{mid, Boolean.FALSE, 0L};
+    }
+
+    /** Mid-price of the live book (best bid/ask) — orders only, so it is identical on every
+     *  device looking at the same book. Never falls back to a trade price. */
     public BigDecimal bookMid() {
         BigDecimal bestAsk = null, bestBid = null;
         for (Order5 o : book().values()) {
@@ -383,8 +422,8 @@ public class MainActivity extends AppCompatActivity {
             return bestAsk.add(bestBid).divide(new BigDecimal(2), PriceMath.PRICE_DP,
                     java.math.RoundingMode.HALF_UP);
         }
-        BigDecimal[] s = stats.stats24h();
-        if (s[0] != null) return s[0];
+        // one-sided book: show that side rather than inventing a mid; NEVER substitute a
+        // trade price here — Assets and the ladder must always agree on what "mid" means
         return bestAsk != null ? bestAsk : bestBid;
     }
 

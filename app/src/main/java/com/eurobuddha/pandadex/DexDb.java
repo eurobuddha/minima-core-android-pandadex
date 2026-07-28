@@ -44,8 +44,17 @@ public final class DexDb extends SQLiteOpenHelper {
                 + " timems INTEGER, block INTEGER)");
     }
 
+    /**
+     * ADDITIVE MIGRATIONS ONLY — never destroy user data again.
+     *
+     * The v3 purge below was a judgement call that also destroyed legitimately observed fills:
+     * a user upgrading lost real trade history they could not get back, and two devices ended
+     * up reporting different markets. It is kept only so devices that already ran it stay
+     * consistent. Corrupt rows are now prevented at the source (FillTape's evidence rules) and
+     * missing ones are recovered from the chain (TradeBackfill) — neither of which costs the
+     * user anything they earned. Do not add another DELETE here.
+     */
     @Override public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
-        // never drop user data; additive migrations only
         if (oldV < 2) {
             db.execSQL("CREATE TABLE IF NOT EXISTS cancelled (coinid TEXT PRIMARY KEY, timems INTEGER)");
             db.execSQL("CREATE TABLE IF NOT EXISTS myorder (coinid TEXT PRIMARY KEY, orderid TEXT,"
@@ -169,6 +178,16 @@ public final class DexDb extends SQLiteOpenHelper {
             }
         }
         return out;
+    }
+
+    /** The most recent observed fill as [timeMs, price], or null if the tape is empty.
+     *  Drives the "show the last trade while it's still recent" rule. */
+    public Object[] lastFill() {
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT timems, price FROM tape ORDER BY timems DESC LIMIT 1", null)) {
+            if (!c.moveToFirst()) return null;
+            return new Object[]{c.getLong(0), new BigDecimal(c.getString(1))};
+        }
     }
 
     /** Newest-first rows for the TRADES tape view: [timems, price, size, buy, mine]. */

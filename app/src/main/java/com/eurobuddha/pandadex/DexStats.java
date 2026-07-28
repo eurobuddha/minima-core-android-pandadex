@@ -26,8 +26,21 @@ public final class DexStats {
         return cached;
     }
 
+    /** The newest observed fill as [timeMs, price], or null. Cheap, cached like the stats. */
+    public Object[] lastFill() {
+        long now = System.currentTimeMillis();
+        if (now - lastFillAt >= TTL_MS) {
+            lastFill = db.lastFill();
+            lastFillAt = now;
+        }
+        return lastFill;
+    }
+
+    private Object[] lastFill;
+    private long lastFillAt = 0;
+
     /** Invalidate after a new fill lands. */
-    public void invalidate() { cachedAt = 0; }
+    public void invalidate() { cachedAt = 0; lastFillAt = 0; }
 
     public DexDb raw() { return db; }
 }

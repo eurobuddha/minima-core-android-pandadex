@@ -35,7 +35,8 @@ public final class TradeView extends LinearLayout {
 
     // ticker
     private TextView lastPriceTv, deltaTv, highTv, lowTv, volTv, syncDot;
-    private BigDecimal shownLast = null;
+    private BigDecimal shownPrice = null;
+    private TextView priceKindTv;
 
     // ladder
     private LinearLayout asksBox, bidsBox;
@@ -132,10 +133,12 @@ public final class TradeView extends LinearLayout {
         lastPriceTv = tv("—", 26f, Design.TEXT(), Design.monoBold());
         mid.addView(lastPriceTv);
         deltaTv = tv("", 12f, Design.DIM(), Design.mono());
+        priceKindTv = tv("MID (book)", 9.5f, Design.DIM(), Design.sansBold());
         LayoutParams dl = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
         dl.leftMargin = dp(10);
         mid.addView(deltaTv, dl);
         c.addView(mid);
+        c.addView(priceKindTv);
 
         LinearLayout stats = new LinearLayout(getContext());
         highTv = stat(stats, "24h High");
@@ -451,28 +454,51 @@ public final class TradeView extends LinearLayout {
         syncDot.setText(syncing ? "● syncing" : "● live");
         syncDot.setTextColor(syncing ? Design.DIM() : Design.IN());
 
-        // ticker from the local tape
-        BigDecimal[] s = act.db().stats24h();
-        if (s[0] != null) {
-            String txt = PriceMath.fmtPrice(s[0]);
-            if (shownLast != null && s[0].compareTo(shownLast) != 0) {
-                boolean up = s[0].compareTo(shownLast) > 0;
+        // ---- the headline price: MID by default, the LAST TRADE for 10 minutes after one ----
+        Object[] hp = act.headlinePrice();
+        BigDecimal price = (BigDecimal) hp[0];
+        boolean isLast = (Boolean) hp[1];
+        long ageMs = (Long) hp[2];
+        if (price == null) {
+            lastPriceTv.setText("—");
+            priceKindTv.setText("no orders");
+            priceKindTv.setTextColor(Design.DIM2());
+        } else {
+            String txt = PriceMath.fmtPrice(price);
+            if (shownPrice != null && price.compareTo(shownPrice) != 0) {
+                boolean up = price.compareTo(shownPrice) > 0;
                 lastPriceTv.setTextColor(up ? Design.IN() : Design.RED());
                 lastPriceTv.setText(txt + (up ? " ▲" : " ▼"));
                 Design.pulse(lastPriceTv, up ? Design.IN() : Design.RED());
             } else {
                 lastPriceTv.setText(txt);
+                if (shownPrice == null) lastPriceTv.setTextColor(Design.TEXT());
             }
-            shownLast = s[0];
-            if (s[1] != null) {
-                boolean up = s[1].signum() >= 0;
-                deltaTv.setText((up ? "+" : "") + s[1].toPlainString() + "%");
-                deltaTv.setTextColor(up ? Design.IN() : Design.RED());
+            shownPrice = price;
+            // ALWAYS say which quantity this is — showing two different things in one slot
+            // with no label is what made two phones look broken against the same book
+            if (isLast) {
+                long secs = ageMs / 1000;
+                priceKindTv.setText("LAST TRADE · " + (secs < 60 ? secs + "s ago"
+                        : (secs / 60) + "m ago"));
+                priceKindTv.setTextColor(Design.ACCENT());
+            } else {
+                priceKindTv.setText("MID (book)");
+                priceKindTv.setTextColor(Design.DIM());
             }
-            highTv.setText(PriceMath.fmtPrice(s[2]));
-            lowTv.setText(PriceMath.fmtPrice(s[3]));
-            volTv.setText(PriceMath.fmt(s[4]));
         }
+
+        BigDecimal[] s = act.db().stats24h();
+        if (s[1] != null) {
+            boolean up = s[1].signum() >= 0;
+            deltaTv.setText((up ? "+" : "") + s[1].toPlainString() + "%");
+            deltaTv.setTextColor(up ? Design.IN() : Design.RED());
+        } else {
+            deltaTv.setText("");
+        }
+        highTv.setText(PriceMath.fmtPrice(s[2]));
+        lowTv.setText(PriceMath.fmtPrice(s[3]));
+        volTv.setText(s[0] == null ? "—" : PriceMath.fmt(s[4]));
 
         ctaBtn.setAlpha(act.isBusy() ? 0.5f : 1f);
         ctaBtn.setEnabled(!act.isBusy());
@@ -531,16 +557,16 @@ public final class TradeView extends LinearLayout {
                     exactAt.get(e.getKey())));
         }
 
-        BigDecimal bestAsk = askList.isEmpty() ? null : askList.get(0).getKey();
-        BigDecimal bestBid = bidList.isEmpty() ? null : bidList.get(0).getKey();
-        if (shownLast != null) {
-            centerPriceTv.setText(PriceMath.fmtPrice(shownLast));
-        } else if (bestAsk != null && bestBid != null) {
-            centerPriceTv.setText(PriceMath.fmtPrice(
-                    bestAsk.add(bestBid).divide(new BigDecimal(2), PriceMath.PRICE_DP, RoundingMode.HALF_UP)));
-        } else {
-            centerPriceTv.setText("—");
-        }
+        // The ladder centre shows the SAME number as the headline, from the same source. It
+        // must never compute its own mid from the GROUPED level keys — that disagreed with
+        // MainActivity.bookMid() (and therefore with Assets and P&L) by up to half a tick
+        // whenever grouping was switched on.
+        Object[] hp2 = act.headlinePrice();
+        BigDecimal centre = (BigDecimal) hp2[0];
+        boolean centreIsLast = (Boolean) hp2[1];
+        centerPriceTv.setText(centre == null ? "—"
+                : PriceMath.fmtPrice(centre) + (centreIsLast ? "  LAST" : "  MID"));
+        centerPriceTv.setTextColor(centreIsLast ? Design.ACCENT() : Design.TEXT());
     }
 
     /**

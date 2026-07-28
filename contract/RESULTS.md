@@ -276,3 +276,38 @@ Two more trades settled correctly, including a taker hitting a bid. Defects foun
    spendable until confirmed, and nothing showed that gap — so "sold" was followed by an
    apparently unchanged balance. ASSETS now has a **Confirming** column alongside Available and
    In orders, and the completion message points at it.
+
+
+# FOURTH SESSION (2026-07-28, v0.1.4) — market data disagreed between devices
+
+The user reported the Z Fold showing no 24h high/low/volume while the S10 showed correct
+figures, and the two phones showing DIFFERENT centre prices (0.05000 vs 0.05075) for an
+IDENTICAL order book.
+
+**I first blamed the v0.1.3 database purge and the user corrected me — the Fold had not
+skipped 0.1.3, so no purge ran.** That correction was right and led to the real causes:
+
+1. **The guard I added in 0.1.3 was destroying real trades.** It discarded any book-diff where
+   the book went empty, to stop a bad scan minting phantom fills. But in a two-person market
+   the LAST resting order filling empties the book — a genuine trade, silently dropped. The
+   principle was wrong: a suspicious scan means *demand more evidence*, never *destroy the
+   evidence*. Now an emptied book or mass-vanish simply requires more consecutive
+   confirmations (4 instead of 2) before it is recorded. Both directions are pinned by tests.
+2. **The maker never observed its fills anyway** — until 0.1.4 the app skipped its whole chain
+   poll while a text field had focus, and the maker is the phone doing the typing.
+3. **The centre price was two quantities in one unlabelled slot**: last-traded when the local
+   tape had a fill, book mid when it didn't — and `shownLast` was assigned once and NEVER
+   cleared, so a stale trade displayed as current indefinitely. Replaced with the user's rule:
+   **MID by default, the LAST trade for 10 minutes after one (each trade restarting the
+   window), then back to MID — and both states labelled.** The ladder centre and the headline
+   now come from one source, so they can no longer disagree with each other, with Assets or
+   with P&L. The ladder also stopped computing its own mid from GROUPED level keys, which
+   differed from `bookMid()` by up to half a tick whenever grouping was on.
+4. **Devices could never converge** because the tape is built only from locally witnessed book
+   diffs. Added `TradeBackfill`: on pairing it reconstructs every trade THIS wallet took part
+   in from the node's own transaction history — identified by what the money actually did (a
+   transaction touching the book address that moves two assets in opposite directions), keyed
+   on the spent order coinid so a live-recorded trade is never double-counted. Trades between
+   other people that this node never saw remain unrecoverable; there is no server to ask.
+5. **No further destructive migrations.** The v3 purge cost the user real history; corrupt rows
+   are now prevented at the source and missing ones recovered from the chain.

@@ -31,6 +31,10 @@ public final class FillTape {
     }
 
     private static final int MISS_GRACE = 2;
+    /** Consecutive confirmations demanded when the scan looked unreliable (book emptied, or
+     *  most of it vanished at once). Higher bar, same outcome — a real trade is still recorded,
+     *  it just has to prove itself. */
+    private static final int MISS_GRACE_SUSPECT = 4;
     /** Above this many simultaneous disappearances (AND more than half the book), the scan is
      *  treated as unreliable rather than as a wave of trades. Two orders filling in one block
      *  is ordinary; the whole book vanishing at once is a bad read. */
@@ -90,14 +94,14 @@ public final class FillTape {
         boolean bookEmptied = book.isEmpty() && !prev.isEmpty();
         boolean massVanish = vanished > MAX_VANISH_PER_SCAN
                 && vanished * 2 > prev.size();           // over half the book gone at once
-        if (bookEmptied || massVanish) {
-            // Re-seed and stay silent. A real mass-fill re-observes as individual
-            // disappearances over subsequent scans once the book reads consistently again.
-            prev = new java.util.HashMap<>(book);
-            prevAtMs = now;
-            missing.clear();
-            return;
-        }
+        // A suspicious scan means we need MORE EVIDENCE — never that we throw the evidence
+        // away. The first cut of this guard re-seeded and returned, which silently discarded
+        // a real trade whenever the LAST resting order filled (in a thin market that empties
+        // the book, which is exactly the shape of a genuine fill). Instead, demand that the
+        // disappearance survives more consecutive scans: a bad read corrects itself within a
+        // scan or two and still mints nothing, while a book that really did empty is
+        // confirmed and recorded.
+        int needed = (bookEmptied || massVanish) ? MISS_GRACE_SUSPECT : MISS_GRACE;
 
         // Index the new book by order IDENTITY, not orderId alone: orderId is maker-chosen
         // and an attacker can copy a victim's, which would let a stranger's coin masquerade
@@ -126,7 +130,7 @@ public final class FillTape {
             }
 
             int misses = missing.merge(coinid, 1, Integer::sum);
-            if (misses < MISS_GRACE) continue;
+            if (misses < needed) continue;
             missing.remove(coinid);
 
             if (cancels != null && cancels.consume(coinid)) continue;   // this device cancelled it
