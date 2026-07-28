@@ -31,13 +31,26 @@ public final class FillTape {
     }
 
     private static final int MISS_GRACE = 2;
+    /** Below the node's visibility ceiling: past this age a coin leaves the searchable tree,
+     *  so its disappearance says nothing about whether it traded. */
+    private static final int VANISH_AGE = DexContract.HORIZON_BLOCKS - 80;
 
     private Map<String, Order5> prev = null;            // coinid -> order (last good scan)
     private final Map<String, Integer> missing = new java.util.HashMap<>();
-    private final Set<String> myCancels = new HashSet<>();   // coinids I cancelled (suppress)
+    private final CancelLog cancels;
+
+    public FillTape(CancelLog cancels) { this.cancels = cancels; }
+
+    /** A cancel/relock this DEVICE initiated, shared across the Activity and the background
+     *  service (they hold separate FillTape instances but must agree on what was cancelled —
+     *  otherwise whichever sees the coin vanish first records a phantom fill). */
+    public interface CancelLog {
+        void note(String coinid);
+        boolean consume(String coinid);
+    }
 
     /** Mark a coin as cancelled by THIS app so its disappearance isn't a phantom fill. */
-    public void noteMyCancel(String coinid) { myCancels.add(coinid); }
+    public void noteMyCancel(String coinid) { if (cancels != null) cancels.note(coinid); }
 
     public void ingest(Map<String, Order5> book, boolean truncated, long chainBlock, Sink sink) {
         if (truncated) return;                           // never diff a failed scan
@@ -46,16 +59,19 @@ public final class FillTape {
             return;
         }
 
-        // index the new book by orderId for partial/renewal matching
-        Map<String, Order5> byOrderId = new java.util.HashMap<>();
-        for (Order5 o : book.values()) byOrderId.put(o.orderId, o);
+        // Index the new book by order IDENTITY, not orderId alone: orderId is maker-chosen
+        // and an attacker can copy a victim's, which would let a stranger's coin masquerade
+        // as the successor of the victim's order (mislabelling a real fill as a renewal, or
+        // attributing someone else's partial to the victim at the wrong price/size).
+        Map<String, Order5> byIdentity = new java.util.HashMap<>();
+        for (Order5 o : book.values()) byIdentity.put(identity(o), o);
 
         for (Map.Entry<String, Order5> e : prev.entrySet()) {
             String coinid = e.getKey();
             Order5 old = e.getValue();
             if (book.containsKey(coinid)) continue;      // still resting
 
-            Order5 successor = byOrderId.get(old.orderId);
+            Order5 successor = byIdentity.get(identity(old));
             if (successor != null && successor.coinid.equals(coinid)) continue;
 
             if (successor != null) {
@@ -73,8 +89,12 @@ public final class FillTape {
             if (misses < MISS_GRACE) continue;
             missing.remove(coinid);
 
-            if (myCancels.remove(coinid)) continue;      // my own cancel
+            if (cancels != null && cancels.consume(coinid)) continue;   // this device cancelled it
             if (old.expired(chainBlock)) continue;       // expiry sweep, not a trade
+            // A coin near the node's visibility ceiling leaves the searchable tree whether or
+            // not it traded — treating that as a fill invents trades, poisons the candles and
+            // fires "order filled" alerts for orders that simply aged out.
+            if (old.age(chainBlock) >= VANISH_AGE) continue;
 
             // FULL fill (or a foreign cancel — indistinguishable; counted as fill)
             sink.onFill(coinid, old, old.minimaAmount(), old.price(), old.sell, false);
@@ -89,9 +109,13 @@ public final class FillTape {
             Order5 gone = prev.get(id);
             if (gone != null) next.put(id, gone);
         }
-        // cancel notes only matter while their coin is live or pending-absent
-        myCancels.removeIf(id -> !next.containsKey(id));
         prev = next;
+    }
+
+    /** Order identity for successor matching: the maker-chosen id is not trustworthy alone,
+     *  so bind it to the maker's key, payout address and side. */
+    private static String identity(Order5 o) {
+        return o.orderId + "|" + o.ownerPk + "|" + o.wantAddr + "|" + (o.sell ? "s" : "b");
     }
 
     /** The MINIMA-side size of a partial fill between an order and its remainder. */

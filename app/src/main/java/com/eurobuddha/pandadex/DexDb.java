@@ -24,7 +24,7 @@ import java.util.List;
 public final class DexDb extends SQLiteOpenHelper {
 
     private static final String DB = "pandadex.db";
-    private static final int V = 1;
+    private static final int V = 2;
     private static final int TAPE_CAP = 8000;
 
     public DexDb(Context ctx) {
@@ -39,10 +39,72 @@ public final class DexDb extends SQLiteOpenHelper {
                 + " price TEXT, size TEXT, buy INTEGER, maker INTEGER, orderid TEXT)");
         db.execSQL("CREATE TABLE book (coinid TEXT PRIMARY KEY, json TEXT)");
         db.execSQL("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)");
+        db.execSQL("CREATE TABLE cancelled (coinid TEXT PRIMARY KEY, timems INTEGER)");
+        db.execSQL("CREATE TABLE myorder (coinid TEXT PRIMARY KEY, orderid TEXT, json TEXT,"
+                + " timems INTEGER, block INTEGER)");
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
         // never drop user data; additive migrations only
+        if (oldV < 2) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS cancelled (coinid TEXT PRIMARY KEY, timems INTEGER)");
+            db.execSQL("CREATE TABLE IF NOT EXISTS myorder (coinid TEXT PRIMARY KEY, orderid TEXT,"
+                    + " json TEXT, timems INTEGER, block INTEGER)");
+        }
+    }
+
+    // ---- cancels (shared by the Activity's and the service's FillTape) ----
+
+    /** Record that THIS device spent the coin itself (cancel/relock), so neither tape
+     *  instance mistakes its disappearance for a trade. */
+    public void noteCancelled(String coinid) {
+        ContentValues cv = new ContentValues();
+        cv.put("coinid", coinid);
+        cv.put("timems", System.currentTimeMillis());
+        getWritableDatabase().insertWithOnConflict("cancelled", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    /** True if this coin was cancelled by us. Kept (not deleted) so BOTH the foreground and
+     *  background tapes can consult it — they each diff the book independently. Rows older
+     *  than a day are pruned since the coin is long gone by then. */
+    public boolean wasCancelled(String coinid) {
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT 1 FROM cancelled WHERE coinid=?", new String[]{coinid})) {
+            boolean hit = c.moveToFirst();
+            if (hit) getWritableDatabase().execSQL(
+                    "DELETE FROM cancelled WHERE timems < " + (System.currentTimeMillis() - 86_400_000L));
+            return hit;
+        }
+    }
+
+    // ---- my orders (survive the node's visibility horizon) ----
+
+    /** Remember an order this device created, so it can still be found and recovered after it
+     *  ages out of the node's searchable window. */
+    public void rememberMyOrder(String coinid, String orderId, String json, long block) {
+        ContentValues cv = new ContentValues();
+        cv.put("coinid", coinid);
+        cv.put("orderid", orderId);
+        cv.put("json", json);
+        cv.put("timems", System.currentTimeMillis());
+        cv.put("block", block);
+        getWritableDatabase().insertWithOnConflict("myorder", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    public void forgetMyOrder(String coinid) {
+        getWritableDatabase().delete("myorder", "coinid=?", new String[]{coinid});
+    }
+
+    /** [coinid, orderid, json, block] for every order this device still believes is live. */
+    public List<Object[]> myOrders() {
+        List<Object[]> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT coinid, orderid, json, block FROM myorder ORDER BY block ASC", null)) {
+            while (c.moveToNext()) {
+                out.add(new Object[]{c.getString(0), c.getString(1), c.getString(2), c.getLong(3)});
+            }
+        }
+        return out;
     }
 
     // ---- meta ----

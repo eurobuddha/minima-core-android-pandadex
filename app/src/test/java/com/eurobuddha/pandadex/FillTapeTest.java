@@ -20,8 +20,14 @@ public class FillTapeTest {
     private final FillTape.Sink sink = (spentCoin, order, size, price, takerBuy, partial) ->
             fills.add(new Object[]{spentCoin, order.orderId, size, price, takerBuy, partial});
 
+    private final java.util.Set<String> cancelled = new java.util.HashSet<>();
+
     @Before public void setUp() {
-        tape = new FillTape();
+        cancelled.clear();
+        tape = new FillTape(new FillTape.CancelLog() {
+            @Override public void note(String coinid) { cancelled.add(coinid); }
+            @Override public boolean consume(String coinid) { return cancelled.contains(coinid); }
+        });
         fills.clear();
     }
 
@@ -109,9 +115,9 @@ public class FillTapeTest {
     }
 
     @Test public void expirySweepSuppressed() {
-        tape.ingest(book(sell("0xC1", "0xA1", "100", "0.575", 10)), false, 3000, sink);
-        tape.ingest(book(), false, 3001, sink);
-        tape.ingest(book(), false, 3002, sink);      // age 2990 > EXPIRY — sweep, not fill
+        tape.ingest(book(sell("0xC1", "0xA1", "100", "0.575", 10)), false, 700, sink);
+        tape.ingest(book(), false, 701, sink);
+        tape.ingest(book(), false, 702, sink);       // age 692 > EXPIRY 600 — sweep, not fill
         assertTrue(fills.isEmpty());
     }
 

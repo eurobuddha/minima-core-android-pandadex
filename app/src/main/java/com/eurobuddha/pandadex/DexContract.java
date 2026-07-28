@@ -13,7 +13,7 @@ import org.json.JSONObject;
  *   the coin amount) · 7 GTC ("1"/"0") · 8 minRemainder (contract-enforced dust floor).
  *
  * Spend paths: owner atomic re-lock (edit/renew, state-pinned except port 2/6) — owner
- * cancel refund — third-party expiry sweep (@COINAGE > 1500) — full fill (pay port 2 to
+ * cancel refund — third-party expiry sweep (@COINAGE > EXPIRY_BLOCKS) — full fill (pay port 2 to
  * port 1) — partial fill (remainder at output @INPUT+1, cross-multiplied pro-rata payment).
  */
 public final class DexContract {
@@ -106,8 +106,21 @@ public final class DexContract {
                     cb.failed("covenant mismatch (parseok=" + parseok + " addr=" + addr + ")");
                     return;
                 }
-                node.cmd("newscript trackall:true script:" + Util.scriptArg(SCRIPT_V5), new NodeApi.Cb() {
-                    @Override public void onResult(JSONObject j2) { cb.ok(); }
+                // trackall:FALSE is load-bearing, not a tuning knob. With trackall:true the
+                // node adds the covenant address to Wallet.mAllTrackedAddress, and
+                // TxPoWTreeNode.checkRelevant returns true for ANY coin at a tracked address —
+                // so `coins relevant:true` returns the WHOLE book and every stranger's order
+                // reads as the user's own (poisoning P&L, notifications, portfolio value, and
+                // starving GTC renewal on foreign orders). With trackall:false the node's
+                // state-variable relevance scan still matches orders whose port 0 is our
+                // pubkey or port 1 our address — exactly the intended ownership belt — and
+                // taker fills are unaffected (txnutils.setMMRandScripts resolves the script
+                // from the wallet's script table, which `newscript` populates either way).
+                node.cmd("newscript trackall:false script:" + Util.scriptArg(SCRIPT_V5), new NodeApi.Cb() {
+                    @Override public void onResult(JSONObject j2) {
+                        if (j2.optBoolean("status", false)) cb.ok();
+                        else cb.failed(j2.optString("error", "newscript failed"));
+                    }
                     @Override public void onError(String m) { cb.failed(m); }
                 });
             }

@@ -33,8 +33,21 @@ public final class DexTxn {
     private final DexDb db;
     private String myPubkey = "";
     private String myHexAddr = "";
-    /** Funding coins used by posted-but-unconfirmed txns — never double-select. */
-    private final java.util.Set<String> inflight = ConcurrentHashMap.newKeySet();
+    /**
+     * Funding coins used by posted-but-unconfirmed txns — never double-select. Reservations
+     * EXPIRE: a silently-rejected transaction (consensus drops it without an error) would
+     * otherwise pin its coins forever and the user would see "insufficient funds" on a funded
+     * wallet until the process restarted. Value = the block the reservation was made at.
+     */
+    private final Map<String, Long> inflight = new ConcurrentHashMap<>();
+    private static final long RESERVE_BLOCKS = 6;
+    private volatile long chainBlock = 0;
+
+    /** Keep the reservation clock honest; called from the host's block poll. */
+    public void setChainBlock(long b) {
+        chainBlock = b;
+        if (b > 0) inflight.values().removeIf(at -> b - at > RESERVE_BLOCKS);
+    }
 
     public DexTxn(NodeApi node, DexDb db) {
         this.node = node;
@@ -57,21 +70,42 @@ public final class DexTxn {
      * One `send` — appears in the book next block; the caller adds the optimistic row.
      */
     public void createOrder(boolean buy, BigDecimal minimaAmount, BigDecimal price,
-                            boolean gtc, BigDecimal minRemainder, Result cb) {
+                            boolean gtc, BigDecimal minRemMinima, Result cb) {
+        if (myPubkey.isEmpty() || myHexAddr.isEmpty()) {
+            cb.onFailed("Still reading your wallet identity — try again in a moment");
+            return;
+        }
         if (minimaAmount.compareTo(PriceMath.MIN_ORDER_MINIMA) < 0) {
             cb.onFailed("Below minimum order (" + PriceMath.MIN_ORDER_MINIMA + " MINIMA)");
             return;
         }
         BigDecimal usdt = PriceMath.up(minimaAmount.multiply(price, PriceMath.MC), PriceMath.USDT_DP);
+        // The covenant cross-multiplies amounts; MiniNumber rejects values over 1e9 outright,
+        // and the overflow argument for the products assumes both legs stay inside that bound.
+        if (minimaAmount.compareTo(PriceMath.MAX_ORDER) > 0 || usdt.compareTo(PriceMath.MAX_ORDER) > 0) {
+            cb.onFailed("Order too large (max " + PriceMath.MAX_ORDER.toPlainString() + " per leg)");
+            return;
+        }
         BigDecimal lock = buy ? usdt : PriceMath.down(minimaAmount, PriceMath.MINIMA_DP);
         BigDecimal want = buy ? PriceMath.down(minimaAmount, PriceMath.MINIMA_DP) : usdt;
-        String orderId = "0x" + Long.toHexString(System.currentTimeMillis()).toUpperCase();
+        // Port 8 is compared on-chain against the remaining LOCKED amount, so a min-remainder
+        // the user expressed in MINIMA has to be converted to the locked asset for a buy —
+        // otherwise "1 MINIMA" silently means "1 mxUSDT" (≈200 MINIMA) and small buys become
+        // fill-or-nothing without the user ever being told.
+        BigDecimal minRem = buy
+                ? PriceMath.up(minRemMinima.multiply(price, PriceMath.MC), PriceMath.USDT_DP)
+                : PriceMath.down(minRemMinima, PriceMath.MINIMA_DP);
+        if (minRem.compareTo(lock) > 0) {
+            cb.onFailed("Minimum remainder is larger than the order itself");
+            return;
+        }
+        String orderId = newOrderId();
         String state = "{\"0\":\"" + myPubkey + "\",\"1\":\"" + myHexAddr + "\","
                 + "\"2\":\"" + want.toPlainString() + "\","
                 + "\"3\":\"" + (buy ? "0x00" : DexContract.USDT_ID) + "\","
                 + "\"4\":\"" + orderId + "\",\"5\":\"" + (buy ? "0" : "1") + "\","
                 + "\"6\":\"" + price.toPlainString() + "\",\"7\":\"" + (gtc ? "1" : "0") + "\","
-                + "\"8\":\"" + minRemainder.toPlainString() + "\"}";
+                + "\"8\":\"" + minRem.toPlainString() + "\"}";
         String cmd = "send amount:" + lock.toPlainString() + " address:" + DexContract.ADDR_V5
                 + (buy ? " tokenid:" + DexContract.USDT_ID : "") + " state:" + state;
         node.cmd(cmd, new NodeApi.Cb() {
@@ -122,7 +156,11 @@ public final class DexTxn {
         final SweepPlanner.Take fPartial = partial;
         final BigDecimal fRem = partialRem, fNewWant = partialNewWant, fNeeded = needed;
         findCoins(payTok, needed, coins -> {
-            if (coins == null) { cb.onFailed("Insufficient funds for sweep"); return; }
+            if (coins == null) {
+                String why = takeFundError();
+                cb.onFailed(why != null ? why : "Insufficient funds for sweep");
+                return;
+            }
             BigDecimal fundTotal = BigDecimal.ZERO;
             for (JSONObject c : coins) fundTotal = fundTotal.add(coinValue(c));
             String txid = "sweep_" + System.nanoTime();
@@ -187,6 +225,22 @@ public final class DexTxn {
         return "txnstate id:" + txid + " port:" + port + " value:" + value;
     }
 
+    /**
+     * Order ids must be unguessable AND collision-free: they key successor-matching in the
+     * fill tape, and a wall-clock timestamp both collides between users placing in the same
+     * millisecond and can be deliberately copied by an attacker to make their coin look like
+     * the successor of someone else's order.
+     */
+    private static final java.security.SecureRandom RNG = new java.security.SecureRandom();
+
+    private static String newOrderId() {
+        byte[] b = new byte[8];
+        RNG.nextBytes(b);
+        StringBuilder sb = new StringBuilder("0x");
+        for (byte x : b) sb.append(String.format("%02X", x));
+        return sb.toString();
+    }
+
     // ------------------------------------------------------------------ owner ops
 
     /** Cancel: owner-signed refund of the whole coin to the maker wallet (token-aware). */
@@ -247,7 +301,7 @@ public final class DexTxn {
 
     /** txncheck gate → txnpost → txndelete. Reserves funding coins for the txn's lifetime. */
     private void postGated(String txid, List<String> steps, List<String> fundIds, Result cb) {
-        inflight.addAll(fundIds);
+        for (String id : fundIds) inflight.put(id, chainBlock);
         List<String> chain = new ArrayList<>(steps);
         chain.add("txncheck id:" + txid);
         CmdChain.run(node, chain, "txndelete id:" + txid, new CmdChain.Done() {
@@ -262,11 +316,18 @@ public final class DexTxn {
                 boolean amounts = true;
                 if (valid != null && valid.has("validamounts")) amounts = valid.optBoolean("validamounts", false);
                 else if (resp != null && resp.has("validamounts")) amounts = resp.optBoolean("validamounts", false);
-                if (!scripts || !basic || !amounts || !mmr) {
-                    inflight.removeAll(fundIds);
+                // txncheck's script run only feeds the signature KEYS into SIGNEDBY — it does
+                // not verify the signatures themselves. Without this, an invalid or
+                // key-exhausted signature sails through valid.scripts and we post a txn that
+                // consensus silently drops (for a GTC relock that means we'd believe the order
+                // was renewed and suppress the retry while it marches toward expiry).
+                boolean sigs = resp == null || resp.optBoolean("allsignaturesvalid", true);
+                if (!scripts || !basic || !amounts || !mmr || !sigs) {
+                    inflight.keySet().removeAll(fundIds);
                     node.cmd("txndelete id:" + txid, null);
                     cb.onFailed("Transaction failed validation (scripts=" + scripts
-                            + " basic=" + basic + " amounts=" + amounts + " mmr=" + mmr + ")");
+                            + " basic=" + basic + " amounts=" + amounts + " mmr=" + mmr
+                            + " sigs=" + sigs + ")");
                     return;
                 }
                 node.cmd("txnpost id:" + txid, new NodeApi.Cb() {
@@ -275,18 +336,18 @@ public final class DexTxn {
                         if (json.optBoolean("status", false) || json.optBoolean("pending", false)) {
                             cb.onPosted(Util.extractTxpowid(json, txid));
                         } else {
-                            inflight.removeAll(fundIds);
+                            inflight.keySet().removeAll(fundIds);
                             cb.onFailed(json.optString("error", "txnpost failed"));
                         }
                     }
                     @Override public void onError(String message) {
-                        inflight.removeAll(fundIds);
+                        inflight.keySet().removeAll(fundIds);
                         cb.onFailed(message);
                     }
                 });
             }
             @Override public void fail(String message) {
-                inflight.removeAll(fundIds);
+                inflight.keySet().removeAll(fundIds);
                 cb.onFailed(message);
             }
         });
@@ -301,9 +362,12 @@ public final class DexTxn {
         return Util.dec(amt);
     }
 
-    /** Greedy largest-first selection of confirmed, stateless, un-reserved wallet coins. */
+    /** Greedy largest-first selection of confirmed, stateless, un-reserved wallet coins.
+     *  `checkmempool:true` is what `send` itself uses — without it a coin already committed by
+     *  a pending order placement (or by the background service) is freely selectable, and one
+     *  of the two transactions dies silently while both report success. */
     public void findCoins(String tokenid, BigDecimal need, CoinsCb cb) {
-        node.cmd("coins relevant:true sendable:true tokenid:" + tokenid, new NodeApi.Cb() {
+        node.cmd("coins relevant:true sendable:true checkmempool:true tokenid:" + tokenid, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 Object resp = json.opt("response");
                 if (!(resp instanceof org.json.JSONArray)) { cb.found(null); return; }
@@ -319,10 +383,10 @@ public final class DexTxn {
                             ? ((org.json.JSONArray) st).length() > 0
                             : st instanceof JSONObject && ((JSONObject) st).length() > 0;
                     if (hasState) continue;
-                    if (inflight.contains(c.optString("coinid"))) continue;
+                    if (inflight.containsKey(c.optString("coinid"))) continue;
                     candidates.add(c);
                 }
-                inflight.retainAll(present.keySet());   // prune stale reservations
+                inflight.keySet().retainAll(present.keySet());   // drop reservations for spent coins
                 candidates.sort((a, b) -> coinValue(b).compareTo(coinValue(a)));
                 List<JSONObject> pick = new ArrayList<>();
                 BigDecimal sum = BigDecimal.ZERO;
@@ -333,7 +397,24 @@ public final class DexTxn {
                 }
                 cb.found(null);
             }
-            @Override public void onError(String message) { cb.found(null); }
+            @Override public void onError(String message) {
+                // Distinguish "wallet too fragmented to enumerate" from "no funds" — this is
+                // the ONE query whose size scales with the user's coin count, and reporting it
+                // as "insufficient funds" on a fully funded wallet is undiagnosable.
+                lastFundError = NodeApi.ERR_TOO_LONG.equals(message)
+                        ? "Your wallet has too many coins to scan — consolidate them and retry."
+                        : null;
+                cb.found(null);
+            }
         });
+    }
+
+    /** Set when the last findCoins failure had a specific cause worth showing the user. */
+    private volatile String lastFundError;
+
+    public String takeFundError() {
+        String e = lastFundError;
+        lastFundError = null;
+        return e;
     }
 }

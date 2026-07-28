@@ -57,7 +57,10 @@ public class DexKeepAliveService extends Service {
         txn = new DexTxn(node, db);
         processor = new DexProcessor(getApplicationContext(), txn);
         keySet = new KeySet(getApplicationContext(), null);
-        tape = new FillTape();
+        tape = new FillTape(new FillTape.CancelLog() {
+            @Override public void note(String coinid) { db.noteCancelled(coinid); }
+            @Override public boolean consume(String coinid) { return db.wasCancelled(coinid); }
+        });
         HeartbeatReceiver.schedule(this);
         started = true;
     }
@@ -95,6 +98,7 @@ public class DexKeepAliveService extends Service {
             @Override public void onResult(JSONObject json) {
                 JSONObject r = json.optJSONObject("response");
                 if (r != null) chainBlock = Util.dec(r.optString("block", "0")).longValue();
+                txn.setChainBlock(chainBlock);
                 scanBook();
             }
             @Override public void onError(String message) {}

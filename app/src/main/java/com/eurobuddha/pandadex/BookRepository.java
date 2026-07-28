@@ -26,7 +26,7 @@ public final class BookRepository {
 
     private final NodeApi node;
     private final DexDb db;
-    private final FillTape tape = new FillTape();
+    private final FillTape tape;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final List<Listener> listeners = new ArrayList<>();
 
@@ -41,6 +41,11 @@ public final class BookRepository {
     public BookRepository(NodeApi node, DexDb db) {
         this.node = node;
         this.db = db;
+        // the cancel log lives in SQLite so the background service's own FillTape agrees
+        this.tape = new FillTape(new FillTape.CancelLog() {
+            @Override public void note(String coinid) { db.noteCancelled(coinid); }
+            @Override public boolean consume(String coinid) { return db.wasCancelled(coinid); }
+        });
         // local-first: seed the cache from the persisted last-good book BEFORE any node work
         for (String json : db.loadBook()) {
             try {

@@ -93,6 +93,7 @@ public final class AssetsTab extends LinearLayout {
         recv.setOnClickListener(v -> {
             if (addr.isEmpty()) return;
             ClipboardManager cm = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null) return;
             cm.setPrimaryClip(ClipData.newPlainText("address", addr));
             act.toast("Address copied");
         });

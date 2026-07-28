@@ -18,6 +18,9 @@ public final class SweepPlanner {
 
     /** Conservative cap on order coins per sweep txn (PandaPools capped routed legs at 6). */
     public static final int MAX_ORDERS = 5;
+    /** Don't touch an order within this many blocks of expiry — it may cross the COINAGE
+     *  threshold between planning and mining, which would reject the entire sweep. */
+    public static final int EXPIRY_MARGIN = 30;
 
     public static final class Take {
         public final Order5 order;
@@ -46,15 +49,17 @@ public final class SweepPlanner {
      * @param takerBuys   true = taker wants to BUY MINIMA (consumes SELL orders)
      * @param wantMinima  MINIMA the taker wants to trade
      * @param limitPrice  worst acceptable price (mxUSDT per MINIMA); null = pure market
-     * @param myKeys      keys for self-fill awareness (self-fill allowed, like Limit/web)
      * @param chainBlock  for expiry filtering
      */
     public static Plan plan(Collection<Order5> book, boolean takerBuys, BigDecimal wantMinima,
-                            BigDecimal limitPrice, java.util.Set<String> myKeys, long chainBlock) {
+                            BigDecimal limitPrice, long chainBlock) {
         List<Order5> side = new ArrayList<>();
         for (Order5 o : book) {
             if (o.sell != takerBuys) continue;            // taker buys → consume sells
-            if (o.expired(chainBlock)) continue;
+            if (!o.fillable()) continue;                  // malformed/hostile order — never touch it
+            // @COINAGE is evaluated when the txn MINES, not when we plan: an order close to
+            // expiry takes the refund branch by then and takes the whole sweep down with it.
+            if (o.age(chainBlock) > DexContract.EXPIRY_BLOCKS - EXPIRY_MARGIN) continue;
             if (limitPrice != null) {
                 int cmp = o.price().compareTo(limitPrice);
                 if (takerBuys ? cmp > 0 : cmp < 0) continue;   // worse than limit

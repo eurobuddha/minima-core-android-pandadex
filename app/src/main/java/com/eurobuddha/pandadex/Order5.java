@@ -88,10 +88,20 @@ public final class Order5 {
 
     public void markRelevant() { relevant = true; }
 
-    /** Chain-derived ownership: node-side relevance belt OR key match (Limit's KeySet fix). */
+    /**
+     * Chain-derived ownership. The KEY MATCH is authoritative; the node-side relevance flag is
+     * only a corroborating belt and can NEVER stand alone — with a trackall-registered script
+     * the node marks every coin at the address relevant, which would make every stranger's
+     * order read as ours (poisoned P&L, false fill alerts, starved renewals). We register with
+     * trackall:false, but a node that tracked the address for any other reason must not be
+     * able to mislead us, so the key set is required either way.
+     */
     public boolean isMine(Set<String> myKeys) {
-        return relevant || (myKeys != null && myKeys.contains(ownerPk));
+        return myKeys != null && myKeys.contains(ownerPk);
     }
+
+    /** True when the node also considers this coin relevant — corroboration for diagnostics. */
+    public boolean nodeRelevant() { return relevant; }
 
     /** MINIMA side of the order (locked for sells, wanted for buys). */
     public BigDecimal minimaAmount() { return sell ? locked : wantAmt; }
@@ -102,6 +112,36 @@ public final class Order5 {
     /** Price in mxUSDT per MINIMA — derived from enforced amounts only. */
     public BigDecimal price() {
         return PriceMath.price(usdtAmount(), minimaAmount().signum() == 0 ? BigDecimal.ONE : minimaAmount());
+    }
+
+    /**
+     * Is this order safe to include in a sweep? Resting orders are authored by STRANGERS, and
+     * a single malformed one silently kills the whole transaction (consensus rejection is
+     * silent — the txn posts and simply never mines), so one hostile order could otherwise
+     * block every sweep on the book for the price of a dust coin.
+     *
+     * Rejects:
+     *  - a want-token that contradicts the side (a SELL wanting 0x00 renders as the cheapest
+     *    ask, gets picked first, and makes the app pay MINIMA it never funded)
+     *  - a payout address pointing at the book itself (turns the preceding order's payment
+     *    output into a "remainder" and flips that input into the partial branch)
+     *  - amounts finer than the on-chain grain (the full-fill VERIFYOUT wants an exact amount
+     *    that floors on-chain; a min-remainder with hidden dust can trip the floor by a grain)
+     *  - a locked token that contradicts the side.
+     */
+    public boolean fillable() {
+        String expectedWant = sell ? DexContract.USDT_ID : "0x00";
+        if (!expectedWant.equalsIgnoreCase(wantTok)) return false;
+        String expectedLocked = sell ? "0x00" : DexContract.USDT_ID;
+        if (!expectedLocked.equalsIgnoreCase(lockedTok)) return false;
+        if (wantAddr == null || !wantAddr.startsWith("0x") || wantAddr.length() != 66) return false;
+        if (wantAddr.equalsIgnoreCase(DexContract.ADDR_V5)) return false;
+        int wantDp = sell ? PriceMath.USDT_DP : PriceMath.MINIMA_DP;
+        if (wantAmt.stripTrailingZeros().scale() > wantDp) return false;
+        int lockDp = sell ? PriceMath.MINIMA_DP : PriceMath.USDT_DP;
+        if (minRem.stripTrailingZeros().scale() > lockDp) return false;
+        if (minRem.signum() < 0) return false;
+        return locked.stripTrailingZeros().scale() <= lockDp;
     }
 
     public long age(long chainBlock) { return created <= 0 ? 0 : Math.max(0, chainBlock - created); }

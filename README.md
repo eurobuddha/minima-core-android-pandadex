@@ -38,12 +38,14 @@ with percent chips, your open orders with edit/cancel.
 The book lives at one address, derived from a frozen KISS-VM covenant:
 
 ```
-0xCE5A0A3CC2E19B1860E60C58397FD5D5E986EEA4AF4423B53E08BAA5591B6F32
-MxG086EB853PGN1JCC61PGCB0SNVYEYT63ET95F8GHRAFG8NAWYW6RF69FVMZ6M
+0x2D43279DD85DABCA3EA90C9997DAB9169D8B7A0E8CB594236AF44542489774A5
+MxG081D8CJPRM2TYF53TA8CJ6BTYE8MJM5NK3KCMMA26QNK8Y14H5RKKK2B0665
 ```
 
 Spend paths: owner cancel (refund), owner atomic re-lock (renew/reprice), third-party expiry
-sweep after 1500 blocks, full fill, and partial fill with a pro-rata remainder. Prices are
+sweep after 600 blocks, full fill, and partial fill with a pro-rata remainder. The 600-block
+lifetime is deliberate: a light node cannot see a coin older than ~1024 blocks, so an order
+must be able to expire *and still be visible* long enough for anyone to sweep it home. Prices are
 enforced by cross-multiplication (no division, no rounding slack), always rounded in the
 maker's favour, with a maker-set minimum remainder to stop dust griefing.
 
@@ -71,5 +73,11 @@ outright rather than returning an error.
 
 ## Status
 
-Built and proven on a private chain; **not yet tested with real funds on mainnet**. Treat it
-as experimental until it has been through a live dust test.
+Built and proven on a private chain; **not yet run on a device and not yet tested with real
+funds**. Treat it as experimental until it has been through a live dust test.
+
+It has been through one adversarial fund-safety review, which found two critical issues (an
+expiry that sat beyond the node's visibility horizon, and a script registration that made
+every stranger's order read as your own). Both are fixed and the full proof suite was re-run;
+`contract/RESULTS.md` documents what was wrong, why the original proofs missed it, and what
+changed.

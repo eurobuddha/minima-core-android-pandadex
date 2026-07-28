@@ -32,6 +32,10 @@ public final class PriceMath {
 
     /** Minimum order size in MINIMA (dust guard, mirrors Limit's MIN_ORDER). */
     public static final BigDecimal MIN_ORDER_MINIMA = new BigDecimal("0.01");
+    /** Maximum per-leg order size. MiniNumber.isValidMinimaValue rejects anything above 1e9,
+     *  and the covenant's overflow headroom (products must stay under 2^64) assumes both legs
+     *  respect this — so enforce it before the funds move rather than failing at the node. */
+    public static final BigDecimal MAX_ORDER = new BigDecimal("1000000000");
 
     /** Quantize UP to n decimals (maker-favored: payments, remainder want). */
     public static BigDecimal up(BigDecimal v, int dp) {

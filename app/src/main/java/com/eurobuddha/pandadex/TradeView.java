@@ -364,6 +364,7 @@ public final class TradeView extends LinearLayout {
     }
 
     private void submit() {
+        if (act.isBusy()) { act.toast("A transaction is already in flight"); return; }
         BigDecimal price = Util.dec(priceIn.getText().toString());
         BigDecimal amount = Util.dec(amountIn.getText().toString());
         BigDecimal minRem = Util.dec(minFillIn.getText().toString());
@@ -374,8 +375,7 @@ public final class TradeView extends LinearLayout {
         // MARKETABLE LIMIT: if the order crosses the book, take the resting liquidity first
         // (that's what makes a "market order" possible without any AMM) and only rest the
         // unfilled balance. This is the taker path — one sweep txn, ≤1 partial.
-        SweepPlanner.Plan plan = SweepPlanner.plan(act.book().values(), buyMode, amount, price,
-                act.keys(), act.chainBlock());
+        SweepPlanner.Plan plan = SweepPlanner.plan(act.book().values(), buyMode, amount, price, act.chainBlock());
         if (!plan.isEmpty()) {
             act.confirmSweep(plan, buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
         } else {
@@ -425,6 +425,8 @@ public final class TradeView extends LinearLayout {
             volTv.setText(PriceMath.fmt(s[4]));
         }
 
+        ctaBtn.setAlpha(act.isBusy() ? 0.5f : 1f);
+        ctaBtn.setEnabled(!act.isBusy());
         renderLadder(book, chainBlock);
         renderOrders(book, chainBlock, pending);
     }

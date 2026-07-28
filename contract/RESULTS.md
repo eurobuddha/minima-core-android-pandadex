@@ -1,12 +1,15 @@
-# PandaDEX V5 partial-fill covenant — proof results (2026-07-27)
+# PandaDEX V5 partial-fill covenant — proof results
+
+(2026-07-27 original; **2026-07-28 re-frozen after the adversarial review** — see the
+CORRECTION at the end. The EXPIRY-1500 contract at `0xCE5A0A3C…` is ABANDONED.)
 
 ## FROZEN MAINNET CONTRACT
 
 - Template: `v5script.tpl` with `$TOK` = mxUSDT
-  `0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90`, `$EXP` = 1500.
-- **Mainnet script: 1128 chars, parseok true.**
-- **Mainnet address: `0xCE5A0A3CC2E19B1860E60C58397FD5D5E986EEA4AF4423B53E08BAA5591B6F32`**
-  (`MxG086EB853PGN1JCC61PGCB0SNVYEYT63ET95F8GHRAFG8NAWYW6RF69FVMZ6M`)
+  `0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90`, **`$EXP` = 600**.
+- **Mainnet script: 1127 chars, parseok true.**
+- **Mainnet address: `0x2D43279DD85DABCA3EA90C9997DAB9169D8B7A0E8CB594236AF44542489774A5`**
+  (`MxG081D8CJPRM2TYF53TA8CJ6BTYE8MJM5NK3KCMMA26QNK8Y14H5RKKK2B0665`)
 - State ports: 0 ownerPk · 1 wantAddr · 2 wantAmt · 3 wantTok · 4 orderId · 5 side(0 buy/1 sell)
   · 6 price(DISPLAY ONLY — never trust; derive from 2 and coin amount) · 7 GTC · 8 minRemainder.
 - Test dims (private solo node, ports 19101/19105): tUSDT 8dp scale-36 token, EXP=20; same
@@ -112,3 +115,66 @@ Worst case 7.06%. The app issues NO unbounded `coins address:`, no all-token `ba
 `history`, and no `scripts` enumeration. The book scan is bounded by `depth:1700` and is
 complete by construction: GTC renewal keeps every live order coin younger than the
 1500-block expiry.
+
+
+---
+
+# CORRECTION (2026-07-28) — the 1500-block expiry was unsafe
+
+An adversarial fund-safety review found that **this document's central claim was false on
+mainnet**, and that the proof harness had hidden it.
+
+## What was wrong
+
+The book scan used `depth:1700` and this file asserted the scan was "COMPLETE by
+construction" because 1700 > EXPIRY 1500. But `coins ... depth:` walks **tree nodes**, and
+the chain tree is trimmed at `MINIMA_CASCADE_START_DEPTH = 1024` (`GlobalParams.java:48`).
+The real visibility horizon is therefore **~1024 blocks (~14 h)**, not 1700.
+
+With EXPIRY at 1500, an order could age past 1024 while still "live". Once there it was:
+invisible to every `coins` query, so **un-cancellable and un-renewable**; and because the
+expiry-sweep branch also needs the coin to be visible, **un-sweepable by anyone**. Recovering
+it would need an archive/MegaMMR node and a hand-built transaction. Separately, the fill tape
+saw the coin vanish while `expired()` was still false and recorded a **phantom fill** —
+inventing a trade, poisoning the candles, and firing a false "order filled" alert.
+
+## Why the proofs did not catch it
+
+The solo node runs `TestParams`, which trims at **32** nodes, and the harness used
+**EXP = 20**. The inequality `EXPIRY < HORIZON` held by accident in the test environment and
+failed only on mainnet parameters. **Lesson: a proof harness that changes the constants it is
+proving must re-check the invariants those constants participate in.** `OrderValidationTest`
+now asserts `EXPIRY_BLOCKS < HORIZON_BLOCKS` so this cannot silently regress.
+
+## What changed
+
+| | before | after |
+|---|---|---|
+| EXPIRY_BLOCKS | 1500 | **600** (~8.3 h) |
+| RENEW_AT | 500 | **200** (~2.8 h) |
+| SCAN_DEPTH | 1700 | **1000** (under the 1024 trim) |
+| HORIZON_BLOCKS | — | **1024** (documented ceiling) |
+| address | `0xCE5A0A3C…` | **`0x2D43279D…`** |
+
+A lapsed order now has a ~424-block (~6 h) window in which it is expired *and* still visible,
+so anyone can sweep it home. The old book was never funded on mainnet, so nothing is stranded.
+
+## Re-proof after the fix (all re-run 2026-07-28)
+
+- Phase A: **134/134**.
+- Phase B adversary: **9/9 rejected**, order coin never moved.
+- Multi-order sweep (k=2, trailing partial): **PASSED**.
+- App shapes (create / sweep-partial / relock-edit / cancel): **4/4**, and confirmed the book
+  is still fully discoverable after switching registration to `trackall:false` (the C2 fix).
+- 38 JVM tests green, including new regression cover for hostile resting orders.
+
+## Second critical: `trackall:true` broke ownership
+
+Registering the covenant with `trackall:true` puts the address in
+`Wallet.mAllTrackedAddress`, and `TxPoWTreeNode.checkRelevant` returns true for **any** coin
+at a tracked address — so `coins relevant:true` returned the whole book and every stranger's
+order read as the user's own. That starved GTC renewal (the two renewal slots per pass were
+spent on foreign orders that fail signing) and fed straight into the C1 loss path, besides
+poisoning P&L, notifications and portfolio value. Registration is now `trackall:false`, and
+`Order5.isMine()` requires a **key match** — the node's relevance flag can no longer stand
+alone.

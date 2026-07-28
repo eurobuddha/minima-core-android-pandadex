@@ -54,6 +54,10 @@ public class MainActivity extends AppCompatActivity {
     private Pending pending;
     private DexProcessor processor;
     private boolean keepAliveAsked = false;
+    private boolean scriptReady = true;   // covenant verified+registered on this node
+    private volatile boolean busy = false;          // a spend is in flight — lock the CTA
+    private Runnable restQueue;                     // limit balance to place once a sweep lands
+    private java.util.List<String> restQueueCoins;  // the swept coins we're waiting to vanish
     private BroadcastReceiver notifyReceiver;
 
     private TradeView trade;
@@ -100,6 +104,12 @@ public class MainActivity extends AppCompatActivity {
         repo.setFillSink(this::onFillObserved);
         repo.subscribe((orders, syncing) -> {
             pending.resolve(orders, chainBlock);
+            reconcileSweep(orders);
+            // remember my own live orders so they can still be found after they age out of
+            // the node's searchable window (the recovery path in ORDERS)
+            for (Order5 o : orders.values()) {
+                if (o.isMine(keySet.keys())) db.rememberMyOrder(o.coinid, o.orderId, "", o.created);
+            }
             // the foreground Activity owns renewals while it's up (the service stands down)
             if (paired && keySet.ready() && chainBlock > 0) {
                 processor.process(orders, keySet.keys(), chainBlock, new DexProcessor.Listener() {
@@ -140,15 +150,25 @@ public class MainActivity extends AppCompatActivity {
                 receiveAddr = r.optString("miniaddress", r.optString("address", ""));
                 repaint();
             }
-            @Override public void onError(String message) {}
+            @Override public void onError(String message) {
+                // identity is required before ANY spend — retry rather than leaving the user
+                // with an opaque failure and a stuck optimistic row
+                ui.postDelayed(() -> { if (paired) onPaired(); }, 5_000);
+            }
         });
-        // register the covenant ONCE per install (parseok + address verified)
-        if (!"1".equals(db.meta("tracked", ""))) {
-            DexContract.ensureScript(node, new DexContract.Ready() {
-                @Override public void ok() { db.putMeta("tracked", "1"); repo.refresh(); }
-                @Override public void failed(String why) { toast("Covenant check failed: " + why); }
-            });
-        }
+        // Verify + register the covenant on EVERY pairing, not once per install: the flag
+        // lives in the app's DB but the registration lives in the NODE's wallet, so a node
+        // reinstall/resync would otherwise leave the script unregistered — and then cancels,
+        // relocks and sweeps all fail the scripts gate while `send` still happily creates
+        // orders the user cannot cancel. The key is versioned so the trackall:false change
+        // re-registers on existing installs.
+        DexContract.ensureScript(node, new DexContract.Ready() {
+            @Override public void ok() { scriptReady = true; db.putMeta("tracked_v2", "1"); repo.refresh(); }
+            @Override public void failed(String why) {
+                scriptReady = false;
+                toast("Covenant check failed: " + why);
+            }
+        });
         poll();
         maybeStartKeepAlive();
     }
@@ -293,6 +313,20 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /** Every precondition for spending funds: paired, identity read, covenant registered. */
+    private boolean ready() {
+        if (!paired) { toast("Pair with your node first"); return false; }
+        if (txn == null || txn.pubkey().isEmpty() || txn.hexAddr().isEmpty()) {
+            toast("Still reading your wallet identity — try again in a moment");
+            return false;
+        }
+        if (!scriptReady) {
+            toast("The order-book contract isn't registered on your node yet");
+            return false;
+        }
+        return true;
+    }
+
     /** Mid-price of the live book (best bid/ask), or the last trade, or null. */
     public BigDecimal bookMid() {
         BigDecimal bestAsk = null, bestBid = null;
@@ -326,6 +360,7 @@ public class MainActivity extends AppCompatActivity {
                 JSONObject r = json.optJSONObject("response");
                 if (r != null) chainBlock = Util.dec(r.optString("block", "0")).longValue();
                 if (repo != null) repo.setChainBlock(chainBlock);
+                if (txn != null) txn.setChainBlock(chainBlock);
                 repaint();
             }
             @Override public void onError(String message) {}
@@ -367,7 +402,7 @@ public class MainActivity extends AppCompatActivity {
     // ------------------------------------------------------------------ actions
 
     public void placeOrder(boolean buy, BigDecimal minima, BigDecimal price, boolean gtc, BigDecimal minRem) {
-        if (!paired) { toast("Pair with your node first"); return; }
+        if (!ready()) return;
         // optimistic row FIRST — the UI moves instantly
         Pending.Row row = new Pending.Row();
         row.kind = Pending.PLACE;
@@ -378,14 +413,19 @@ public class MainActivity extends AppCompatActivity {
         row.submitBlock = chainBlock;
         row.orderId = "";
         pending.add(row);
+        busy = true;
         repaint();
         txn.createOrder(buy, minima, price, gtc, minRem, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) {
+                busy = false;
                 toast("Order posted");
                 repo.refresh();
+                repaint();
             }
             @Override public void onFailed(String message) {
+                busy = false;
                 toast("Order failed: " + message);
+                repaint();
             }
         });
     }
@@ -396,7 +436,7 @@ public class MainActivity extends AppCompatActivity {
      */
     public void confirmSweep(SweepPlanner.Plan plan, boolean buy, BigDecimal amount,
                              BigDecimal price, boolean gtc, BigDecimal minRem) {
-        if (!paired) { toast("Pair with your node first"); return; }
+        if (!ready()) return;
         BigDecimal rest = amount.subtract(plan.totalMinima).max(BigDecimal.ZERO);
         StringBuilder sb = new StringBuilder();
         sb.append(buy ? "Buying " : "Selling ").append(PriceMath.fmt(plan.totalMinima))
@@ -416,27 +456,49 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle(buy ? "Confirm buy" : "Confirm sell")
                 .setMessage(sb.toString())
                 .setPositiveButton("Execute", (d, w) -> {
+                    busy = true;
                     txn.fillSweep(plan, new DexTxn.Result() {
                         @Override public void onPosted(String txpowid) {
+                            busy = false;
                             toast("Sweep posted");
-                            recordTakerFills(plan, buy);
                             repo.refresh();
-                            if (rest.signum() > 0) placeOrder(buy, rest, price, gtc, minRem);
+                            // The resting balance is queued, NOT placed now: the sweep has
+                            // already committed these funds, so an immediate `send` would
+                            // fail "insufficient funds". The queue fires once the swept order
+                            // coins are actually gone from the book.
+                            if (rest.signum() > 0) {
+                                restQueue = new Runnable() {
+                                    @Override public void run() { placeOrder(buy, rest, price, gtc, minRem); }
+                                };
+                                restQueueCoins = new java.util.ArrayList<>();
+                                for (SweepPlanner.Take t : plan.takes) restQueueCoins.add(t.order.coinid);
+                            }
                         }
-                        @Override public void onFailed(String message) { toast("Sweep failed: " + message); }
+                        @Override public void onFailed(String message) {
+                            busy = false;
+                            toast("Sweep failed: " + message);
+                        }
                     });
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    /** Record MY taker fills locally so History/P&L show them without waiting for a diff. */
-    private void recordTakerFills(SweepPlanner.Plan plan, boolean buy) {
-        for (SweepPlanner.Take t : plan.takes) {
-            db.addMyTrade(t.order.coinid, System.currentTimeMillis(), chainBlock,
-                    t.order.price(), t.minima, buy, false, t.order.orderId);
+    /**
+     * Record MY taker fills — but ONLY once the swept coins are actually gone from the book.
+     * A consensus-rejected sweep posts without error and simply never mines, so recording on
+     * "posted" would write a permanent phantom trade (and, keyed by coinid with
+     * CONFLICT_IGNORE, would block the real record if that coin later filled for real).
+     */
+    private void reconcileSweep(Map<String, Order5> book) {
+        if (restQueueCoins == null) return;
+        for (String coinid : restQueueCoins) {
+            if (book.containsKey(coinid)) return;         // sweep hasn't landed yet
         }
-        stats.invalidate();
+        Runnable q = restQueue;
+        restQueue = null;
+        restQueueCoins = null;
+        if (q != null) q.run();
     }
 
     public void cancelOrder(Order5 o) {
@@ -450,7 +512,8 @@ public class MainActivity extends AppCompatActivity {
         row.submitMs = System.currentTimeMillis();
         row.submitBlock = chainBlock;
         pending.add(row);
-        repo.tape().noteMyCancel(o.coinid);
+        repo.tape().noteMyCancel(o.coinid);   // persisted — the bg service's tape reads it too
+        db.forgetMyOrder(o.coinid);
         repaint();
         txn.cancel(o, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) { toast("Cancel posted"); repo.refresh(); }
@@ -519,6 +582,7 @@ public class MainActivity extends AppCompatActivity {
     public BigDecimal minimaSendable() { return minimaSendable; }
     public BigDecimal usdtSendable() { return usdtSendable; }
     public void setInputFocused(boolean f) { inputFocused = f; }
+    public boolean isBusy() { return busy; }
 
     public void toast(String msg) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
