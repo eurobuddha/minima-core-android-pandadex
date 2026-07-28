@@ -16,3 +16,8 @@ local.properties
 
 # Local versioned APK archive (built APKs live in the minima-core-apks repo + GitHub Releases)
 releases/
+__pycache__/
+*.pyc
+graphify-out/
+.claude/
+contract/phaseB_state.json
