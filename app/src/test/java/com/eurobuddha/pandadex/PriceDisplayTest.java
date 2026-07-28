@@ -74,6 +74,15 @@ public class PriceDisplayTest {
         assertEquals(TradeView.levelPrice(a, tick), TradeView.levelPrice(b, tick));
     }
 
+    @Test public void theMidIsAlwaysTheMidpointOfBestBidAndBestAsk() {
+        // the centre of the book has ONE meaning and never borrows the last trade
+        BigDecimal bestBid = new BigDecimal("0.050500");
+        BigDecimal bestAsk = new BigDecimal("0.051000");
+        BigDecimal mid = bestBid.add(bestAsk).divide(new BigDecimal(2),
+                PriceMath.PRICE_DP, java.math.RoundingMode.HALF_UP);
+        assertEquals("0.050750", PriceMath.fmtPrice(mid));
+    }
+
     @Test public void asksRoundUpBidsRoundDownSoALevelNeverFlattersItsSide() {
         Order5 ask = sellAt("0xC1", "0.05151", "100", "0xAA");
         BigDecimal tick = new BigDecimal("0.0001");

@@ -50,9 +50,9 @@ public final class DexDb extends SQLiteOpenHelper {
      * The v3 purge below was a judgement call that also destroyed legitimately observed fills:
      * a user upgrading lost real trade history they could not get back, and two devices ended
      * up reporting different markets. It is kept only so devices that already ran it stay
-     * consistent. Corrupt rows are now prevented at the source (FillTape's evidence rules) and
-     * missing ones are recovered from the chain (TradeBackfill) — neither of which costs the
-     * user anything they earned. Do not add another DELETE here.
+     * consistent. Corrupt rows are now prevented at the source (FillTape's evidence rules),
+     * which costs the user nothing they earned. Do not add another DELETE here — stored
+     * history is the user's, and there is no way to get it back once deleted.
      */
     @Override public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
         if (oldV < 2) {
