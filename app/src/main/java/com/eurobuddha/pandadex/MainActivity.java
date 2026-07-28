@@ -665,6 +665,67 @@ public class MainActivity extends AppCompatActivity {
         if (q != null) q.run();
     }
 
+    /**
+     * Cancel every open order. Also the market maker's withdraw path.
+     *
+     * Issued STRICTLY SEQUENTIALLY: the node executes one command at a time and each cancel
+     * grinds proof-of-work, so firing a dozen at once would swamp its single command thread
+     * and time everything out. Progress is reported as it goes, and a partial result is
+     * reported honestly — the chain decides what actually happened, not this loop.
+     */
+    public void cancelAll(Runnable onDone) {
+        if (!ready()) return;
+        java.util.List<Order5> mine = new java.util.ArrayList<>();
+        for (Order5 o : book().values()) if (o.isMine(keySet.keys())) mine.add(o);
+        if (mine.isEmpty()) { toast("No open orders"); if (onDone != null) onDone.run(); return; }
+
+        BigDecimal totalMinima = BigDecimal.ZERO, totalUsdt = BigDecimal.ZERO;
+        for (Order5 o : mine) {
+            if (o.sell) totalMinima = totalMinima.add(o.locked);
+            else totalUsdt = totalUsdt.add(o.locked);
+        }
+        String msg = "Cancel all " + mine.size() + " open order" + (mine.size() == 1 ? "" : "s")
+                + "?\n\nThis returns " + PriceMath.fmt(totalMinima) + " MINIMA and "
+                + PriceMath.fmt(totalUsdt) + " mxUSDT to your wallet.\n\nEach cancel is a "
+                + "separate transaction, so this takes a moment.";
+        new AlertDialog.Builder(this, Design.dialogTheme())
+                .setTitle("Cancel all orders")
+                .setMessage(msg)
+                .setPositiveButton("Cancel them", (d, w) -> cancelSequentially(mine, 0, 0, 0, onDone))
+                .setNegativeButton("Keep them", null)
+                .show();
+    }
+
+    private void cancelSequentially(java.util.List<Order5> list, int idx, int ok, int failed,
+                                    Runnable onDone) {
+        if (idx >= list.size()) {
+            busy = false;
+            String summary = failed == 0
+                    ? "Cancelled " + ok + " order" + (ok == 1 ? "" : "s")
+                    : "Cancelled " + ok + ", " + failed + " could not be cancelled — they may "
+                            + "have just been filled. Check your open orders.";
+            setStage(summary);
+            toast(summary);
+            repo.refresh();
+            repaint();
+            if (onDone != null) onDone.run();
+            return;
+        }
+        busy = true;
+        Order5 o = list.get(idx);
+        setStage("Cancelling " + (idx + 1) + " of " + list.size() + "…");
+        repo.tape().noteMyCancel(o.coinid);
+        db.forgetMyOrder(o.coinid);
+        txn.cancel(o, new DexTxn.Result() {
+            @Override public void onPosted(String txpowid) {
+                cancelSequentially(list, idx + 1, ok + 1, failed, onDone);
+            }
+            @Override public void onFailed(String message) {
+                cancelSequentially(list, idx + 1, ok, failed + 1, onDone);
+            }
+        });
+    }
+
     public void cancelOrder(Order5 o) {
         Pending.Row row = new Pending.Row();
         row.kind = Pending.CANCEL;

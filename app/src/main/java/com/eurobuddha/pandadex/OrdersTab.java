@@ -77,6 +77,19 @@ public final class OrdersTab extends LinearLayout {
         Map<String, Order5> book = act.book();
         long block = act.chainBlock();
         boolean any = false;
+        int mineCount = 0;
+        for (Order5 o : book.values()) if (o.isMine(act.keys())) mineCount++;
+        if (mineCount > 1) {
+            TextView cancelAll = line("✕  Cancel all " + mineCount + " orders", Design.RED(), 11.5f);
+            cancelAll.setGravity(Gravity.CENTER);
+            cancelAll.setPadding(0, Design.dp(getContext(), 10), 0, Design.dp(getContext(), 10));
+            cancelAll.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
+            cancelAll.setOnClickListener(v -> act.cancelAll(null));
+            Design.pressable(cancelAll);
+            LayoutParams cl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+            cl.bottomMargin = Design.dp(getContext(), 10);
+            body.addView(cancelAll, cl);
+        }
         for (Order5 o : book.values()) {
             if (!o.isMine(act.keys())) continue;
             any = true;

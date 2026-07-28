@@ -335,11 +335,29 @@ public final class TradeView extends LinearLayout {
         opts.setPadding(0, dp(6), 0, 0);
         c.addView(opts);
 
-        minFillIn = input("Min unfilled remainder (MINIMA, anti-dust)");
-        minFillIn.setText("1");
+        // The label must be a real TextView, NOT the EditText's hint: a hint is only drawn
+        // while the field is EMPTY, and this field ships pre-filled with "1" — so the
+        // description was never visible and the control read as a mysterious lone "1".
         LinearLayout adv = new LinearLayout(getContext());
         adv.setOrientation(VERTICAL);
-        adv.addView(minFillIn);
+        adv.setPadding(0, dp(8), 0, 0);
+        adv.addView(tv("Minimum left on the book after a partial fill", 11f,
+                Design.TEXT(), Design.sansBold()));
+
+        minFillIn = input("");
+        minFillIn.setText("1");
+        LinearLayout row = new LinearLayout(getContext());
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(minFillIn, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        TextView unit = tv("MINIMA", 12f, Design.DIM(), Design.mono());
+        LayoutParams ul = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
+        ul.leftMargin = dp(8);
+        row.addView(unit, ul);
+        adv.addView(row);
+
+        adv.addView(tv("A buyer must leave at least this much resting, or take the whole "
+                + "order. It stops someone nibbling your order down to unsellable dust.",
+                10f, Design.DIM2(), Design.sans()));
         adv.setVisibility(GONE);
         advBox = adv;
         c.addView(adv);
