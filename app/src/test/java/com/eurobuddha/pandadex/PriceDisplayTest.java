@@ -83,15 +83,25 @@ public class PriceDisplayTest {
 
     // ---------------- D1: fixed-width price rendering ----------------
 
-    @Test public void pricesAlwaysShowFiveDecimals() {
-        assertEquals("0.05200", PriceMath.fmtPrice(new BigDecimal("0.052")));
-        assertEquals("0.05150", PriceMath.fmtPrice(new BigDecimal("0.0515")));
-        assertEquals("1.00000", PriceMath.fmtPrice(BigDecimal.ONE));
+    @Test public void pricesAlwaysShowSixDecimals() {
+        // six, not five: at ~0.05 mxUSDT a five-decimal tick is too coarse to tell two real
+        // orders apart or to show what you're actually about to trade at
+        assertEquals(6, PriceMath.DISPLAY_DP);
+        assertEquals("0.052000", PriceMath.fmtPrice(new BigDecimal("0.052")));
+        assertEquals("0.051500", PriceMath.fmtPrice(new BigDecimal("0.0515")));
+        assertEquals("0.051750", PriceMath.fmtPrice(new BigDecimal("0.05175")));
+        assertEquals("1.000000", PriceMath.fmtPrice(BigDecimal.ONE));
+    }
+
+    @Test public void sixDecimalsSeparatesPricesFiveWouldMerge() {
+        // 0.051750 vs 0.051751 — indistinguishable at 5dp, distinct now
+        assertNotEquals(PriceMath.fmtPrice(new BigDecimal("0.051750")),
+                        PriceMath.fmtPrice(new BigDecimal("0.051751")));
     }
 
     @Test public void trailingZerosAreNotStrippedForPrices() {
         // "0.052" vs "0.0520" read as different numbers in a ladder — the old fmt() did this
-        assertEquals("0.05200", PriceMath.fmtPrice(new BigDecimal("0.0520")));
+        assertEquals("0.052000", PriceMath.fmtPrice(new BigDecimal("0.0520")));
         assertEquals(PriceMath.fmtPrice(new BigDecimal("0.052")),
                 PriceMath.fmtPrice(new BigDecimal("0.0520")));
     }

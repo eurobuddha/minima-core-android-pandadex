@@ -65,7 +65,8 @@ public final class AssetsTab extends LinearLayout {
 
         BigDecimal mid = act.bookMid();
         BigDecimal freeM = act.minimaSendable(), freeU = act.usdtSendable();
-        BigDecimal totalM = freeM.add(lockedMinima), totalU = freeU.add(lockedUsdt);
+        BigDecimal totalM = freeM.add(lockedMinima).add(act.minimaPending());
+        BigDecimal totalU = freeU.add(lockedUsdt).add(act.usdtPending());
 
         LinearLayout head = card();
         head.addView(t("PORTFOLIO", Design.DIM(), 10f, Design.sansBold()));
@@ -80,8 +81,8 @@ public final class AssetsTab extends LinearLayout {
             head.addView(t("no book mid yet", Design.DIM2(), 9.5f, Design.sans()));
         }
 
-        assetCard("MINIMA", freeM, lockedMinima, totalM);
-        assetCard("mxUSDT", freeU, lockedUsdt, totalU);
+        assetCard("MINIMA", freeM, lockedMinima, totalM, act.minimaPending());
+        assetCard("mxUSDT", freeU, lockedUsdt, totalU, act.usdtPending());
 
         LinearLayout recv = card();
         recv.addView(t("RECEIVE", Design.DIM(), 10f, Design.sansBold()));
@@ -105,7 +106,8 @@ public final class AssetsTab extends LinearLayout {
                 + "or swap ERC20 USDT ↔ mxUSDT with usdtSwap.", Design.DIM2(), 10f, Design.sans()));
     }
 
-    private void assetCard(String symbol, BigDecimal free, BigDecimal locked, BigDecimal total) {
+    private void assetCard(String symbol, BigDecimal free, BigDecimal locked, BigDecimal total,
+                           BigDecimal confirming) {
         LinearLayout c = card();
         LinearLayout top = new LinearLayout(getContext());
         top.setGravity(Gravity.CENTER_VERTICAL);
@@ -119,7 +121,15 @@ public final class AssetsTab extends LinearLayout {
         split.setPadding(0, Design.dp(getContext(), 6), 0, 0);
         col(split, "Available", PriceMath.fmt(free), Design.IN());
         col(split, "In orders", PriceMath.fmt(locked), Design.ACCENT());
+        // Proceeds from a trade land here first. Without this the money looks missing between
+        // "sold" and the coins maturing, which is exactly when a user starts to worry.
+        col(split, "Confirming", PriceMath.fmt(confirming),
+                confirming.signum() > 0 ? Design.ACCENT() : Design.DIM2());
         c.addView(split);
+        if (confirming.signum() > 0) {
+            c.addView(t("Funds from a recent trade are still being confirmed by your node — "
+                    + "they'll become available in a block or two.", Design.DIM2(), 9.5f, Design.sans()));
+        }
     }
 
     private void col(LinearLayout row, String label, String value, int color) {

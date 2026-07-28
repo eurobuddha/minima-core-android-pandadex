@@ -78,12 +78,24 @@ public class MainActivity extends AppCompatActivity {
     private boolean inputFocused = false;
     private long chainBlock = 0;
     private BigDecimal minimaSendable = BigDecimal.ZERO, usdtSendable = BigDecimal.ZERO;
+    /** Funds that have arrived but aren't spendable yet — the gap between "sold" and seeing
+     *  the money, which otherwise looks like the trade didn't pay out. */
+    private BigDecimal minimaPending = BigDecimal.ZERO, usdtPending = BigDecimal.ZERO;
     private String receiveAddr = "";
 
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             poll();
             ui.postDelayed(this, POLL_MS);
+        }
+    };
+
+    /** Repaint once a second WHILE something is in flight, so the pending clock and the stage
+     *  line actually move. Costs nothing when idle — it renders from memory, no node calls. */
+    private final Runnable uiTick = new Runnable() {
+        @Override public void run() {
+            if (!pending.rows().isEmpty() || !stage().isEmpty()) repaint();
+            ui.postDelayed(this, 1000);
         }
     };
 
@@ -404,7 +416,14 @@ public class MainActivity extends AppCompatActivity {
     private void poll() {
         if (node == null) return;
         if (!node.isEnabled()) { node.reRegister(); return; }
-        if (inputFocused) return;   // never yank the ground from under a typing user
+        // NOTE: polling must NEVER be gated on input focus. It used to be — inherited from an
+        // app whose refresh rebuilt the whole form and ate in-progress typing — but this
+        // screen builds its inputs ONCE and only re-renders read-only sections, so there is
+        // nothing to protect. The gate meant that after placing an order (which leaves the
+        // amount field focused) the maker's own phone stopped reading the chain entirely:
+        // block height froze, the book never refreshed, and the order stayed on "Sending…"
+        // while a REMOTE phone — not typing, so still polling — saw and traded the order
+        // first. Your own order must never appear on someone else's device before yours.
         node.cmd("block", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 JSONObject r = json.optJSONObject("response");
@@ -423,6 +442,7 @@ public class MainActivity extends AppCompatActivity {
         node.cmd("balance tokenid:0x00", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 minimaSendable = firstSendable(json, false);
+                minimaPending = pendingOf(json);
                 repaint();
             }
             @Override public void onError(String message) {}
@@ -430,10 +450,31 @@ public class MainActivity extends AppCompatActivity {
         node.cmd("balance tokenid:" + DexContract.USDT_ID, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 usdtSendable = firstSendable(json, true);
+                usdtPending = pendingOf(json);
                 repaint();
             }
             @Override public void onError(String message) {}
         });
+    }
+
+    /** Funds present but not yet spendable: what the node is still confirming. Shown so a
+     *  completed trade doesn't look unpaid while the coins mature. */
+    private static BigDecimal pendingOf(JSONObject json) {
+        Object resp = json.opt("response");
+        JSONObject row = null;
+        if (resp instanceof JSONArray && ((JSONArray) resp).length() > 0) {
+            row = ((JSONArray) resp).optJSONObject(0);
+        } else if (resp instanceof JSONObject) {
+            row = (JSONObject) resp;
+        }
+        if (row == null) return BigDecimal.ZERO;
+        BigDecimal unconfirmed = Util.dec(row.optString("unconfirmed", "0"));
+        BigDecimal confirmed = Util.dec(row.optString("confirmed", "0"));
+        BigDecimal sendable = Util.dec(row.optString("sendable", confirmed.toPlainString()));
+        // anything confirmed-but-not-yet-spendable is also still maturing
+        BigDecimal maturing = confirmed.subtract(sendable);
+        if (maturing.signum() < 0) maturing = BigDecimal.ZERO;
+        return unconfirmed.add(maturing);
     }
 
     private static BigDecimal firstSendable(JSONObject json, boolean token) {
@@ -572,8 +613,12 @@ public class MainActivity extends AppCompatActivity {
         filling.removeAll(done);
         String msg = (awaitingBuy ? "Bought " : "Sold ") + PriceMath.fmt(awaitingMinima)
                 + " MINIMA @ " + PriceMath.fmtPrice(awaitingPrice);
-        setStage("✓ " + msg);
-        Notifier.alert(this, "Trade complete", msg);
+        // Say where the money is. The proceeds are on-chain the moment the trade mines, but
+        // they are not SPENDABLE until the node has confirmed them, and that gap previously
+        // read as "the trade completed but I wasn't paid".
+        setStage("✓ " + msg + " — proceeds are confirming, see ASSETS");
+        Notifier.alert(this, "Trade complete", msg + ". Funds are confirming and will show as "
+                + "available shortly.");
         for (String coinid : done) {
             db.addMyTrade(coinid, System.currentTimeMillis(), chainBlock, awaitingPrice,
                     awaitingMinima, awaitingBuy, false, "");
@@ -672,6 +717,8 @@ public class MainActivity extends AppCompatActivity {
     public long chainBlock() { return chainBlock; }
     public BigDecimal minimaSendable() { return minimaSendable; }
     public BigDecimal usdtSendable() { return usdtSendable; }
+    public BigDecimal minimaPending() { return minimaPending; }
+    public BigDecimal usdtPending() { return usdtPending; }
     public void setInputFocused(boolean f) { inputFocused = f; }
     public boolean isBusy() { return busy; }
     public java.util.Set<String> filling() { return filling; }
@@ -688,12 +735,15 @@ public class MainActivity extends AppCompatActivity {
         inputFocused = false;
         ui.removeCallbacks(pollTask);
         ui.post(pollTask);
+        ui.removeCallbacks(uiTick);
+        ui.postDelayed(uiTick, 1000);
     }
 
     @Override protected void onPause() {
         super.onPause();
         FOREGROUND = false;
         ui.removeCallbacks(pollTask);
+        ui.removeCallbacks(uiTick);
     }
 
     @Override protected void onDestroy() {

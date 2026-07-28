@@ -82,8 +82,11 @@ public final class PriceMath {
         return Util.tidyAmount(v.stripTrailingZeros().toPlainString());
     }
 
-    /** Decimals shown for every PRICE in the UI. */
-    public static final int DISPLAY_DP = 5;
+    /** Decimals shown for every PRICE in the UI. MINIMA trades around 0.05 mxUSDT, so five
+     *  decimals only resolves to the nearest 0.00001 — enough to make two genuinely different
+     *  orders look identical and to misreport what you are about to trade at. Six gives a
+     *  real tick at this price level. */
+    public static final int DISPLAY_DP = 6;
 
     /**
      * Display a PRICE at a fixed width. Prices must NOT strip trailing zeros the way amounts

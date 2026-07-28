@@ -250,3 +250,29 @@ Defects exposed, all in the layer ABOVE the trade (no funds affected):
    (Building transaction… → Posted, waiting for a block → ✓ Bought 150 MINIMA @ 0.05150),
    FILLING markers on the ladder rows being taken, and a completion notification — the taker's
    own fill produces no book-diff signature of its own, so it had to be detected explicitly.
+
+
+# THIRD MAINNET SESSION (2026-07-28, v0.1.3) — two more successful trades
+
+Two more trades settled correctly, including a taker hitting a bid. Defects found:
+
+1. **The maker's own orders appeared on the REMOTE phone before the local one** — and could be
+   traded there before the maker's app knew they existed. Root cause: `MainActivity.poll()`
+   began with `if (inputFocused) return;`, so while any text field had focus the app made NO
+   node calls at all — no block height, no balances, no book scan. Placing an order leaves the
+   amount field focused, so the maker's phone stopped reading the chain at exactly the moment
+   it most needed to, while the taker's phone (not typing) polled normally. That also froze
+   the pending row on "Sending…" forever, since the row resolves inside the scan callback.
+   The guard was inherited from an app whose refresh rebuilt the whole form; this screen builds
+   its inputs once, so there was nothing to protect. Removed.
+2. **"Sending…" was open-ended** with no sense of how long to wait. Now shows an elapsed clock
+   and what it is waiting for ("waiting for the next block (~50s) · 12s"), and says plainly
+   when it is overdue rather than spinning. A 1s UI tick keeps it moving.
+3. **Five decimals was too coarse for this pair.** MINIMA trades near 0.05 mxUSDT, so 5dp could
+   not separate genuinely different orders or show what a tap would actually trade at. Prices
+   now display at **6 decimals**, and tapping a ladder row prefills the EXACT best price behind
+   that level rather than the rounded label.
+4. **Trade proceeds looked missing.** Funds are on-chain the moment a trade mines but are not
+   spendable until confirmed, and nothing showed that gap — so "sold" was followed by an
+   apparently unchanged balance. ASSETS now has a **Confirming** column alongside Available and
+   In orders, and the completion message points at it.

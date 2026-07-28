@@ -225,7 +225,8 @@ public final class TradeView extends LinearLayout {
 
     /** One ladder row with a right-anchored translucent depth bar BEHIND the numbers. */
     private View ladderRow(BigDecimal price, BigDecimal amount, BigDecimal total,
-                           float depthFrac, boolean ask, boolean mine, boolean filling) {
+                           float depthFrac, boolean ask, boolean mine, boolean filling,
+                           BigDecimal exactPrice) {
         FrameLayout f = new FrameLayout(getContext());
         View bar = new View(getContext());
         int barColor = ask ? (Design.RED() & 0x00FFFFFF) | 0x22000000
@@ -254,7 +255,8 @@ public final class TradeView extends LinearLayout {
         to.setGravity(Gravity.END);
         row.addView(to, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         f.addView(row);
-        f.setOnClickListener(v -> priceIn.setText(price.stripTrailingZeros().toPlainString()));
+        BigDecimal prefill = exactPrice != null ? exactPrice : price;
+        f.setOnClickListener(v -> priceIn.setText(prefill.stripTrailingZeros().toPlainString()));
         Design.pressable(f);
         return f;
     }
@@ -484,12 +486,16 @@ public final class TradeView extends LinearLayout {
         TreeMap<BigDecimal, BigDecimal> bids = new TreeMap<>((a, b) -> b.compareTo(a));
         TreeMap<BigDecimal, Boolean> mineAt = new TreeMap<>();
         TreeMap<BigDecimal, Boolean> fillingAt = new TreeMap<>();
+        // the exact price of the best order behind each level — tapping a row must prefill
+        // what you would actually trade at, not the rounded label
+        TreeMap<BigDecimal, BigDecimal> exactAt = new TreeMap<>();
         for (Order5 o : book.values()) {
             if (o.expired(chainBlock)) continue;
             BigDecimal g = levelPrice(o, tick);
             (o.sell ? asks : bids).merge(g, o.minimaAmount(), BigDecimal::add);
             if (o.isMine(act.keys())) mineAt.merge(g, true, (x, y) -> true);
             if (act.filling().contains(o.coinid)) fillingAt.merge(g, true, (x, y) -> true);
+            exactAt.merge(g, o.price(), (x, y) -> o.sell ? x.min(y) : x.max(y));
         }
 
         asksBox.removeAllViews();
@@ -507,7 +513,8 @@ public final class TradeView extends LinearLayout {
             askRows.add(ladderRow(e.getKey(), e.getValue(),
                     PriceMath.up(e.getKey().multiply(e.getValue(), PriceMath.MC), 4),
                     askMax.signum() == 0 ? 0 : running.divide(askMax, 4, RoundingMode.HALF_UP).floatValue(),
-                    true, mineAt.containsKey(e.getKey()), fillingAt.containsKey(e.getKey())));
+                    true, mineAt.containsKey(e.getKey()), fillingAt.containsKey(e.getKey()),
+                    exactAt.get(e.getKey())));
         }
         for (int i = askRows.size() - 1; i >= 0; i--) asksBox.addView(askRows.get(i));
 
@@ -520,7 +527,8 @@ public final class TradeView extends LinearLayout {
             bidsBox.addView(ladderRow(e.getKey(), e.getValue(),
                     PriceMath.up(e.getKey().multiply(e.getValue(), PriceMath.MC), 4),
                     bidMax.signum() == 0 ? 0 : running.divide(bidMax, 4, RoundingMode.HALF_UP).floatValue(),
-                    false, mineAt.containsKey(e.getKey()), fillingAt.containsKey(e.getKey())));
+                    false, mineAt.containsKey(e.getKey()), fillingAt.containsKey(e.getKey()),
+                    exactAt.get(e.getKey())));
         }
 
         BigDecimal bestAsk = askList.isEmpty() ? null : askList.get(0).getKey();

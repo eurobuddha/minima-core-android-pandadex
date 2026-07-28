@@ -75,10 +75,18 @@ public final class Pending {
          * rather than implying the funds are in doubt.
          */
         public String status(long chainBlock) {
-            boolean slow = System.currentTimeMillis() - submitMs > SLOW_MS;
-            if (PLACE.equals(kind)) return slow ? "Still sending — waiting for a block…" : "Sending…";
-            if (CANCEL.equals(kind)) return slow ? "Still cancelling — waiting for a block…" : "Cancelling…";
-            return slow ? "Still updating — waiting for a block…" : "Updating price…";
+            long secs = Math.max(0, (System.currentTimeMillis() - submitMs) / 1000);
+            String verb = PLACE.equals(kind) ? "Sending"
+                        : CANCEL.equals(kind) ? "Cancelling" : "Updating price";
+            // An open-ended "Sending…" tells the user nothing about whether to keep waiting.
+            // Blocks land roughly every 50s, so show the clock AND what we're waiting for —
+            // and once it is clearly overdue, say that plainly instead of spinning forever.
+            String clock = secs < 60 ? secs + "s" : (secs / 60) + "m " + (secs % 60) + "s";
+            if (System.currentTimeMillis() - submitMs > SLOW_MS) {
+                return verb + " — " + clock + ", longer than usual. It will appear when a block "
+                        + "includes it; your funds are safe either way.";
+            }
+            return verb + "… waiting for the next block (~50s) · " + clock;
         }
     }
 
