@@ -52,6 +52,8 @@ public class MainActivity extends AppCompatActivity {
     private DexTxn txn;
     private KeySet keySet;
     private Pending pending;
+    private DexProcessor processor;
+    private boolean keepAliveAsked = false;
     private BroadcastReceiver notifyReceiver;
 
     private TradeView trade;
@@ -94,9 +96,19 @@ public class MainActivity extends AppCompatActivity {
         });
         repo = new BookRepository(node, db);
         txn = new DexTxn(node, db);
+        processor = new DexProcessor(this, txn);
         repo.setFillSink(this::onFillObserved);
         repo.subscribe((orders, syncing) -> {
-            if (pending.resolve(orders, chainBlock)) { /* rows changed */ }
+            pending.resolve(orders, chainBlock);
+            // the foreground Activity owns renewals while it's up (the service stands down)
+            if (paired && keySet.ready() && chainBlock > 0) {
+                processor.process(orders, keySet.keys(), chainBlock, new DexProcessor.Listener() {
+                    @Override public void onRenewed(Order5 o) {}
+                    @Override public void onRenewFailed(Order5 o, String why) {
+                        toast("Renewal failed for order @ " + PriceMath.fmt(o.price()) + " — will retry");
+                    }
+                });
+            }
             repaint();
         });
 
@@ -138,6 +150,39 @@ public class MainActivity extends AppCompatActivity {
             });
         }
         poll();
+        maybeStartKeepAlive();
+    }
+
+    /**
+     * Arm the unattended watcher once the user actually has skin in the game (an open order):
+     * a pure browser runs no background PoW. Also asks once for notifications + battery-opt
+     * exemption, without which Samsung Doze kills the renewal loop overnight.
+     */
+    private void maybeStartKeepAlive() {
+        if (keepAliveAsked) return;
+        keepAliveAsked = true;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33
+                    && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 91);
+            }
+        } catch (Exception ignored) {}
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())
+                    && !"1".equals(db.meta("battopt_asked", ""))) {
+                db.putMeta("battopt_asked", "1");
+                startActivity(new Intent(android.provider.Settings
+                        .ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:" + getPackageName())));
+            }
+        } catch (Exception ignored) {}
+        try {
+            DexWatchWorker.schedule(this);
+            HeartbeatReceiver.schedule(this);
+            ContextCompat.startForegroundService(this, new Intent(this, DexKeepAliveService.class));
+        } catch (Exception ignored) {}
     }
 
     // ------------------------------------------------------------------ chrome
@@ -460,7 +505,9 @@ public class MainActivity extends AppCompatActivity {
                     !order.sell, true, order.orderId);
             toast((partial ? "Partial fill: " : "Filled: ") + PriceMath.fmt(size) + " MINIMA @ "
                     + PriceMath.fmt(price));
+            Notifier.fill(this, order.sell, size, price, partial);
         }
+        if (isNew) stats.invalidate();
     }
 
     // ------------------------------------------------------------------ accessors for views
