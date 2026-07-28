@@ -780,7 +780,10 @@ public class MainActivity extends AppCompatActivity {
         makerCfg.save();
         repaint();
         if (maker.isWorking()) {
+            // queue it: once disarmed, onBook stops running, so nothing else would ever come
+            // back to finish this and the ladder would sit on the book despite the request
             toast("Finishing the current adjustment — the ladder comes off right after");
+            maker.runWhenIdle(this::withdrawLadder);
             return;
         }
         java.util.List<Order5> live = maker.liveLadderOrders(book(), keys());

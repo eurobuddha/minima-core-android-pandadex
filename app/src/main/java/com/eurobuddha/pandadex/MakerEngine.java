@@ -36,6 +36,10 @@ public final class MakerEngine {
     private final DexTxn txn;
     private long lastCycleMs = 0;
     private boolean working = false;
+    /** Deferred work — a withdraw asked for while a chain was mid-flight. Without this the
+     *  request is silently dropped: onBook won't run once disarmed, so the ladder would stay
+     *  on the book after the user pressed Withdraw. */
+    private Runnable pendingOnIdle;
 
     public MakerEngine(MakerConfig cfg, DexTxn txn) {
         this.cfg = cfg;
@@ -43,6 +47,20 @@ public final class MakerEngine {
     }
 
     public boolean isWorking() { return working; }
+
+    /** Run {@code r} now if idle, otherwise the instant the current chain finishes. */
+    public void runWhenIdle(Runnable r) {
+        if (r == null) return;
+        if (!working) { r.run(); return; }
+        pendingOnIdle = r;
+    }
+
+    /** Release any work that was waiting for the chain to finish. */
+    private void drainIdle() {
+        Runnable r = pendingOnIdle;
+        pendingOnIdle = null;
+        if (r != null) r.run();
+    }
 
     /** Called on every book update. Cheap and returns immediately unless there is work to do. */
     public void onBook(Map<String, Order5> book, Set<String> myKeys, long chainBlock, Listener l) {
@@ -128,6 +146,7 @@ public final class MakerEngine {
             if (l != null) l.onMakerState(posted > 0
                     ? "Maker: ladder up to date"
                     : "Maker: no adjustment could be posted — will retry");
+            drainIdle();
             return;
         }
         working = true;
@@ -192,6 +211,7 @@ public final class MakerEngine {
             working = false;
             cfg.clearSlots();
             if (l != null) l.onMakerState("Maker: ladder withdrawn");
+            drainIdle();
             return;
         }
         working = true;

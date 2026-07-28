@@ -53,8 +53,14 @@ public class MakerEngineTest {
             cb.onPosted("0xTX");
         }
 
+        /** When set, cancel() parks its callback so the chain stays open — letting a test
+         *  observe the engine while it is genuinely working. */
+        boolean deferCancels = false;
+        Result parked;
+
         @Override public void cancel(Order5 o, Result cb) {
             calls.add("CANCEL " + o.coinid);
+            if (deferCancels) { parked = cb; return; }
             cb.onPosted("0xTX");
         }
     }
@@ -142,6 +148,31 @@ public class MakerEngineTest {
         assertEquals(2, txn.calls.size());
         assertTrue(cfg.slotOrderIds.isEmpty());
         assertTrue(cfg.slotSizes.isEmpty());
+        assertFalse(engine.isWorking());
+    }
+
+    @Test public void anIdleEngineRunsQueuedWorkImmediately() {
+        final boolean[] ran = {false};
+        engine.runWhenIdle(() -> ran[0] = true);
+        assertTrue(ran[0]);
+    }
+
+    @Test public void aWithdrawRequestedMidCycleIsNotLost() {
+        // Withdraw disarms the maker, which stops onBook running — so if the request is merely
+        // dropped while a chain is in flight, the ladder stays on the book forever while the
+        // user has been told it is coming off.
+        txn.deferCancels = true;
+        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"));
+        List<Order5> live = Arrays.asList(order("0xC1", "0xORDER1", "0.051", "100"));
+        engine.cancelAllLadder(live, 0, m -> {});
+        assertTrue("the chain is open, so the engine is working", engine.isWorking());
+
+        final boolean[] ran = {false};
+        engine.runWhenIdle(() -> ran[0] = true);
+        assertFalse("must not run while a chain is still in flight", ran[0]);
+
+        txn.parked.onPosted("0xTX");        // the in-flight cancel lands
+        assertTrue("queued work must run the moment the chain finishes", ran[0]);
         assertFalse(engine.isWorking());
     }
 
