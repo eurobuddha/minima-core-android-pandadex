@@ -3,57 +3,102 @@ package com.eurobuddha.pandadex;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * The market maker's brain: turn a reference mid into a desired ladder, then work out the
- * SMALLEST set of on-chain actions that moves the live book to match it.
+ * The market maker's brain: turn the configured ladder into the rungs we want on the book,
+ * then work out the SMALLEST set of on-chain actions that moves the live book to match.
+ *
+ * The ladder model is AtomiX's (Order.Level / editOrderDialog), not an offset table: a rung is
+ * an explicit PRICE + AMOUNT. When PEGGED the rungs are regenerated around the live MEXC mid
+ * from the same seed parameters AtomiX uses — step % spacing, a level count, and INDEPENDENT
+ * ask/bid sizes (a side with size 0 is simply not quoted — a one-sided market). When NOT
+ * pegged the rungs are quoted exactly as typed and never repriced.
  *
  * Pure and side-effect free so it can be unit-tested exhaustively — every decision here spends
  * real money (each action is a transaction with proof-of-work on a phone), so the arithmetic
  * and the diffing are worth proving separately from the plumbing that executes them.
  *
- * The reconciliation exploits something the apps this is modelled on could not do: PandaDEX's
- * V5 covenant lets an owner RE-LOCK an order in place, changing its price in ONE transaction
- * without the funds ever leaving the book. So a reprice is a RELOCK, not a cancel-then-repost —
- * there is no window where the level is missing and no way for a failed re-post to leave the
- * maker out of the market.
+ * The reconciliation exploits something AtomiX could not do: PandaDEX's V5 covenant lets an
+ * owner RE-LOCK an order in place, changing its price in ONE transaction without the funds
+ * ever leaving the book. So a reprice is a RELOCK, not a cancel-then-repost — there is no
+ * window where the level is missing and no way for a failed re-post to leave the maker out
+ * of the market.
  */
 public final class MakerLadder {
 
-    /** Hard cap per side. Every level is a separate on-chain order to post, renew and reprice. */
+    /** Hard cap per side (AtomiX's MAX_LEVELS). Every level is a separate on-chain order. */
     public static final int MAX_LEVELS = 6;
 
     // ---------------------------------------------------------------- config
 
-    /** One rung: how far from the mid, and how much size to show there. */
+    /** One rung: an absolute price and the MINIMA size to show there. */
     public static final class Level {
-        public final BigDecimal offsetPct;   // e.g. 0.20 = 0.20% away from mid
+        public final BigDecimal price;        // mxUSDT per MINIMA
         public final BigDecimal sizeMinima;
 
-        public Level(BigDecimal offsetPct, BigDecimal sizeMinima) {
-            this.offsetPct = offsetPct;
+        public Level(BigDecimal price, BigDecimal sizeMinima) {
+            this.price = price;
             this.sizeMinima = sizeMinima;
         }
     }
 
     public static final class Config {
-        public final List<Level> levels;     // innermost first
-        public final BigDecimal skewPct;     // + shifts the whole ladder UP (bullish)
-        public final BigDecimal repricePct;  // don't touch anything until the mid moves this far
-        public final boolean bids, asks;
+        public final boolean pegged;          // regenerate the rungs around the live mid
+        public final BigDecimal stepPct;      // pegged: spacing per rung out (e.g. 0.20 = 0.20%)
+        public final int levels;              // pegged: rungs per side (1..MAX_LEVELS)
+        public final BigDecimal askSize;      // pegged: MINIMA per ask rung; 0 = no asks
+        public final BigDecimal bidSize;      // pegged: MINIMA per bid rung; 0 = no bids
+        public final List<Level> asks;        // manual: explicit rungs, best (lowest) first
+        public final List<Level> bids;        // manual: explicit rungs, best (highest) first
+        public final BigDecimal skewPct;      // + shifts the whole ladder UP (bullish)
+        public final BigDecimal repricePct;   // don't touch anything until the mid moves this far
 
-        public Config(List<Level> levels, BigDecimal skewPct, BigDecimal repricePct,
-                      boolean bids, boolean asks) {
+        public Config(boolean pegged, BigDecimal stepPct, int levels,
+                      BigDecimal askSize, BigDecimal bidSize,
+                      List<Level> asks, List<Level> bids,
+                      BigDecimal skewPct, BigDecimal repricePct) {
+            this.pegged = pegged;
+            this.stepPct = stepPct;
             this.levels = levels;
+            this.askSize = askSize;
+            this.bidSize = bidSize;
+            this.asks = asks;
+            this.bids = bids;
             this.skewPct = skewPct;
             this.repricePct = repricePct;
-            this.bids = bids;
-            this.asks = asks;
         }
+    }
+
+    /**
+     * THE single normalizer (AtomiX's Order.sanitize): valid levels only (price and size > 0),
+     * at most MAX_LEVELS, asks sorted price-ASC / bids price-DESC so index 0 is the best rung —
+     * slot ids stay dense and stable.
+     */
+    public static void sanitize(List<Level> levels, boolean asks) {
+        if (levels == null) return;
+        for (Iterator<Level> it = levels.iterator(); it.hasNext(); ) {
+            Level l = it.next();
+            if (l == null || l.price == null || l.sizeMinima == null
+                    || l.price.signum() <= 0 || l.sizeMinima.signum() <= 0) it.remove();
+        }
+        Collections.sort(levels, (a, b) -> asks ? a.price.compareTo(b.price)
+                                               : b.price.compareTo(a.price));
+        while (levels.size() > MAX_LEVELS) levels.remove(levels.size() - 1);
+    }
+
+    /** Crossed market: best bid at-or-above best ask — you'd sell cheaper than you buy. Warn-only. */
+    public static boolean crossed(List<Level> asks, List<Level> bids) {
+        List<Level> a = new ArrayList<>(asks == null ? Collections.emptyList() : asks);
+        List<Level> b = new ArrayList<>(bids == null ? Collections.emptyList() : bids);
+        sanitize(a, true);
+        sanitize(b, false);
+        return !a.isEmpty() && !b.isEmpty() && b.get(0).price.compareTo(a.get(0).price) >= 0;
     }
 
     // ---------------------------------------------------------------- desired state
@@ -76,37 +121,58 @@ public final class MakerLadder {
     private MakerLadder() {}
 
     /**
-     * Build the ladder around a reference mid.
+     * Build the rungs we want on the book.
      *
-     * A bid sits BELOW the mid and an ask ABOVE it; skew shifts both together, so a positive
-     * skew quotes higher on both sides (you want to end up longer). Widening multiplies every
-     * offset — used to quote worse as the price feed ages rather than blindly standing on a
+     * PEGGED — AtomiX's fillFromPeg arithmetic: the quoted mid is the reference mid shifted by
+     * skew, rung i sits at quoted × (1 ± (i+1)·step%), asks above / bids below, each side at its
+     * own uniform size, and a side whose size is zero is not quoted at all. Widening multiplies
+     * the step — used to quote worse as the price feed ages rather than blindly standing on a
      * stale number.
+     *
+     * MANUAL — the explicit rungs, exactly as typed. No mid, no skew, no widening: the prices
+     * do not depend on the feed, so they are never repriced and never withdrawn for staleness.
      */
     public static List<Slot> desired(BigDecimal mid, Config cfg, BigDecimal widenFactor) {
         List<Slot> out = new ArrayList<>();
-        if (mid == null || mid.signum() <= 0 || cfg == null) return out;
+        if (cfg == null) return out;
+        BigDecimal hundred = new BigDecimal(100);
+
+        if (!cfg.pegged) {
+            List<Level> asks = new ArrayList<>(cfg.asks == null ? Collections.emptyList() : cfg.asks);
+            List<Level> bids = new ArrayList<>(cfg.bids == null ? Collections.emptyList() : cfg.bids);
+            sanitize(asks, true);
+            sanitize(bids, false);
+            for (int i = 0; i < asks.size(); i++)
+                out.add(new Slot("A" + (i + 1), true, asks.get(i).price, asks.get(i).sizeMinima));
+            for (int i = 0; i < bids.size(); i++)
+                out.add(new Slot("B" + (i + 1), false, bids.get(i).price, bids.get(i).sizeMinima));
+            return out;
+        }
+
+        if (mid == null || mid.signum() <= 0) return out;
+        if (cfg.stepPct == null || cfg.stepPct.signum() <= 0) return out;
+        boolean asksOn = cfg.askSize != null && cfg.askSize.signum() > 0;
+        boolean bidsOn = cfg.bidSize != null && cfg.bidSize.signum() > 0;
+        if (!asksOn && !bidsOn) return out;
+
         BigDecimal widen = (widenFactor == null || widenFactor.signum() <= 0)
                 ? BigDecimal.ONE : widenFactor;
-        BigDecimal hundred = new BigDecimal(100);
         BigDecimal skewed = mid.multiply(BigDecimal.ONE.add(
                 cfg.skewPct.divide(hundred, PriceMath.MC)), PriceMath.MC);
 
-        int n = Math.min(cfg.levels.size(), MAX_LEVELS);
+        int n = Math.max(1, Math.min(cfg.levels, MAX_LEVELS));
         for (int i = 0; i < n; i++) {
-            Level lv = cfg.levels.get(i);
-            if (lv.sizeMinima.signum() <= 0) continue;
-            BigDecimal off = lv.offsetPct.multiply(widen, PriceMath.MC)
-                    .divide(hundred, PriceMath.MC);
-            if (cfg.bids) {
+            BigDecimal off = cfg.stepPct.multiply(new BigDecimal(i + 1), PriceMath.MC)
+                    .multiply(widen, PriceMath.MC).divide(hundred, PriceMath.MC);
+            if (bidsOn) {
                 BigDecimal p = skewed.multiply(BigDecimal.ONE.subtract(off), PriceMath.MC)
                         .setScale(PriceMath.DISPLAY_DP, RoundingMode.DOWN);
-                if (p.signum() > 0) out.add(new Slot("B" + (i + 1), false, p, lv.sizeMinima));
+                if (p.signum() > 0) out.add(new Slot("B" + (i + 1), false, p, cfg.bidSize));
             }
-            if (cfg.asks) {
+            if (asksOn) {
                 BigDecimal p = skewed.multiply(BigDecimal.ONE.add(off), PriceMath.MC)
                         .setScale(PriceMath.DISPLAY_DP, RoundingMode.UP);
-                out.add(new Slot("A" + (i + 1), true, p, lv.sizeMinima));
+                out.add(new Slot("A" + (i + 1), true, p, cfg.askSize));
             }
         }
         return out;

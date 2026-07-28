@@ -741,16 +741,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /** Arm the ladder, after showing what is about to be committed. */
-    public void armMaker(int levels, BigDecimal totalPerSide) {
+    public void armMaker(int nBids, int nAsks, BigDecimal totalBidMinima,
+                         BigDecimal totalAskMinima, boolean pegged) {
         if (!ready()) return;
+        String sides = (nAsks > 0 ? nAsks + " ask" + (nAsks == 1 ? "" : "s") + " committing about "
+                        + PriceMath.fmt(totalAskMinima) + " MINIMA" : "no asks")
+                + " and "
+                + (nBids > 0 ? nBids + " bid" + (nBids == 1 ? "" : "s") + " committing its mxUSDT "
+                        + "equivalent of about " + PriceMath.fmt(totalBidMinima) + " MINIMA" : "no bids");
         new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle("Arm the market maker")
-                .setMessage("This will post up to " + (levels * 2) + " orders — "
-                        + levels + " bids and " + levels + " offers — committing about "
-                        + PriceMath.fmt(totalPerSide) + " MINIMA and its mxUSDT equivalent.\n\n"
-                        + "The ladder tracks the MEXC mid and reprices itself. If the price "
-                        + "feed goes stale it quotes wider, then withdraws.\n\n"
-                        + "Each adjustment is an on-chain transaction your phone does "
+                .setMessage("This will post up to " + (nBids + nAsks) + " orders — " + sides + ".\n\n"
+                        + (pegged
+                        ? "The ladder tracks the MEXC mid and reprices itself. If the price "
+                        + "feed goes stale it quotes wider, then withdraws."
+                        : "The ladder quotes YOUR fixed prices. It is NOT pegged: it never "
+                        + "reprices and stays on the book even if the price feed dies.")
+                        + "\n\nEach adjustment is an on-chain transaction your phone does "
                         + "proof-of-work for.")
                 .setPositiveButton("Arm", (d, w) -> {
                     makerCfg.armed = true;

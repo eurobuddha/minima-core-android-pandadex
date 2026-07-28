@@ -68,27 +68,33 @@ public final class MakerEngine {
         long now = System.currentTimeMillis();
         if (now - lastCycleMs < MIN_CYCLE_MS) return;
 
-        MarketPrice.refreshAsync();
+        BigDecimal mid = BigDecimal.ZERO;
+        BigDecimal widen = BigDecimal.ONE;
+        if (cfg.pegged) {
+            // The feed only matters while PEGGED — a manual ladder quotes exactly what was
+            // typed, so its prices can neither go stale nor need repricing to a moving mid.
+            MarketPrice.refreshAsync();
 
-        // ---- feed too old to quote on: take the ladder off the book ----
-        if (MarketPrice.mustWithdraw()) {
-            List<Order5> live = liveLadderOrders(book, myKeys);
-            if (!live.isEmpty()) {
-                lastCycleMs = now;
-                if (l != null) l.onMakerState("Price feed stale — withdrawing the ladder");
-                cancelAllLadder(live, 0, l);
+            // ---- feed too old to quote on: take the ladder off the book ----
+            if (MarketPrice.mustWithdraw()) {
+                List<Order5> live = liveLadderOrders(book, myKeys);
+                if (!live.isEmpty()) {
+                    lastCycleMs = now;
+                    if (l != null) l.onMakerState("Price feed stale — withdrawing the ladder");
+                    cancelAllLadder(live, 0, l);
+                }
+                return;
             }
-            return;
+
+            mid = BigDecimal.valueOf(MarketPrice.mid());
+            if (mid.signum() <= 0) return;
+
+            // ---- nothing to do until the reference actually moved ----
+            boolean haveLadder = !liveLadderOrders(book, myKeys).isEmpty();
+            if (haveLadder && !MakerLadder.worthRepricing(cfg.lastActedMid, mid, cfg.repricePct)) return;
+
+            widen = BigDecimal.valueOf(MarketPrice.widenFactor());
         }
-
-        BigDecimal mid = BigDecimal.valueOf(MarketPrice.mid());
-        if (mid.signum() <= 0) return;
-
-        // ---- nothing to do until the reference actually moved ----
-        boolean haveLadder = !liveLadderOrders(book, myKeys).isEmpty();
-        if (haveLadder && !MakerLadder.worthRepricing(cfg.lastActedMid, mid, cfg.repricePct)) return;
-
-        BigDecimal widen = BigDecimal.valueOf(MarketPrice.widenFactor());
         List<MakerLadder.Slot> desired = MakerLadder.desired(mid, cfg.toLadderConfig(), widen);
 
         Map<String, Order5> liveBySlot = new HashMap<>();
@@ -117,7 +123,8 @@ public final class MakerEngine {
 
         lastCycleMs = now;
         if (l != null) l.onMakerState("Maker: " + actions.size() + " adjustment"
-                + (actions.size() == 1 ? "" : "s") + " at mid " + PriceMath.fmtPrice(mid));
+                + (actions.size() == 1 ? "" : "s")
+                + (mid.signum() > 0 ? " at mid " + PriceMath.fmtPrice(mid) : ""));
         // lastActedMid is committed in run()'s terminal branch, and only if something actually
         // posted — recording it up front meant a cycle where every action failed still counted
         // as "acted at this mid", suppressing retries until the market moved again.
@@ -140,7 +147,9 @@ public final class MakerEngine {
         if (idx >= actions.size()) {
             working = false;
             if (posted > 0) {
-                cfg.lastActedMid = mid;
+                // A manual (unpegged) cycle carries no reference mid — don't record a zero,
+                // it would read as "never acted" and defeat the reprice gate after a re-peg.
+                if (mid != null && mid.signum() > 0) cfg.lastActedMid = mid;
                 cfg.save();
             }
             if (l != null) l.onMakerState(posted > 0

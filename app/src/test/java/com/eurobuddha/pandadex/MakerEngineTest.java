@@ -78,10 +78,13 @@ public class MakerEngineTest {
     }
 
     private static MakerLadder.Slot slot(String id, boolean sell, String price, String size) {
-        List<MakerLadder.Level> ls = Arrays.asList(
-                new MakerLadder.Level(new BigDecimal("0.20"), new BigDecimal(size)));
-        MakerLadder.Config c = new MakerLadder.Config(ls, BigDecimal.ZERO,
-                new BigDecimal("0.1"), !sell, sell);
+        // one-sided pegged config: only the side under test gets a size, so desired() yields
+        // exactly one rung (A1 or B1)
+        MakerLadder.Config c = new MakerLadder.Config(true, new BigDecimal("0.20"), 1,
+                sell ? new BigDecimal(size) : BigDecimal.ZERO,
+                sell ? BigDecimal.ZERO : new BigDecimal(size),
+                new ArrayList<>(), new ArrayList<>(),
+                BigDecimal.ZERO, new BigDecimal("0.1"));
         List<MakerLadder.Slot> out = MakerLadder.desired(new BigDecimal(price), c, BigDecimal.ONE);
         return out.get(0);
     }

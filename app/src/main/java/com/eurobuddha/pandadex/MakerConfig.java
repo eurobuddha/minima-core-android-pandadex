@@ -15,6 +15,10 @@ import java.util.Map;
 /**
  * The market maker's settings and its memory of which on-chain order belongs to which rung.
  *
+ * The settings mirror AtomiX's order editor: an explicit per-rung ladder (price + MINIMA size
+ * per rung, each side independent) plus the peg's seed parameters — step %, level count and
+ * independent ask/bid sizes — which regenerate the rungs around the live MEXC mid while pegged.
+ *
  * The slot→order mapping is the important part: without it a restart would not recognise the
  * ladder already on the book and would post a second one on top of it. It is keyed by the
  * order id we generated (stable across re-locks, since a re-lock preserves state port 4).
@@ -22,7 +26,15 @@ import java.util.Map;
 public final class MakerConfig {
 
     private static final String PREFS = "pandadex_maker";
-    private static final String K_LEVELS = "levels";
+    private static final String K_LEVELS = "levels";     // legacy 0.2.x offset ladder (migration only)
+    private static final String K_ASKS = "asks";
+    private static final String K_BIDS = "bids";
+    private static final String K_PEGGED = "pegged";
+    private static final String K_STEP = "step";
+    private static final String K_NLEVELS = "nlevels";
+    private static final String K_ASKSIZE = "asksize";
+    private static final String K_BIDSIZE = "bidsize";
+    private static final String K_MID = "manualmid";
     private static final String K_SKEW = "skew";
     private static final String K_REPRICE = "reprice";
     private static final String K_ARMED = "armed";
@@ -32,7 +44,21 @@ public final class MakerConfig {
 
     private final SharedPreferences prefs;
 
-    public final List<MakerLadder.Level> levels = new ArrayList<>();
+    /** Explicit rungs, best first (A1/B1). Authoritative when NOT pegged; while pegged they
+     *  hold the last generated ladder so the fields show what is actually quoted. */
+    public final List<MakerLadder.Level> asks = new ArrayList<>();
+    public final List<MakerLadder.Level> bids = new ArrayList<>();
+
+    /** Peg (auto market-make) seed parameters — AtomiX's quick-generate fields. */
+    public boolean pegged = true;
+    public BigDecimal stepPct = new BigDecimal("0.20");
+    public int levelCount = 3;
+    public BigDecimal askSize = BigDecimal.ZERO;
+    public BigDecimal bidSize = BigDecimal.ZERO;
+    /** The mid typed into the auto-fill row while unpegged — a seed for generating rungs,
+     *  remembered so reopening the tab shows what the ladder was built from. */
+    public BigDecimal manualMid = BigDecimal.ZERO;
+
     public BigDecimal skewPct = BigDecimal.ZERO;
     public BigDecimal repricePct = new BigDecimal("0.25");
     public boolean armed = false;
@@ -51,7 +77,6 @@ public final class MakerConfig {
     /** In-memory only, for unit tests — {@link #save()} is a no-op without prefs. */
     MakerConfig() {
         prefs = null;
-        defaults();
     }
 
     /** Record what we posted for a slot: both the order id and the size, together. */
@@ -89,19 +114,40 @@ public final class MakerConfig {
     }
 
     private void load() {
-        levels.clear();
-        try {
-            JSONArray a = new JSONArray(prefs.getString(K_LEVELS, "[]"));
-            for (int i = 0; i < a.length(); i++) {
-                JSONObject o = a.getJSONObject(i);
-                levels.add(new MakerLadder.Level(Util.dec(o.optString("off", "0")),
-                        Util.dec(o.optString("size", "0"))));
-            }
-        } catch (Exception ignore) {}
-        if (levels.isEmpty()) defaults();
+        asks.clear();
+        bids.clear();
+        readLevels(prefs.getString(K_ASKS, "[]"), asks);
+        readLevels(prefs.getString(K_BIDS, "[]"), bids);
+        MakerLadder.sanitize(asks, true);
+        MakerLadder.sanitize(bids, false);
+        pegged = prefs.getBoolean(K_PEGGED, true);
+        stepPct = Util.decOr(prefs.getString(K_STEP, "0.20"), new BigDecimal("0.20"));
+        levelCount = Math.max(1, Math.min(MakerLadder.MAX_LEVELS, prefs.getInt(K_NLEVELS, 3)));
+        askSize = Util.dec(prefs.getString(K_ASKSIZE, "0"));
+        bidSize = Util.dec(prefs.getString(K_BIDSIZE, "0"));
+        manualMid = Util.dec(prefs.getString(K_MID, "0"));
         skewPct = Util.dec(prefs.getString(K_SKEW, "0"));
         repricePct = Util.decOr(prefs.getString(K_REPRICE, "0.25"), new BigDecimal("0.25"));
         armed = prefs.getBoolean(K_ARMED, false);
+
+        // ---- migration from the 0.2.x offset ladder: it was pegged by construction, so the
+        // old offsets/sizes become peg seed parameters (first offset = step, first size = both
+        // side sizes). The rungs themselves regenerate on the next armed cycle.
+        if (askSize.signum() <= 0 && bidSize.signum() <= 0 && asks.isEmpty() && bids.isEmpty()) {
+            try {
+                JSONArray a = new JSONArray(prefs.getString(K_LEVELS, "[]"));
+                if (a.length() > 0) {
+                    JSONObject o = a.getJSONObject(0);
+                    BigDecimal off = Util.dec(o.optString("off", "0"));
+                    BigDecimal size = Util.dec(o.optString("size", "0"));
+                    if (off.signum() > 0) stepPct = off;
+                    if (size.signum() > 0) { askSize = size; bidSize = size; }
+                    levelCount = Math.max(1, Math.min(MakerLadder.MAX_LEVELS, a.length()));
+                    pegged = true;
+                }
+            } catch (Exception ignore) {}
+        }
+
         slotOrderIds.clear();
         try {
             JSONObject o = new JSONObject(prefs.getString(K_SLOTS, "{}"));
@@ -122,29 +168,39 @@ public final class MakerConfig {
         lastActedMid = lm.isEmpty() ? null : Util.dec(lm);
     }
 
-    /** A sane starting ladder: three rungs a side, widening outwards with growing size. */
-    public void defaults() {
-        levels.clear();
-        levels.add(new MakerLadder.Level(new BigDecimal("0.20"), new BigDecimal("200")));
-        levels.add(new MakerLadder.Level(new BigDecimal("0.40"), new BigDecimal("300")));
-        levels.add(new MakerLadder.Level(new BigDecimal("0.60"), new BigDecimal("500")));
+    private static void readLevels(String raw, List<MakerLadder.Level> out) {
+        try {
+            JSONArray a = new JSONArray(raw);
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject o = a.getJSONObject(i);
+                out.add(new MakerLadder.Level(Util.dec(o.optString("p", "0")),
+                        Util.dec(o.optString("a", "0"))));
+            }
+        } catch (Exception ignore) {}
     }
 
-    public MakerLadder.Config toLadderConfig() {
-        return new MakerLadder.Config(new ArrayList<>(levels), skewPct, repricePct, true, true);
-    }
-
-    public void save() {
-        if (prefs == null) return;   // test instance
+    private static JSONArray levelsJson(List<MakerLadder.Level> levels) {
         JSONArray a = new JSONArray();
         try {
             for (MakerLadder.Level l : levels) {
                 JSONObject o = new JSONObject();
-                o.put("off", l.offsetPct.toPlainString());
-                o.put("size", l.sizeMinima.toPlainString());
+                o.put("p", l.price.toPlainString());
+                o.put("a", l.sizeMinima.toPlainString());
                 a.put(o);
             }
         } catch (Exception ignore) {}
+        return a;
+    }
+
+    public MakerLadder.Config toLadderConfig() {
+        return new MakerLadder.Config(pegged, stepPct, levelCount, askSize, bidSize,
+                new ArrayList<>(asks), new ArrayList<>(bids), skewPct, repricePct);
+    }
+
+    public void save() {
+        if (prefs == null) return;   // test instance
+        MakerLadder.sanitize(asks, true);
+        MakerLadder.sanitize(bids, false);
         JSONObject slots = new JSONObject();
         JSONObject sizes = new JSONObject();
         try {
@@ -152,7 +208,14 @@ public final class MakerConfig {
             for (Map.Entry<String, String> e : slotSizes.entrySet()) sizes.put(e.getKey(), e.getValue());
         } catch (Exception ignore) {}
         prefs.edit()
-                .putString(K_LEVELS, a.toString())
+                .putString(K_ASKS, levelsJson(asks).toString())
+                .putString(K_BIDS, levelsJson(bids).toString())
+                .putBoolean(K_PEGGED, pegged)
+                .putString(K_STEP, stepPct.toPlainString())
+                .putInt(K_NLEVELS, levelCount)
+                .putString(K_ASKSIZE, askSize.toPlainString())
+                .putString(K_BIDSIZE, bidSize.toPlainString())
+                .putString(K_MID, manualMid.toPlainString())
                 .putString(K_SKEW, skewPct.toPlainString())
                 .putString(K_REPRICE, repricePct.toPlainString())
                 .putBoolean(K_ARMED, armed)

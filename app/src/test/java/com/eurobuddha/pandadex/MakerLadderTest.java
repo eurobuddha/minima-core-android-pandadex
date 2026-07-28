@@ -2,6 +2,7 @@ package com.eurobuddha.pandadex;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.json.JSONObject;
@@ -9,6 +10,7 @@ import org.junit.Test;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -17,18 +19,33 @@ import java.util.Map;
 /**
  * Every action the market maker takes costs a proof-of-work transaction, so the arithmetic and
  * the diffing are proven here, away from the plumbing that spends the money.
+ *
+ * The ladder model is AtomiX's: pegged generation from (step % · levels · independent ask/bid
+ * sizes · skew) around a live mid, or explicit price+amount rungs quoted exactly as typed.
  */
 public class MakerLadderTest {
 
     private static final BigDecimal MID = new BigDecimal("0.050000");
 
-    private static MakerLadder.Config cfg(int levels, String skew, String reprice) {
-        List<MakerLadder.Level> ls = new ArrayList<>();
-        for (int i = 1; i <= levels; i++) {
-            ls.add(new MakerLadder.Level(new BigDecimal("0.20").multiply(new BigDecimal(i)),
-                    new BigDecimal(100 * i)));
-        }
-        return new MakerLadder.Config(ls, new BigDecimal(skew), new BigDecimal(reprice), true, true);
+    /** A pegged config — AtomiX's quick-generate seed parameters. */
+    private static MakerLadder.Config pegged(int levels, String step, String askSize,
+                                             String bidSize, String skew, String reprice) {
+        return new MakerLadder.Config(true, new BigDecimal(step), levels,
+                new BigDecimal(askSize), new BigDecimal(bidSize),
+                new ArrayList<>(), new ArrayList<>(),
+                new BigDecimal(skew), new BigDecimal(reprice));
+    }
+
+    /** A manual config — explicit rungs, quoted as typed. */
+    private static MakerLadder.Config manual(List<MakerLadder.Level> asks,
+                                             List<MakerLadder.Level> bids) {
+        return new MakerLadder.Config(false, BigDecimal.ZERO, 1,
+                BigDecimal.ZERO, BigDecimal.ZERO, asks, bids,
+                BigDecimal.ZERO, new BigDecimal("0.1"));
+    }
+
+    private static MakerLadder.Level lvl(String price, String size) {
+        return new MakerLadder.Level(new BigDecimal(price), new BigDecimal(size));
     }
 
     private static MakerLadder.Slot find(List<MakerLadder.Slot> slots, String id) {
@@ -36,8 +53,11 @@ public class MakerLadderTest {
         return null;
     }
 
+    // ---------------- pegged generation (AtomiX fillFromPeg arithmetic) ----------------
+
     @Test public void bidsSitBelowAndAsksAboveTheMid() {
-        List<MakerLadder.Slot> slots = MakerLadder.desired(MID, cfg(3, "0", "0.1"), BigDecimal.ONE);
+        List<MakerLadder.Slot> slots = MakerLadder.desired(MID,
+                pegged(3, "0.20", "100", "100", "0", "0.1"), BigDecimal.ONE);
         assertEquals(6, slots.size());
         assertTrue(find(slots, "B1").price.compareTo(MID) < 0);
         assertTrue(find(slots, "A1").price.compareTo(MID) > 0);
@@ -46,36 +66,116 @@ public class MakerLadderTest {
         assertTrue(find(slots, "A2").price.compareTo(find(slots, "A1").price) > 0);
     }
 
-    @Test public void offsetsAreExact() {
-        List<MakerLadder.Slot> slots = MakerLadder.desired(MID, cfg(1, "0", "0.1"), BigDecimal.ONE);
+    @Test public void stepOffsetsAreExact() {
+        List<MakerLadder.Slot> slots = MakerLadder.desired(MID,
+                pegged(1, "0.20", "100", "100", "0", "0.1"), BigDecimal.ONE);
         // 0.20% either side of 0.05 = 0.0499 / 0.0501
         assertEquals("0.049900", PriceMath.fmtPrice(find(slots, "B1").price));
         assertEquals("0.050100", PriceMath.fmtPrice(find(slots, "A1").price));
     }
 
+    @Test public void eachSideUsesItsOwnSize() {
+        List<MakerLadder.Slot> slots = MakerLadder.desired(MID,
+                pegged(2, "0.20", "150", "300", "0", "0.1"), BigDecimal.ONE);
+        assertEquals(0, new BigDecimal("150").compareTo(find(slots, "A1").sizeMinima));
+        assertEquals(0, new BigDecimal("300").compareTo(find(slots, "B2").sizeMinima));
+    }
+
+    @Test public void aZeroSizedSideIsNotQuoted() {
+        // AtomiX: a blank/zero side is NOT seeded or published — a one-sided market
+        List<MakerLadder.Slot> askOnly = MakerLadder.desired(MID,
+                pegged(3, "0.20", "100", "0", "0", "0.1"), BigDecimal.ONE);
+        assertEquals(3, askOnly.size());
+        for (MakerLadder.Slot s : askOnly) assertTrue("only asks expected", s.sell);
+        assertNull(find(askOnly, "B1"));
+
+        List<MakerLadder.Slot> bidOnly = MakerLadder.desired(MID,
+                pegged(3, "0.20", "0", "100", "0", "0.1"), BigDecimal.ONE);
+        assertEquals(3, bidOnly.size());
+        for (MakerLadder.Slot s : bidOnly) assertFalse("only bids expected", s.sell);
+    }
+
+    @Test public void bothSidesOffMeansNothingQuoted() {
+        assertTrue(MakerLadder.desired(MID,
+                pegged(3, "0.20", "0", "0", "0", "0.1"), BigDecimal.ONE).isEmpty());
+    }
+
     @Test public void skewShiftsBothSidesTogether() {
-        List<MakerLadder.Slot> flat = MakerLadder.desired(MID, cfg(1, "0", "0.1"), BigDecimal.ONE);
-        List<MakerLadder.Slot> up = MakerLadder.desired(MID, cfg(1, "1.0", "0.1"), BigDecimal.ONE);
+        List<MakerLadder.Slot> flat = MakerLadder.desired(MID,
+                pegged(1, "0.20", "100", "100", "0", "0.1"), BigDecimal.ONE);
+        List<MakerLadder.Slot> up = MakerLadder.desired(MID,
+                pegged(1, "0.20", "100", "100", "1.0", "0.1"), BigDecimal.ONE);
         assertTrue("a positive skew lifts the bid", find(up, "B1").price.compareTo(find(flat, "B1").price) > 0);
         assertTrue("and lifts the ask too", find(up, "A1").price.compareTo(find(flat, "A1").price) > 0);
     }
 
     @Test public void wideningPushesBothSidesAwayFromTheMid() {
-        List<MakerLadder.Slot> tight = MakerLadder.desired(MID, cfg(1, "0", "0.1"), BigDecimal.ONE);
-        List<MakerLadder.Slot> wide = MakerLadder.desired(MID, cfg(1, "0", "0.1"), new BigDecimal(3));
+        List<MakerLadder.Slot> tight = MakerLadder.desired(MID,
+                pegged(1, "0.20", "100", "100", "0", "0.1"), BigDecimal.ONE);
+        List<MakerLadder.Slot> wide = MakerLadder.desired(MID,
+                pegged(1, "0.20", "100", "100", "0", "0.1"), new BigDecimal(3));
         assertTrue("bid quotes lower", find(wide, "B1").price.compareTo(find(tight, "B1").price) < 0);
         assertTrue("ask quotes higher", find(wide, "A1").price.compareTo(find(tight, "A1").price) > 0);
     }
 
     @Test public void levelsAreCappedAtSix() {
-        List<MakerLadder.Level> ls = new ArrayList<>();
-        for (int i = 1; i <= 12; i++) {
-            ls.add(new MakerLadder.Level(new BigDecimal("0.1").multiply(new BigDecimal(i)), new BigDecimal(50)));
-        }
         List<MakerLadder.Slot> slots = MakerLadder.desired(MID,
-                new MakerLadder.Config(ls, BigDecimal.ZERO, new BigDecimal("0.1"), true, true),
-                BigDecimal.ONE);
+                pegged(12, "0.10", "50", "50", "0", "0.1"), BigDecimal.ONE);
         assertEquals(MakerLadder.MAX_LEVELS * 2, slots.size());
+    }
+
+    @Test public void aPeggedLadderNeedsAMidAndAStep() {
+        assertTrue("no usable mid → quote nothing", MakerLadder.desired(BigDecimal.ZERO,
+                pegged(3, "0.20", "100", "100", "0", "0.1"), BigDecimal.ONE).isEmpty());
+        assertTrue("no step → quote nothing", MakerLadder.desired(MID,
+                pegged(3, "0", "100", "100", "0", "0.1"), BigDecimal.ONE).isEmpty());
+    }
+
+    // ---------------- manual rungs (quoted exactly as typed) ----------------
+
+    @Test public void manualRungsQuoteExactlyAsTyped() {
+        MakerLadder.Config c = manual(
+                Arrays.asList(lvl("0.052", "100"), lvl("0.055", "200")),
+                Arrays.asList(lvl("0.048", "150")));
+        // no mid needed: manual prices do not depend on the feed
+        List<MakerLadder.Slot> slots = MakerLadder.desired(null, c, BigDecimal.ONE);
+        assertEquals(3, slots.size());
+        assertEquals(0, new BigDecimal("0.052").compareTo(find(slots, "A1").price));
+        assertEquals(0, new BigDecimal("0.055").compareTo(find(slots, "A2").price));
+        assertEquals(0, new BigDecimal("0.048").compareTo(find(slots, "B1").price));
+        assertEquals(0, new BigDecimal("150").compareTo(find(slots, "B1").sizeMinima));
+    }
+
+    @Test public void manualRungsAreSanitizedBestFirst() {
+        // unsorted input with a blank row: A1 must still be the BEST (lowest) ask, invalid dropped
+        MakerLadder.Config c = manual(
+                new ArrayList<>(Arrays.asList(lvl("0.060", "100"), lvl("0", "50"), lvl("0.052", "100"))),
+                new ArrayList<>(Arrays.asList(lvl("0.045", "100"), lvl("0.048", "100"))));
+        List<MakerLadder.Slot> slots = MakerLadder.desired(null, c, BigDecimal.ONE);
+        assertEquals(4, slots.size());
+        assertEquals(0, new BigDecimal("0.052").compareTo(find(slots, "A1").price));
+        assertEquals(0, new BigDecimal("0.060").compareTo(find(slots, "A2").price));
+        assertEquals("best (highest) bid first", 0,
+                new BigDecimal("0.048").compareTo(find(slots, "B1").price));
+    }
+
+    @Test public void manualLaddersIgnoreWideningAndSkew() {
+        // fixed prices must never move — widening/skew are peg concepts
+        MakerLadder.Config c = new MakerLadder.Config(false, BigDecimal.ZERO, 1,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                Arrays.asList(lvl("0.052", "100")), new ArrayList<>(),
+                new BigDecimal("5"), new BigDecimal("0.1"));
+        List<MakerLadder.Slot> slots = MakerLadder.desired(MID, c, new BigDecimal(6));
+        assertEquals(0, new BigDecimal("0.052").compareTo(find(slots, "A1").price));
+    }
+
+    @Test public void crossedMarketIsDetected() {
+        assertTrue(MakerLadder.crossed(
+                Arrays.asList(lvl("0.050", "100")), Arrays.asList(lvl("0.051", "100"))));
+        assertFalse(MakerLadder.crossed(
+                Arrays.asList(lvl("0.051", "100")), Arrays.asList(lvl("0.050", "100"))));
+        assertFalse("one-sided can't cross", MakerLadder.crossed(
+                Arrays.asList(lvl("0.050", "100")), new ArrayList<>()));
     }
 
     // ---------------- reconciliation ----------------
@@ -104,9 +204,13 @@ public class MakerLadderTest {
         } catch (Exception e) { throw new RuntimeException(e); }
     }
 
+    private static List<MakerLadder.Slot> want(int levels) {
+        return MakerLadder.desired(MID, pegged(levels, "0.20", "100", "100", "0", "0.1"),
+                BigDecimal.ONE);
+    }
+
     @Test public void missingRungsAreCreated() {
-        List<MakerLadder.Slot> want = MakerLadder.desired(MID, cfg(2, "0", "0.1"), BigDecimal.ONE);
-        List<MakerLadder.Action> acts = MakerLadder.reconcile(want, new HashMap<>(),
+        List<MakerLadder.Action> acts = MakerLadder.reconcile(want(2), new HashMap<>(),
                 new BigDecimal("0.1"), new HashSet<>(), 0);
         assertEquals(4, acts.size());
         for (MakerLadder.Action a : acts) assertEquals(MakerLadder.Kind.CREATE, a.kind);
@@ -114,7 +218,7 @@ public class MakerLadderTest {
 
     @Test public void aMovedPriceRelocksRatherThanCancelAndRepost() {
         // the whole point of the V5 owner re-lock: repricing must never drop the level
-        List<MakerLadder.Slot> want = MakerLadder.desired(MID, cfg(1, "0", "0.1"), BigDecimal.ONE);
+        List<MakerLadder.Slot> want = want(1);
         Map<String, Order5> live = new HashMap<>();
         live.put("A1", order("0xC1", "0.060000", "100"));   // far from the desired 0.0501
         List<MakerLadder.Action> acts = MakerLadder.reconcile(want, live,
@@ -128,7 +232,7 @@ public class MakerLadderTest {
     }
 
     @Test public void nothingHappensBelowTheRepriceThreshold() {
-        List<MakerLadder.Slot> want = MakerLadder.desired(MID, cfg(1, "0", "0.5"), BigDecimal.ONE);
+        List<MakerLadder.Slot> want = want(1);
         Map<String, Order5> live = new HashMap<>();
         live.put("A1", order("0xC1", find(want, "A1").price.toPlainString(), "100"));
         live.put("B1", order("0xC2", find(want, "B1").price.toPlainString(), "100"));
@@ -138,7 +242,7 @@ public class MakerLadderTest {
     }
 
     @Test public void partiallyFilledRungsAreLeftWorking() {
-        List<MakerLadder.Slot> want = MakerLadder.desired(MID, cfg(1, "0", "0.1"), BigDecimal.ONE);
+        List<MakerLadder.Slot> want = want(1);
         Map<String, Order5> live = new HashMap<>();
         live.put("A1", order("0xC1", "0.070000", "100"));   // miles away, would normally relock
         HashSet<String> partial = new HashSet<>();
@@ -152,7 +256,7 @@ public class MakerLadderTest {
     }
 
     @Test public void removedRungsAreCancelled() {
-        List<MakerLadder.Slot> want = MakerLadder.desired(MID, cfg(1, "0", "0.1"), BigDecimal.ONE);
+        List<MakerLadder.Slot> want = want(1);
         Map<String, Order5> live = new HashMap<>();
         live.put("A1", order("0xC1", find(want, "A1").price.toPlainString(), "100"));
         live.put("A2", order("0xC2", "0.052000", "100"));   // no longer in the ladder
@@ -166,8 +270,7 @@ public class MakerLadderTest {
     }
 
     @Test public void actionsPerCycleAreBounded() {
-        List<MakerLadder.Slot> want = MakerLadder.desired(MID, cfg(6, "0", "0.1"), BigDecimal.ONE);
-        List<MakerLadder.Action> acts = MakerLadder.reconcile(want, new HashMap<>(),
+        List<MakerLadder.Action> acts = MakerLadder.reconcile(want(6), new HashMap<>(),
                 new BigDecimal("0.1"), new HashSet<>(), 4);
         assertEquals("proof-of-work per action means cycles must be capped", 4, acts.size());
     }
@@ -175,7 +278,7 @@ public class MakerLadderTest {
     @Test public void mispricedRungsAreFixedBeforeTidyingUp() {
         // With a tight action budget, cancels must not starve creates/relocks — that would tear
         // the ladder down without rebuilding it, leaving the maker thin for minutes.
-        List<MakerLadder.Slot> want = MakerLadder.desired(MID, cfg(2, "0", "0.1"), BigDecimal.ONE);
+        List<MakerLadder.Slot> want = want(2);
         Map<String, Order5> live = new HashMap<>();
         // four rungs we no longer want
         for (int i = 3; i <= 6; i++) live.put("A" + i, order("0xOld" + i, "0.09", "100"));
