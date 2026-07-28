@@ -167,42 +167,59 @@ public final class MakerEngine {
             }
         };
 
-        switch (a.kind) {
-            case CREATE: {
-                String orderId = txn.createOrder(!a.slot.sell, a.slot.sizeMinima, a.slot.price,
-                        true, minRemainderFor(a.slot), once);
-                // A null id means createOrder rejected it synchronously — and it already called
-                // onFailed, which advanced us. Only record the slot when it really was accepted.
-                if (orderId != null) cfg.rememberSlot(a.slot.id, orderId, a.slot.sizeMinima);
-                break;
+        // An exception escaping here would leave `working` stuck true, and onBook refuses to
+        // run while working — the maker would be dead until the process restarted, with a
+        // ladder still live on the book. Treat a throw as this rung failing and carry on.
+        try {
+            switch (a.kind) {
+                case CREATE: {
+                    String orderId = txn.createOrder(!a.slot.sell, a.slot.sizeMinima, a.slot.price,
+                            true, minRemainderFor(a.slot), once);
+                    // A null id means createOrder rejected it synchronously — and it already
+                    // called onFailed, which advanced us. Only record a slot that was accepted.
+                    if (orderId != null) cfg.rememberSlot(a.slot.id, orderId, a.slot.sizeMinima);
+                    break;
+                }
+                case RELOCK: {
+                    // atomic reprice: the funds never leave the book, so a rung can never be
+                    // dropped by a failed re-post the way a cancel-then-recreate could
+                    Order5 o = a.order;
+                    BigDecimal newWant = o.sell
+                            ? PriceMath.up(o.locked.multiply(a.slot.price, PriceMath.MC), PriceMath.USDT_DP)
+                            : PriceMath.down(o.locked.divide(a.slot.price, PriceMath.MINIMA_DP,
+                                    java.math.RoundingMode.DOWN), PriceMath.MINIMA_DP);
+                    txn.relock(o, newWant, once);
+                    break;
+                }
+                case CANCEL: {
+                    cfg.forgetSlotByOrderId(a.order.orderId);
+                    txn.cancel(a.order, once);
+                    break;
+                }
             }
-            case RELOCK: {
-                // atomic reprice: the funds never leave the book, so a rung can never be
-                // dropped by a failed re-post the way a cancel-then-recreate could
-                Order5 o = a.order;
-                BigDecimal newWant = o.sell
-                        ? PriceMath.up(o.locked.multiply(a.slot.price, PriceMath.MC), PriceMath.USDT_DP)
-                        : PriceMath.down(o.locked.divide(a.slot.price, PriceMath.MINIMA_DP,
-                                java.math.RoundingMode.DOWN), PriceMath.MINIMA_DP);
-                txn.relock(o, newWant, once);
-                break;
-            }
-            case CANCEL: {
-                cfg.forgetSlotByOrderId(a.order.orderId);
-                txn.cancel(a.order, once);
-                break;
+        } catch (Throwable t) {
+            if (!advanced[0]) {
+                advanced[0] = true;
+                if (l != null) l.onMakerState("Maker: " + a.kind + " errored — " + t);
+                run(actions, idx + 1, mid, posted, l);
             }
         }
     }
 
     /**
-     * The anti-dust floor to post with a rung, scaled to its size. A flat 1 MINIMA was rejected
-     * outright for any rung at or below that size ("minimum remainder is larger than the order"),
-     * which is a realistic setting on a small ladder.
+     * The anti-dust floor to post with a rung, scaled to its size.
+     *
+     * Capped at HALF the rung so a partial fill is always possible. A flat 1 MINIMA was
+     * rejected outright for any rung at or below that size, and merely raising the floor to
+     * the rung's own size would have replaced that with a quieter surprise: an order that
+     * posts fine but can only ever be taken whole, with nothing on screen saying so.
      */
     static BigDecimal minRemainderFor(MakerLadder.Slot slot) {
         BigDecimal fivePct = slot.sizeMinima.multiply(new BigDecimal("0.05"), PriceMath.MC);
-        return PriceMath.down(fivePct.max(PriceMath.MIN_ORDER_MINIMA), PriceMath.MINIMA_DP);
+        BigDecimal floor = fivePct.max(PriceMath.MIN_ORDER_MINIMA);
+        BigDecimal half = slot.sizeMinima.divide(new BigDecimal(2), PriceMath.MINIMA_DP,
+                java.math.RoundingMode.DOWN);
+        return PriceMath.down(floor.min(half), PriceMath.MINIMA_DP);
     }
 
     /** Cancel every rung we still have on the book (withdraw / disarm). */
@@ -218,7 +235,7 @@ public final class MakerEngine {
         Order5 o = live.get(idx);
         cfg.forgetSlotByOrderId(o.orderId);
         final boolean[] advanced = {false};
-        txn.cancel(o, new DexTxn.Result() {
+        DexTxn.Result once = new DexTxn.Result() {
             @Override public void onPosted(String t) {
                 if (advanced[0]) return; advanced[0] = true;
                 cancelAllLadder(live, idx + 1, l);
@@ -227,7 +244,13 @@ public final class MakerEngine {
                 if (advanced[0]) return; advanced[0] = true;
                 cancelAllLadder(live, idx + 1, l);
             }
-        });
+        };
+        try {
+            txn.cancel(o, once);
+        } catch (Throwable t) {
+            // a throw must not strand the withdraw half-done with `working` stuck true
+            if (!advanced[0]) { advanced[0] = true; cancelAllLadder(live, idx + 1, l); }
+        }
     }
 
     public List<Order5> liveLadderOrders(Map<String, Order5> book, Set<String> myKeys) {

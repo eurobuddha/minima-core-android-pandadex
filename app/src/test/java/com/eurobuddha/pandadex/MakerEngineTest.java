@@ -38,6 +38,7 @@ public class MakerEngineTest {
         @Override public String createOrder(boolean buy, BigDecimal minima, BigDecimal price,
                                             boolean gtc, BigDecimal minRem, Result cb) {
             calls.add("CREATE " + PriceMath.fmtPrice(price));
+            if (throwOnCall) throw new IllegalStateException("node exploded");
             if (rejectSynchronously) {
                 cb.onFailed("rejected before posting");
                 return null;
@@ -56,6 +57,7 @@ public class MakerEngineTest {
         /** When set, cancel() parks its callback so the chain stays open — letting a test
          *  observe the engine while it is genuinely working. */
         boolean deferCancels = false;
+        boolean throwOnCall = false;
         Result parked;
 
         @Override public void cancel(Order5 o, Result cb) {
@@ -126,13 +128,15 @@ public class MakerEngineTest {
 
     // ---------------- min remainder scales with rung size ----------------
 
-    @Test public void minRemainderNeverExceedsTheRungItself() {
-        for (String size : new String[]{"0.02", "1", "100", "10000"}) {
+    @Test public void minRemainderAlwaysLeavesRoomForAPartialFill() {
+        // including a rung at exactly the minimum order size, which previously produced a
+        // floor equal to the rung — posting fine but silently fill-or-nothing
+        for (String size : new String[]{"0.01", "0.02", "1", "100", "10000"}) {
             MakerLadder.Slot s = slot("A1", true, "0.05", size);
             BigDecimal minRem = MakerEngine.minRemainderFor(s);
-            assertTrue("min remainder must fit inside the rung (size " + size + ")",
+            assertTrue("a partial fill must always be possible (size " + size + ")",
                     minRem.compareTo(s.sizeMinima) < 0);
-            assertTrue(minRem.signum() > 0);
+            assertTrue("and the floor must be positive (size " + size + ")", minRem.signum() > 0);
         }
     }
 
@@ -174,6 +178,17 @@ public class MakerEngineTest {
         txn.parked.onPosted("0xTX");        // the in-flight cancel lands
         assertTrue("queued work must run the moment the chain finishes", ran[0]);
         assertFalse(engine.isWorking());
+    }
+
+    @Test public void aThrowingTransactionLayerDoesNotStrandTheEngine() throws Exception {
+        // `working` stuck true would mean onBook refuses to run forever — the maker dead with
+        // a ladder still live on the book
+        txn.throwOnCall = true;
+        List<MakerLadder.Action> actions = new ArrayList<>();
+        for (int i = 0; i < 2; i++) actions.add(newCreate(slot("A" + (i + 1), true, "0.05", "100")));
+        invokeRun(actions);
+        assertEquals("the chain must keep moving", 2, txn.calls.size());
+        assertFalse("the engine must be usable afterwards", engine.isWorking());
     }
 
     // ---------------- helpers ----------------
