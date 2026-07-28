@@ -302,6 +302,55 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /**
+     * Taker path: show what the sweep will actually execute (best-price rows, VWAP, and the
+     * balance that will rest as a limit order), then post ONE sweep txn.
+     */
+    public void confirmSweep(SweepPlanner.Plan plan, boolean buy, BigDecimal amount,
+                             BigDecimal price, boolean gtc, BigDecimal minRem) {
+        if (!paired) { toast("Pair with your node first"); return; }
+        BigDecimal rest = amount.subtract(plan.totalMinima).max(BigDecimal.ZERO);
+        StringBuilder sb = new StringBuilder();
+        sb.append(buy ? "Buying " : "Selling ").append(PriceMath.fmt(plan.totalMinima))
+          .append(" MINIMA now from ").append(plan.takes.size())
+          .append(plan.takes.size() == 1 ? " order" : " orders").append("\n");
+        sb.append("Avg price ").append(PriceMath.fmt(SweepPlanner.avgPrice(plan)))
+          .append("  ·  ").append(PriceMath.fmt(plan.totalUsdt)).append(" mxUSDT\n");
+        for (SweepPlanner.Take t : plan.takes) {
+            sb.append("  • ").append(PriceMath.fmt(t.minima)).append(" @ ")
+              .append(PriceMath.fmt(t.order.price())).append(t.partial ? "  (partial)" : "").append("\n");
+        }
+        if (rest.signum() > 0) {
+            sb.append("\nResting ").append(PriceMath.fmt(rest)).append(" MINIMA @ ")
+              .append(PriceMath.fmt(price)).append(" as a limit order");
+        }
+        new AlertDialog.Builder(this, Design.dialogTheme())
+                .setTitle(buy ? "Confirm buy" : "Confirm sell")
+                .setMessage(sb.toString())
+                .setPositiveButton("Execute", (d, w) -> {
+                    txn.fillSweep(plan, new DexTxn.Result() {
+                        @Override public void onPosted(String txpowid) {
+                            toast("Sweep posted");
+                            recordTakerFills(plan, buy);
+                            repo.refresh();
+                            if (rest.signum() > 0) placeOrder(buy, rest, price, gtc, minRem);
+                        }
+                        @Override public void onFailed(String message) { toast("Sweep failed: " + message); }
+                    });
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** Record MY taker fills locally so History/P&L show them without waiting for a diff. */
+    private void recordTakerFills(SweepPlanner.Plan plan, boolean buy) {
+        for (SweepPlanner.Take t : plan.takes) {
+            db.addMyTrade(t.order.coinid, System.currentTimeMillis(), chainBlock,
+                    t.order.price(), t.minima, buy, false, t.order.orderId);
+        }
+        stats.invalidate();
+    }
+
     public void cancelOrder(Order5 o) {
         Pending.Row row = new Pending.Row();
         row.kind = Pending.CANCEL;
@@ -375,6 +424,8 @@ public class MainActivity extends AppCompatActivity {
 
     public DexStats db() { return stats; }
     public Set<String> keys() { return keySet.keys(); }
+    public Map<String, Order5> book() { return repo == null ? new java.util.LinkedHashMap<>() : repo.book(); }
+    public long chainBlock() { return chainBlock; }
     public BigDecimal minimaSendable() { return minimaSendable; }
     public BigDecimal usdtSendable() { return usdtSendable; }
     public void setInputFocused(boolean f) { inputFocused = f; }

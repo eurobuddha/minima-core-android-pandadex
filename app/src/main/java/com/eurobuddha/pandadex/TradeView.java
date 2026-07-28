@@ -371,7 +371,16 @@ public final class TradeView extends LinearLayout {
             act.toast("Enter a price and amount");
             return;
         }
-        act.placeOrder(buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
+        // MARKETABLE LIMIT: if the order crosses the book, take the resting liquidity first
+        // (that's what makes a "market order" possible without any AMM) and only rest the
+        // unfilled balance. This is the taker path — one sweep txn, ≤1 partial.
+        SweepPlanner.Plan plan = SweepPlanner.plan(act.book().values(), buyMode, amount, price,
+                act.keys(), act.chainBlock());
+        if (!plan.isEmpty()) {
+            act.confirmSweep(plan, buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
+        } else {
+            act.placeOrder(buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
+        }
         amountIn.setText("");
     }
 
