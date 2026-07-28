@@ -40,8 +40,9 @@ public class MainActivity extends AppCompatActivity {
     public static volatile boolean FOREGROUND = false;
 
     private static final long POLL_MS = 30_000;
-    private static final int TAB_TRADE = 0, TAB_CHART = 1, TAB_TAPE = 2, TAB_ORDERS = 3, TAB_ASSETS = 4;
-    private static final String[] TAB_NAMES = {"TRADE", "CHART", "TRADES", "ORDERS", "ASSETS"};
+    private static final int TAB_TRADE = 0, TAB_CHART = 1, TAB_TAPE = 2, TAB_ORDERS = 3,
+            TAB_ASSETS = 4, TAB_MAKER = 5;
+    private static final String[] TAB_NAMES = {"TRADE", "CHART", "TRADES", "ORDERS", "ASSETS", "MAKER"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -70,6 +71,9 @@ public class MainActivity extends AppCompatActivity {
     private TapeTab tapeTab;
     private OrdersTab ordersTab;
     private AssetsTab assetsTab;
+    private MakerTab makerTab;
+    private MakerConfig makerCfg;
+    private MakerEngine maker;
     private FrameLayout content;
     private LinearLayout tabBar;
     private TextView pairPill, blockPill, footer;
@@ -118,6 +122,7 @@ public class MainActivity extends AppCompatActivity {
         repo = new BookRepository(node, db);
         txn = new DexTxn(node, db);
         processor = new DexProcessor(this, txn);
+        maker = new MakerEngine(this, makerCfg, txn);
         repo.setFillSink(this::onFillObserved);
         repo.subscribe((orders, syncing) -> {
             pending.resolve(orders, chainBlock, new Pending.Listener() {
@@ -135,6 +140,11 @@ public class MainActivity extends AppCompatActivity {
             });
             reconcileSweep(orders);
             reconcileTakerFill(orders);
+            // the market maker rides the same book updates as everything else; it rate-limits
+            // itself internally because every adjustment costs proof-of-work
+            if (paired && keySet.ready() && chainBlock > 0 && !busy) {
+                maker.onBook(orders, keySet.keys(), chainBlock, this::setStage);
+            }
             filling.retainAll(orders.keySet());   // never let a marker stick
             // remember my own live orders so they can still be found after they age out of
             // the node's searchable window (the recovery path in ORDERS)
@@ -298,7 +308,9 @@ public class MainActivity extends AppCompatActivity {
         tapeTab = new TapeTab(this);
         ordersTab = new OrdersTab(this);
         assetsTab = new AssetsTab(this);
-        for (android.view.View v : new android.view.View[]{trade, chartTab, tapeTab, ordersTab, assetsTab}) {
+        makerCfg = new MakerConfig(this);
+        makerTab = new MakerTab(this, makerCfg);
+        for (android.view.View v : new android.view.View[]{trade, chartTab, tapeTab, ordersTab, assetsTab, makerTab}) {
             v.setVisibility(android.view.View.GONE);
             content.addView(v);
         }
@@ -342,6 +354,7 @@ public class MainActivity extends AppCompatActivity {
         tapeTab.setVisibility(idx == TAB_TAPE ? android.view.View.VISIBLE : android.view.View.GONE);
         ordersTab.setVisibility(idx == TAB_ORDERS ? android.view.View.VISIBLE : android.view.View.GONE);
         assetsTab.setVisibility(idx == TAB_ASSETS ? android.view.View.VISIBLE : android.view.View.GONE);
+        makerTab.setVisibility(idx == TAB_MAKER ? android.view.View.VISIBLE : android.view.View.GONE);
         repaint();
     }
 
@@ -363,6 +376,7 @@ public class MainActivity extends AppCompatActivity {
             case TAB_TAPE:   tapeTab.render(); break;
             case TAB_ORDERS: ordersTab.render(); break;
             case TAB_ASSETS: assetsTab.render(); break;
+            case TAB_MAKER:  makerTab.render(); break;
         }
     }
 
@@ -724,6 +738,47 @@ public class MainActivity extends AppCompatActivity {
                 cancelSequentially(list, idx + 1, ok, failed + 1, onDone);
             }
         });
+    }
+
+    /** Arm the ladder, after showing what is about to be committed. */
+    public void armMaker(int levels, BigDecimal totalPerSide) {
+        if (!ready()) return;
+        new AlertDialog.Builder(this, Design.dialogTheme())
+                .setTitle("Arm the market maker")
+                .setMessage("This will post up to " + (levels * 2) + " orders — "
+                        + levels + " bids and " + levels + " offers — committing about "
+                        + PriceMath.fmt(totalPerSide) + " MINIMA and its mxUSDT equivalent.\n\n"
+                        + "The ladder tracks the MEXC mid and reprices itself. If the price "
+                        + "feed goes stale it quotes wider, then withdraws.\n\n"
+                        + "Each adjustment is an on-chain transaction your phone does "
+                        + "proof-of-work for.")
+                .setPositiveButton("Arm", (d, w) -> {
+                    makerCfg.armed = true;
+                    makerCfg.lastActedMid = null;      // act on the next cycle
+                    makerCfg.save();
+                    setStage("Market maker armed — posting the ladder");
+                    repo.refresh();
+                    repaint();
+                })
+                .setNegativeButton("Not yet", null)
+                .show();
+    }
+
+    /** Disarm and take the ladder off the book. */
+    public void disarmMaker() {
+        makerCfg.armed = false;
+        makerCfg.save();
+        repaint();
+        withdrawLadder();
+    }
+
+    /** Cancel every order the ladder currently owns. */
+    public void withdrawLadder() {
+        if (maker == null || repo == null) return;
+        java.util.List<Order5> live = maker.liveLadderOrders(book(), keys());
+        if (live.isEmpty()) { toast("No ladder orders on the book"); return; }
+        setStage("Withdrawing " + live.size() + " ladder order" + (live.size() == 1 ? "" : "s") + "…");
+        maker.cancelAllLadder(live, 0, this::setStage);
     }
 
     public void cancelOrder(Order5 o) {

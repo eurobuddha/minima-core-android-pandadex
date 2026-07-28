@@ -332,3 +332,35 @@ skipped 0.1.3, so no purge ran.** That correction was right and led to the real 
   always visible next to the pairing pill.
 - Retained from v0.1.5 and re-verified: a genuine fill that empties the book IS recorded, and
   no migration destroys stored history.
+
+
+# v0.2.0 (2026-07-28) — market maker mode, cancel-all, labelled min-remainder
+
+- **Market maker mode (new MAKER tab).** A ladder of up to 6 bids and 6 offers, per-level
+  offsets and sizes, tracking the MEXC mid with a skew, repriced only once the mid moves past
+  a threshold. The reference feed is an INPUT, not the venue — orders, matching and settlement
+  remain entirely on-chain, and if the feed dies the ladder withdraws while manual trading is
+  unaffected.
+  - **Repricing uses the V5 owner in-place RE-LOCK**: one atomic transaction changes a rung's
+    price with the funds never leaving the book. The apps this was modelled on (AtomiX,
+    minimaSwap) must cancel then re-post, which leaves a window where the maker is flat and a
+    failed re-post drops the level entirely. A unit test asserts a reprice never emits a
+    cancel.
+  - **Stale-feed safety**: as the last good price ages the ladder quotes progressively wider,
+    and past a hard limit it withdraws from the book. Standing on a stale quote is how a
+    market maker gets picked off.
+  - **Proof-of-work is the binding constraint**, not tidiness: a 6-a-side ladder is 12 orders,
+    and every post/reprice/cancel is a transaction ground out on the phone. Hence a minimum
+    cycle interval, a cap on actions per cycle, and no action at all below the movement
+    threshold. Actions are issued strictly sequentially — the node runs one command at a time.
+  - Slot→order mapping is persisted, so a restart re-adopts the live ladder instead of posting
+    a second one on top of it. Partially-filled rungs are left working rather than repriced.
+- **Cancel-all** in ORDERS (also the maker's withdraw path): sequential cancels with live
+  progress and an honest summary when some fail. Reuses the reviewed `DexTxn.cancel`.
+- **The min-remainder field is finally legible.** The bare "1" under Advanced was never a
+  boolean — it is 1 MINIMA, the anti-dust floor (state port 8): a taker must leave at least
+  that much resting or take the whole order. The description had been set as an Android hint,
+  which is only drawn while a field is EMPTY, and the field ships pre-filled — so the label
+  was never visible. Now a real label, the unit, and an explanation.
+
+No covenant change — the book address is unmoved. 70 JVM tests green.
