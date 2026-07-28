@@ -76,3 +76,18 @@ harness asserts on coin liveness, not step errors).
   both outcomes are safe (fill pays the maker; renew re-locks). No covenant involvement.
 - Overflow: products ≤ 1e9×1e9 = 1e18 < 2^64; the creation path must enforce amount caps
   (app-side guard, PandaPools precedent).
+
+## Multi-order sweep (the k>1 shape DexTxn.fillSweep builds) — PROVEN 2026-07-28
+
+`multisweep.py`: TWO order coins consumed in ONE transaction —
+inputs [orderA, orderB, funding], outputs [payA, payB, remainderB(relock), proceeds, change].
+Order A fully consumed (paid 0.2 exactly), order B partially filled (took 25 of 60, paid
+0.15), remainder 35 re-locked at want 0.21. App gate (valid.scripts+basic+mmrproofs+
+validamounts) TRUE, mined. Confirms the covenant's per-input `VERIFYOUT(@INPUT …)` alignment
+holds for every order input simultaneously, and that the single partial must be the LAST
+order input with its remainder at output k.
+
+## App-shape verification — PROVEN 2026-07-28
+
+`appshapes.py` replays DexTxn.java's exact command sequences and gates on the same verdict
+the app uses: createOrder, fillSweep(partial), relock(edit), cancel — 4/4 accepted and mined.
