@@ -91,3 +91,24 @@ order input with its remainder at output k.
 
 `appshapes.py` replays DexTxn.java's exact command sequences and gates on the same verdict
 the app uses: createOrder, fillSweep(partial), relock(edit), cancel — 4/4 accepted and mined.
+
+## IPC reply sizes — measured, all bounded (2026-07-28)
+
+The upstream node's 256,000-byte reply cap is an UNCATCHABLE Binder app-kill, so every query
+the app issues was measured against a live node:
+
+| command | bytes | % of cap |
+|---|---|---|
+| `block` | 218 | 0.09% |
+| book scan `coins simplestate:true order:desc depth:1700 address:<V5>` | 2,811 | 1.10% |
+| ownership belt `coins relevant:true address:<V5>` | 3,606 | 1.41% |
+| `balance tokenid:0x00` / `tokenid:<mxUSDT>` | 289 / 351 | 0.14% |
+| `keys` | 1,424 | 0.56% |
+| `getaddress` | 444 | 0.17% |
+| funding `coins relevant:true sendable:true tokenid:` | 6,610 | 2.58% |
+| `runscript` (covenant registration, one-time) | 18,078 | 7.06% |
+
+Worst case 7.06%. The app issues NO unbounded `coins address:`, no all-token `balance`, no
+`history`, and no `scripts` enumeration. The book scan is bounded by `depth:1700` and is
+complete by construction: GTC renewal keeps every live order coin younger than the
+1500-block expiry.
