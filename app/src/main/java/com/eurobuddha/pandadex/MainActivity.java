@@ -55,6 +55,10 @@ public class MainActivity extends AppCompatActivity {
     private BroadcastReceiver notifyReceiver;
 
     private TradeView trade;
+    private ChartTab chartTab;
+    private TapeTab tapeTab;
+    private OrdersTab ordersTab;
+    private AssetsTab assetsTab;
     private FrameLayout content;
     private LinearLayout tabBar;
     private TextView pairPill, blockPill, footer;
@@ -63,6 +67,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean inputFocused = false;
     private long chainBlock = 0;
     private BigDecimal minimaSendable = BigDecimal.ZERO, usdtSendable = BigDecimal.ZERO;
+    private String receiveAddr = "";
 
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
@@ -120,6 +125,8 @@ public class MainActivity extends AppCompatActivity {
                 if (r == null) return;
                 keySet.addExtra(r.optString("publickey", ""));
                 txn.setIdentity(r.optString("publickey", ""), r.optString("address", ""));
+                receiveAddr = r.optString("miniaddress", r.optString("address", ""));
+                repaint();
             }
             @Override public void onError(String message) {}
         });
@@ -168,7 +175,15 @@ public class MainActivity extends AppCompatActivity {
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
         trade = new TradeView(this);
+        chartTab = new ChartTab(this);
+        tapeTab = new TapeTab(this);
+        ordersTab = new OrdersTab(this);
+        assetsTab = new AssetsTab(this);
         content.addView(trade);
+        content.addView(chartTab);
+        content.addView(tapeTab);
+        content.addView(ordersTab);
+        content.addView(assetsTab);
 
         tabBar = new LinearLayout(this);
         tabBar.setBackgroundColor(Design.SURFACE());
@@ -205,7 +220,10 @@ public class MainActivity extends AppCompatActivity {
             t.setBackgroundColor(i == idx ? Design.ACCENT_SOFT() : Design.SURFACE());
         }
         trade.setVisibility(idx == TAB_TRADE ? android.view.View.VISIBLE : android.view.View.GONE);
-        if (idx != TAB_TRADE) toast(TAB_NAMES[idx] + " lands in the next milestone");
+        chartTab.setVisibility(idx == TAB_CHART ? android.view.View.VISIBLE : android.view.View.GONE);
+        tapeTab.setVisibility(idx == TAB_TAPE ? android.view.View.VISIBLE : android.view.View.GONE);
+        ordersTab.setVisibility(idx == TAB_ORDERS ? android.view.View.VISIBLE : android.view.View.GONE);
+        assetsTab.setVisibility(idx == TAB_ASSETS ? android.view.View.VISIBLE : android.view.View.GONE);
         repaint();
     }
 
@@ -220,10 +238,35 @@ public class MainActivity extends AppCompatActivity {
             t.setTextColor(i == tab ? Design.ACCENT() : Design.DIM2());
             t.setBackgroundColor(i == tab ? Design.ACCENT_SOFT() : Design.SURFACE());
         }
-        if (tab == TAB_TRADE && repo != null) {
-            trade.render(repo.book(), !paired, chainBlock, pending.rows());
+        if (repo == null) return;
+        switch (tab) {
+            case TAB_TRADE:  trade.render(repo.book(), !paired, chainBlock, pending.rows()); break;
+            case TAB_CHART:  chartTab.render(); break;
+            case TAB_TAPE:   tapeTab.render(); break;
+            case TAB_ORDERS: ordersTab.render(); break;
+            case TAB_ASSETS: assetsTab.render(); break;
         }
     }
+
+    /** Mid-price of the live book (best bid/ask), or the last trade, or null. */
+    public BigDecimal bookMid() {
+        BigDecimal bestAsk = null, bestBid = null;
+        for (Order5 o : book().values()) {
+            if (o.expired(chainBlock)) continue;
+            BigDecimal p = o.price();
+            if (o.sell) { if (bestAsk == null || p.compareTo(bestAsk) < 0) bestAsk = p; }
+            else { if (bestBid == null || p.compareTo(bestBid) > 0) bestBid = p; }
+        }
+        if (bestAsk != null && bestBid != null) {
+            return bestAsk.add(bestBid).divide(new BigDecimal(2), PriceMath.PRICE_DP,
+                    java.math.RoundingMode.HALF_UP);
+        }
+        BigDecimal[] s = stats.stats24h();
+        if (s[0] != null) return s[0];
+        return bestAsk != null ? bestAsk : bestBid;
+    }
+
+    public String receiveAddress() { return receiveAddr; }
 
     public void repaintTrade() { repaint(); }
 
