@@ -1,0 +1,75 @@
+# PandaDEX
+
+A fully-decentralized, MEXC-style limit-order exchange for **MINIMA ⇄ mxUSDT**, running as a
+native Android app against your own Minima node.
+
+There is no server. No matching engine, no order-book API, no price feed, no relay. The order
+book *is* a set of coins locked at one on-chain covenant address; your node reads it directly
+and your device builds the transactions that fill it. Two people running this app on two
+phones can trade with each other with nothing in between but the chain.
+
+## What it does
+
+- **Real limit orders with partial fills.** A resting order can be eaten a piece at a time —
+  the taker's transaction pays the maker pro-rata and re-locks the remainder at the same
+  price, atomically. Everything is enforced by the covenant, not by the app.
+- **Marketable limits / market orders.** An order that crosses the book sweeps the resting
+  liquidity first (best price first, up to 5 orders in a single transaction) and rests only
+  the unfilled balance.
+- **Good-till-cancelled orders that actually survive.** Orders are renewed by an atomic
+  in-place re-lock — one transaction, funds never leave the book — driven by a Doze-proof
+  background watcher so a GTC order doesn't quietly expire overnight.
+- **Atomic reprice.** Editing an order's price is one transaction; the order never leaves the
+  book and there is no window where your funds are sitting loose in your wallet.
+- **An honest chart.** Candles, the trades tape, 24h stats and your P&L are all built from
+  fills *your node observed on-chain*. Nothing is fetched from an exchange.
+
+## Screens
+
+`TRADE` — ticker, depth ladder with cumulative-depth bars and price grouping, buy/sell panel
+with percent chips, your open orders with edit/cancel.
+`CHART` — OHLC candles + volume, 15m/1H/4H/1D, touch crosshair.
+`TRADES` — the market tape, your own fills badged.
+`ORDERS` — open orders and your fill history with P&L vs the book mid.
+`ASSETS` — balances split into available vs locked in orders, portfolio value, receive address.
+
+## The contract
+
+The book lives at one address, derived from a frozen KISS-VM covenant:
+
+```
+0xCE5A0A3CC2E19B1860E60C58397FD5D5E986EEA4AF4423B53E08BAA5591B6F32
+MxG086EB853PGN1JCC61PGCB0SNVYEYT63ET95F8GHRAFG8NAWYW6RF69FVMZ6M
+```
+
+Spend paths: owner cancel (refund), owner atomic re-lock (renew/reprice), third-party expiry
+sweep after 1500 blocks, full fill, and partial fill with a pro-rata remainder. Prices are
+enforced by cross-multiplication (no division, no rounding slack), always rounded in the
+maker's favour, with a maker-set minimum remainder to stop dust griefing.
+
+`contract/` holds the covenant template and the proof harness. See `contract/RESULTS.md`:
+Phase A proved the fill arithmetic against an independent decimal model (134/134 vectors);
+Phase B posted and mined the whole lifecycle on a private chain — full fills, chained
+partials, buy-side token-leg partials, atomic edit and renew, expiry sweeps, and a
+multi-order sweep — plus 9 adversarial attacks that were all rejected with the order coin
+left untouched.
+
+## Requirements
+
+- Minima Core (the standard, upstream node app) installed and running on the same device.
+- Enable PandaDEX in **Minima Core → Apps**.
+
+Every node query the app makes is bounded, because an oversized IPC reply kills an Android app
+outright rather than returning an error.
+
+## Building
+
+```
+./gradlew assembleDebug      # JDK 21 (pinned in gradle.properties)
+./gradlew test               # JVM unit tests
+```
+
+## Status
+
+Built and proven on a private chain; **not yet tested with real funds on mainnet**. Treat it
+as experimental until it has been through a live dust test.
