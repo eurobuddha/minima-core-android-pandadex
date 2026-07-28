@@ -212,7 +212,7 @@ public final class MakerTab extends LinearLayout {
         lc.addView(pegRow);
 
         // ---- auto-fill: seeds the rungs; rows regenerate as these change (no Generate button) ----
-        lc.addView(sectionLabel("AUTO-FILL (mid · step % · levels, then ask/bid size — seeds the rungs; edit any rung after)"));
+        lc.addView(sectionLabel("AUTO-FILL (mid · step % · levels, then ask/bid size — seeds the rungs; edit any rung after while unpegged)"));
         LinearLayout gen = new LinearLayout(getContext());
         gen.setGravity(Gravity.CENTER_VERTICAL);
         gen.setPadding(0, dp(4), 0, dp(2));
@@ -286,6 +286,11 @@ public final class MakerTab extends LinearLayout {
 
         pegModeUi();
         pegSw.setOnCheckedChangeListener((btn, on) -> {
+            // Persist the flip IMMEDIATELY: tapping a switch blurs no field, so without this
+            // an ARMED engine kept running in the old mode until some unrelated blur committed.
+            // A targeted write, not commit() — the fields may hold a half-typed value.
+            cfg.pegged = on;
+            cfg.save();
             pegModeUi();
             if (on) {
                 MarketPrice.refreshAsync();
@@ -315,11 +320,22 @@ public final class MakerTab extends LinearLayout {
 
     // ---------------------------------------------------------------- auto-fill (AtomiX)
 
-    /** The mid comes from the oracle while pegged — grey the field out. */
+    /** While pegged the oracle owns the mid AND the rungs — grey out everything it writes.
+     *  A hand-edited rung would be silently ignored by the engine and stomped by the next
+     *  fill, so the rows are only editable unpegged. */
     private void pegModeUi() {
         boolean on = pegSw.isChecked();
         midIn.setEnabled(!on);
         midIn.setAlpha(on ? 0.5f : 1f);
+        for (EditText[][] side : new EditText[][][]{askRows, bidRows}) {
+            for (EditText[] row : side) {
+                if (row == null) continue;
+                for (EditText e : row) {
+                    e.setEnabled(!on);
+                    e.setAlpha(on ? 0.5f : 1f);
+                }
+            }
+        }
     }
 
     private void autoGen() {
@@ -488,13 +504,12 @@ public final class MakerTab extends LinearLayout {
     /** Poll the peg price line while visible (AtomiX polls its dialog every 2s). */
     private final Runnable pegTick = new Runnable() {
         @Override public void run() {
-            if (!isAttachedToWindow()) return;
-            if (getVisibility() == VISIBLE) {
-                pegPxTv.setText(pegLine());
-                if (pegSw.isChecked()) {
-                    MarketPrice.refreshAsync();
-                    if (pegAwaitFill) fillFromPeg();   // fill once the first price lands
-                }
+            // Stops itself while hidden — setVisibility(VISIBLE) restarts it.
+            if (!isAttachedToWindow() || getVisibility() != VISIBLE) return;
+            pegPxTv.setText(pegLine());
+            if (pegSw.isChecked()) {
+                MarketPrice.refreshAsync();
+                if (pegAwaitFill) fillFromPeg();   // fill once the first price lands
             }
             postDelayed(this, 2000);
         }
@@ -503,6 +518,15 @@ public final class MakerTab extends LinearLayout {
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         postDelayed(pegTick, 1000);
+    }
+
+    @Override public void setVisibility(int visibility) {
+        boolean wasVisible = getVisibility() == VISIBLE;
+        super.setVisibility(visibility);
+        if (visibility == VISIBLE && !wasVisible && isAttachedToWindow()) {
+            removeCallbacks(pegTick);
+            post(pegTick);
+        }
     }
 
     @Override protected void onDetachedFromWindow() {

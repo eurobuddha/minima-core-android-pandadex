@@ -209,16 +209,31 @@ public final class MakerLadder {
      *   - the rung is missing            → CREATE
      *   - the price moved past threshold → RELOCK (atomic, funds stay on the book)
      *   - the rung is no longer wanted   → CANCEL
+     *   - the SIZE was changed           → CANCEL + CREATE (a re-lock cannot change the locked
+     *     amount), lowest priority — and only for rungs that are NOT partially filled
      *   - the rung has been PARTIALLY filled → leave it alone; the remainder is still working
      *     and cancelling it would throw away a live position for a cosmetic price improvement
+     *
+     * {@code repricePct <= 0} selects EXACT mode (the manual ladder: "quoted exactly as typed"):
+     * any price difference at {@link PriceMath#DISPLAY_DP} relocks. The comparison is on the
+     * ROUNDED prices deliberately — a posted order's reconstructed price carries amount-rounding
+     * noise below display precision, and comparing raw values would relock every cycle forever.
      */
     public static List<Action> reconcile(List<Slot> desired, Map<String, Order5> liveBySlot,
                                          BigDecimal repricePct, Set<String> partiallyFilled,
                                          int maxActions) {
+        return reconcile(desired, liveBySlot, repricePct, partiallyFilled, null, maxActions);
+    }
+
+    /** As above, with the sizes we originally posted per slot id — enables size-change repairs. */
+    public static List<Action> reconcile(List<Slot> desired, Map<String, Order5> liveBySlot,
+                                         BigDecimal repricePct, Set<String> partiallyFilled,
+                                         Map<String, BigDecimal> postedSizes, int maxActions) {
         // Collected by KIND so the cap below drops the least urgent work first.
         List<Action> relocks = new ArrayList<>();
         List<Action> creates = new ArrayList<>();
         List<Action> cancels = new ArrayList<>();
+        List<Action> resizes = new ArrayList<>();
         Map<String, Slot> want = new HashMap<>();
         for (Slot s : desired) want.put(s.id, s);
 
@@ -238,24 +253,46 @@ public final class MakerLadder {
             if (partiallyFilled != null && partiallyFilled.contains(live.coinid)) {
                 continue;                    // working remainder — don't disturb it
             }
+            // A deliberate size change can't be re-locked (the funds stay locked) — repost.
+            // Compared against the size we POSTED, not the live amount: a buy order's on-chain
+            // amount carries conversion rounding that would read as a phantom size change.
+            BigDecimal posted = postedSizes == null ? null : postedSizes.get(s.id);
+            if (posted != null && posted.compareTo(s.sizeMinima) != 0) {
+                resizes.add(new Action(Kind.CANCEL, null, live, "size changed"));
+                resizes.add(new Action(Kind.CREATE, s, null, "size changed"));
+                continue;
+            }
             BigDecimal livePrice = live.price();
             if (livePrice.signum() <= 0) continue;
-            BigDecimal movePct = s.price.subtract(livePrice).abs()
-                    .divide(livePrice, PriceMath.MC).multiply(new BigDecimal(100));
-            if (movePct.compareTo(repricePct) >= 0) {
-                relocks.add(new Action(Kind.RELOCK, s, live,
-                        "moved " + movePct.setScale(3, RoundingMode.HALF_UP) + "%"));
+            boolean move;
+            String reason;
+            if (repricePct == null || repricePct.signum() <= 0) {
+                // exact mode — the price is the user's explicit instruction, honour any
+                // difference visible at display precision
+                move = s.price.setScale(PriceMath.DISPLAY_DP, RoundingMode.HALF_UP).compareTo(
+                        livePrice.setScale(PriceMath.DISPLAY_DP, RoundingMode.HALF_UP)) != 0;
+                reason = "price edited";
+            } else {
+                BigDecimal movePct = s.price.subtract(livePrice).abs()
+                        .divide(livePrice, PriceMath.MC).multiply(new BigDecimal(100));
+                move = movePct.compareTo(repricePct) >= 0;
+                reason = "moved " + movePct.setScale(3, RoundingMode.HALF_UP) + "%";
             }
+            if (move) relocks.add(new Action(Kind.RELOCK, s, live, reason));
         }
 
         // Priority when the cycle budget is tight: fix MISPRICED quotes first (they are the
         // live risk — someone can trade against them right now), then restore MISSING rungs,
-        // and only then tidy up rungs we no longer want. Appending cancels first would let a
-        // handful of them starve every create, tearing the ladder down without rebuilding it.
+        // then tidy up rungs we no longer want, and only last the size-change reposts (a
+        // cosmetic tune of an order that is otherwise working fine). Appending cancels first
+        // would let a handful of them starve every create, tearing the ladder down without
+        // rebuilding it. If the cap splits a resize pair after its CANCEL, the next cycle sees
+        // the rung as missing and CREATEs it at the new size — self-healing.
         List<Action> actions = new ArrayList<>();
         actions.addAll(relocks);
         actions.addAll(creates);
         actions.addAll(cancels);
+        actions.addAll(resizes);
 
         if (maxActions > 0 && actions.size() > maxActions) {
             return new ArrayList<>(actions.subList(0, maxActions));

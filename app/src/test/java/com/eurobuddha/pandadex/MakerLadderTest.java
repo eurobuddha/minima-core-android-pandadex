@@ -295,6 +295,71 @@ public class MakerLadderTest {
         }
     }
 
+    // ---------------- exact mode (manual ladder — threshold ≤ 0) ----------------
+
+    @Test public void exactModeHonoursAPriceEditBelowAnyPegThreshold() {
+        // "quoted exactly as typed": a 0.2% nudge must relock even though the default 0.25%
+        // peg threshold would have swallowed it silently
+        MakerLadder.Config c = manual(Arrays.asList(lvl("0.0501", "100")), new ArrayList<>());
+        List<MakerLadder.Slot> want = MakerLadder.desired(null, c, BigDecimal.ONE);
+        Map<String, Order5> live = new HashMap<>();
+        live.put("A1", order("0xC1", "0.0500", "100"));
+        List<MakerLadder.Action> acts = MakerLadder.reconcile(want, live,
+                BigDecimal.ZERO, new HashSet<>(), 0);
+        assertEquals(1, acts.size());
+        assertEquals(MakerLadder.Kind.RELOCK, acts.get(0).kind);
+    }
+
+    @Test public void exactModeConvergesDespiteAmountRoundingNoise() {
+        // A posted order's reconstructed price carries amount-rounding below display
+        // precision. Exact mode must compare at DISPLAY_DP, or every cycle relocks forever —
+        // an infinite proof-of-work loop.
+        MakerLadder.Config c = manual(Arrays.asList(lvl("0.052", "100")), new ArrayList<>());
+        List<MakerLadder.Slot> want = MakerLadder.desired(null, c, BigDecimal.ONE);
+        Map<String, Order5> live = new HashMap<>();
+        live.put("A1", order("0xC1", "0.05200000049", "100"));   // sub-display noise only
+        assertTrue("rounding noise must not trigger a relock",
+                MakerLadder.reconcile(want, live, BigDecimal.ZERO, new HashSet<>(), 0).isEmpty());
+    }
+
+    // ---------------- size changes ----------------
+
+    @Test public void aSizeChangeCancelsAndRepostsTheRungLast() {
+        // a re-lock cannot change the locked amount, so a deliberate size edit needs a
+        // repost — and it is the least urgent work, after relocks/creates/cancels
+        List<MakerLadder.Slot> want = want(1);   // both sides, size 100
+        Map<String, Order5> live = new HashMap<>();
+        live.put("A1", order("0xC1", find(want, "A1").price.toPlainString(), "250"));
+        Map<String, BigDecimal> posted = new HashMap<>();
+        posted.put("A1", new BigDecimal("250"));   // we posted 250, the user now wants 100
+        List<MakerLadder.Action> acts = MakerLadder.reconcile(want, live,
+                new BigDecimal("0.1"), new HashSet<>(), posted, 0);
+        assertEquals(3, acts.size());
+        assertEquals("the missing B1 comes first", MakerLadder.Kind.CREATE, acts.get(0).kind);
+        assertEquals(MakerLadder.Kind.CANCEL, acts.get(1).kind);
+        assertEquals("0xC1", acts.get(1).order.coinid);
+        assertEquals(MakerLadder.Kind.CREATE, acts.get(2).kind);
+        assertEquals("A1", acts.get(2).slot.id);
+        assertEquals(0, new BigDecimal("100").compareTo(acts.get(2).slot.sizeMinima));
+    }
+
+    @Test public void aPartiallyFilledRungIsNeverResized() {
+        // the shrunken remainder is a working position, not a config edit to repair
+        List<MakerLadder.Slot> want = want(1);
+        Map<String, Order5> live = new HashMap<>();
+        live.put("A1", order("0xC1", find(want, "A1").price.toPlainString(), "40"));
+        Map<String, BigDecimal> posted = new HashMap<>();
+        posted.put("A1", new BigDecimal("250"));
+        HashSet<String> partial = new HashSet<>();
+        partial.add("0xC1");
+        List<MakerLadder.Action> acts = MakerLadder.reconcile(want, live,
+                new BigDecimal("0.1"), partial, posted, 0);
+        for (MakerLadder.Action a : acts) {
+            assertFalse("a working remainder must not be cancelled for a size change",
+                    a.order != null && "0xC1".equals(a.order.coinid));
+        }
+    }
+
     @Test public void repricingWaitsForTheMidToActuallyMove() {
         assertFalse(MakerLadder.worthRepricing(new BigDecimal("0.05"),
                 new BigDecimal("0.050004"), new BigDecimal("0.1")));

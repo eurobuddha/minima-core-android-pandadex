@@ -132,7 +132,9 @@ public final class MakerConfig {
 
         // ---- migration from the 0.2.x offset ladder: it was pegged by construction, so the
         // old offsets/sizes become peg seed parameters (first offset = step, first size = both
-        // side sizes). The rungs themselves regenerate on the next armed cycle.
+        // side sizes). The rungs themselves regenerate on the next armed cycle. ONE-SHOT: the
+        // legacy key is dropped on the next save() — without that, a user who deliberately
+        // cleared everything would have the old config resurrected on every launch.
         if (askSize.signum() <= 0 && bidSize.signum() <= 0 && asks.isEmpty() && bids.isEmpty()) {
             try {
                 JSONArray a = new JSONArray(prefs.getString(K_LEVELS, "[]"));
@@ -222,6 +224,7 @@ public final class MakerConfig {
                 .putString(K_SLOTS, slots.toString())
                 .putString(K_SIZES, sizes.toString())
                 .putString(K_LASTMID, lastActedMid == null ? "" : lastActedMid.toPlainString())
+                .remove(K_LEVELS)   // the legacy offset ladder is migrate-once, never re-read
                 .apply();
     }
 }

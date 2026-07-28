@@ -71,6 +71,13 @@ public final class MakerEngine {
         BigDecimal mid = BigDecimal.ZERO;
         BigDecimal widen = BigDecimal.ONE;
         if (cfg.pegged) {
+            // A degenerate pegged config (no step, or no size on either side) means
+            // MISCONFIGURED, never "cancel everything". commit() runs on field blur, so a
+            // cleared field mid-edit reaches us as a zero — treating that as an empty desired
+            // ladder would tear the live ladder down. Deliberate teardown is Disarm/Withdraw.
+            if (cfg.stepPct == null || cfg.stepPct.signum() <= 0
+                    || (cfg.askSize.signum() <= 0 && cfg.bidSize.signum() <= 0)) return;
+
             // The feed only matters while PEGGED — a manual ladder quotes exactly what was
             // typed, so its prices can neither go stale nor need repricing to a moving mid.
             MarketPrice.refreshAsync();
@@ -111,14 +118,22 @@ public final class MakerEngine {
         // is trivially equal for sells and never equal for buys, which silently froze the
         // entire bid side of the ladder.
         Set<String> partial = new HashSet<>();
+        Map<String, BigDecimal> postedSizes = new HashMap<>();
         for (Map.Entry<String, Order5> e : liveBySlot.entrySet()) {
             BigDecimal posted = cfg.postedSizeFor(e.getKey());
             Order5 o = e.getValue();
-            if (posted != null && o.minimaAmount().compareTo(posted) < 0) partial.add(o.coinid);
+            if (posted != null) {
+                postedSizes.put(e.getKey(), posted);
+                if (o.minimaAmount().compareTo(posted) < 0) partial.add(o.coinid);
+            }
         }
 
+        // Unpegged the rungs are the user's EXPLICIT prices — the reprice threshold is a peg
+        // concept, and filtering typed prices through it silently ignores small edits. A zero
+        // threshold selects reconcile's exact mode (compares at display precision).
+        BigDecimal threshold = cfg.pegged ? cfg.repricePct : BigDecimal.ZERO;
         List<MakerLadder.Action> actions = MakerLadder.reconcile(desired, liveBySlot,
-                cfg.repricePct, partial, MAX_ACTIONS_PER_CYCLE);
+                threshold, partial, postedSizes, MAX_ACTIONS_PER_CYCLE);
         if (actions.isEmpty()) return;
 
         lastCycleMs = now;

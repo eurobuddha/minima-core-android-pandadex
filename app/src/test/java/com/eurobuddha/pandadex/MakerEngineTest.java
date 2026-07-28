@@ -11,7 +11,10 @@ import org.junit.Test;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The engine spends money: every action it takes is an on-chain transaction. These tests drive
@@ -192,6 +195,46 @@ public class MakerEngineTest {
         invokeRun(actions);
         assertEquals("the chain must keep moving", 2, txn.calls.size());
         assertFalse("the engine must be usable afterwards", engine.isWorking());
+    }
+
+    // ---------------- config edits while armed ----------------
+
+    @Test public void aDegeneratePeggedConfigNeverTearsTheLadderDown() {
+        // commit() runs on field blur, so a cleared step field reaches the engine as zero.
+        // That must read as MISCONFIGURED (do nothing), never as "desired ladder is empty"
+        // (cancel every live rung at proof-of-work cost).
+        cfg.armed = true;
+        cfg.pegged = true;
+        cfg.stepPct = BigDecimal.ZERO;              // the cleared field
+        cfg.askSize = new BigDecimal("100");
+        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"));
+        Map<String, Order5> book = new HashMap<>();
+        book.put("0xC1", order("0xC1", "0xORDER1", "0.051", "100"));
+        HashSet<String> keys = new HashSet<>(Arrays.asList("0xMINE"));
+
+        engine.onBook(book, keys, 10, m -> {});
+        assertTrue("a blank step field must not cancel the ladder", txn.calls.isEmpty());
+
+        cfg.stepPct = new BigDecimal("0.20");
+        cfg.askSize = BigDecimal.ZERO;              // both sizes cleared mid-edit
+        cfg.bidSize = BigDecimal.ZERO;
+        engine.onBook(book, keys, 10, m -> {});
+        assertTrue("blank sizes must not cancel the ladder either", txn.calls.isEmpty());
+    }
+
+    @Test public void anUnpeggedPriceEditIsHonouredExactly() {
+        // manual rungs are "quoted exactly as typed" — an edit below the peg's reprice
+        // threshold (0.2% here, threshold 0.25%) must still relock the live order
+        cfg.armed = true;
+        cfg.pegged = false;
+        cfg.repricePct = new BigDecimal("0.25");
+        cfg.asks.add(new MakerLadder.Level(new BigDecimal("0.0501"), new BigDecimal("100")));
+        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"));
+        Map<String, Order5> book = new HashMap<>();
+        book.put("0xC1", order("0xC1", "0xORDER1", "0.0500", "100"));
+
+        engine.onBook(book, new HashSet<>(Arrays.asList("0xMINE")), 10, m -> {});
+        assertEquals(Arrays.asList("RELOCK 0xC1"), txn.calls);
     }
 
     // ---------------- helpers ----------------
