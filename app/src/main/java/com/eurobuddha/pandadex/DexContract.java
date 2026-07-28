@@ -24,12 +24,28 @@ public final class DexContract {
     public static final String USDT_ID =
             "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
 
-    /** Order lifetime in blocks (~21h); GTC renewal re-locks before this. */
-    public static final int EXPIRY_BLOCKS = 1500;
-    /** Renew a GTC order once it's this old (≈14h window before expiry). */
-    public static final int RENEW_AT = 500;
-    /** Book scan depth: > EXPIRY so a bounded scan sees every live (renewed) order. */
-    public static final int SCAN_DEPTH = 1700;
+    /**
+     * THE VISIBILITY CEILING. A light node's `coins` search walks TREE NODES, and the tree is
+     * trimmed at MINIMA_CASCADE_START_DEPTH = 1024 (GlobalParams.java:48). So no client can
+     * see — let alone spend — a coin older than ~1024 blocks (~14h at 50s blocks) without an
+     * archive/MegaMMR node. Every constant below is derived from that hard ceiling.
+     *
+     * The first cut of this contract used EXPIRY 1500 > 1024, which meant an order could age
+     * out of visibility while still "live": un-cancellable, un-renewable, and NOT sweepable
+     * by anyone (the expiry branch also needs the coin to be visible). The solo-node proofs
+     * missed it because TestParams trims at 32 and the test expiry was 20 — the inequality
+     * held by accident. Do not raise EXPIRY_BLOCKS above HORIZON_BLOCKS.
+     */
+    public static final int HORIZON_BLOCKS = 1024;
+
+    /** Order lifetime in blocks (~8.3h) — comfortably inside the horizon, leaving a ~6h
+     *  window in which a lapsed order is still visible and can be swept home by anyone. */
+    public static final int EXPIRY_BLOCKS = 600;
+    /** Renew a GTC order once it's this old (~2.8h) — a ~5.5h grace before expiry, so a
+     *  phone that misses several renewal windows still recovers. */
+    public static final int RENEW_AT = 200;
+    /** Book scan depth: under the node's 1024-block trim (asking for more just wastes work). */
+    public static final int SCAN_DEPTH = 1000;
 
     /** The frozen V5 script — byte-exact match of contract/v5script.tpl (mainnet dims). */
     public static final String SCRIPT_V5 =
@@ -56,11 +72,13 @@ public final class DexContract {
             + "ENDIF "
             + "RETURN r LT @AMOUNT AND r GTE PREVSTATE(8) AND VERIFYOUT(@INPUT+1 @ADDRESS r @TOKENID TRUE) AND SAMESTATE(0 1) AND SAMESTATE(3 5) AND SAMESTATE(7 8) AND STATE(2)*@AMOUNT GTE w*r AND STATE(2) LTE w AND GETOUTADDR(@INPUT) EQ PREVSTATE(1) AND GETOUTTOK(@INPUT) EQ PREVSTATE(3) AND GETOUTAMT(@INPUT)*@AMOUNT GTE w*(@AMOUNT-r)";
 
-    /** Pinned book address — derived from SCRIPT_V5 on the solo node and frozen. */
+    /** Pinned book address — derived from SCRIPT_V5 on the solo node and frozen.
+     *  (The pre-review EXPIRY-1500 build used 0xCE5A0A3C…; that book is abandoned — it was
+     *  never funded on mainnet — because 1500 exceeded the node's 1024-block visibility.) */
     public static final String ADDR_V5 =
-            "0xCE5A0A3CC2E19B1860E60C58397FD5D5E986EEA4AF4423B53E08BAA5591B6F32";
+            "0x2D43279DD85DABCA3EA90C9997DAB9169D8B7A0E8CB594236AF44542489774A5";
     public static final String ADDR_V5_MX =
-            "MxG086EB853PGN1JCC61PGCB0SNVYEYT63ET95F8GHRAFG8NAWYW6RF69FVMZ6M";
+            "MxG081D8CJPRM2TYF53TA8CJ6BTYE8MJM5NK3KCMMA26QNK8Y14H5RKKK2B0665";
 
     // Legacy Limit book (read/fill interop, LATER phase — constants only)
     public static final String ADDR_V4 =
