@@ -58,6 +58,11 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean busy = false;          // a spend is in flight — lock the CTA
     private Runnable restQueue;                     // limit balance to place once a sweep lands
     private java.util.List<String> restQueueCoins;  // the swept coins we're waiting to vanish
+    /** Order coins this device is currently taking — shown as FILLING on the ladder. */
+    private final java.util.Set<String> filling = new java.util.HashSet<>();
+    private java.util.List<String> awaitingFill;    // coins whose disappearance = our fill landed
+    private boolean awaitingBuy;
+    private BigDecimal awaitingMinima = BigDecimal.ZERO, awaitingPrice = BigDecimal.ZERO;
     private BroadcastReceiver notifyReceiver;
 
     private TradeView trade;
@@ -103,8 +108,22 @@ public class MainActivity extends AppCompatActivity {
         processor = new DexProcessor(this, txn);
         repo.setFillSink(this::onFillObserved);
         repo.subscribe((orders, syncing) -> {
-            pending.resolve(orders, chainBlock);
+            pending.resolve(orders, chainBlock, new Pending.Listener() {
+                @Override public void onLive(Pending.Row r) {
+                    // The order is on the book — fillable and cancellable from this instant.
+                    String what = (r.buy ? "Buy " : "Sell ") + PriceMath.fmt(r.minima)
+                            + " MINIMA @ " + PriceMath.fmtPrice(r.price);
+                    setStage(what + " is LIVE on the book");
+                    Notifier.alert(MainActivity.this, "Order live", what + " is on the order book");
+                }
+                @Override public void onSettled(Pending.Row r) {
+                    setStage(Pending.CANCEL.equals(r.kind) ? "Order cancelled — funds back in your wallet"
+                                                           : "New price is live on the book");
+                }
+            });
             reconcileSweep(orders);
+            reconcileTakerFill(orders);
+            filling.retainAll(orders.keySet());   // never let a marker stick
             // remember my own live orders so they can still be found after they age out of
             // the node's searchable window (the recovery path in ORDERS)
             for (Order5 o : orders.values()) {
@@ -361,6 +380,25 @@ public class MainActivity extends AppCompatActivity {
 
     public void repaintTrade() { repaint(); }
 
+    // ---- the one place the app narrates what it is doing -------------------------------
+    private String stage = "";
+    private long stageAtMs = 0;
+    private static final long STAGE_HOLD_MS = 45_000;
+
+    /** Say what is happening RIGHT NOW. Blocks take ~50s, so silence during that wait reads
+     *  as a broken app — this is the running commentary for both placing and filling. */
+    public void setStage(String s) {
+        stage = s == null ? "" : s;
+        stageAtMs = System.currentTimeMillis();
+        repaint();
+    }
+
+    public String stage() {
+        if (stage.isEmpty()) return "";
+        if (System.currentTimeMillis() - stageAtMs > STAGE_HOLD_MS) return "";
+        return stage;
+    }
+
     // ------------------------------------------------------------------ polling
 
     private void poll() {
@@ -475,10 +513,20 @@ public class MainActivity extends AppCompatActivity {
                 .setMessage(sb.toString())
                 .setPositiveButton("Execute", (d, w) -> {
                     busy = true;
+                    // mark the rows we're taking so the ladder shows them as in-flight
+                    filling.clear();
+                    for (SweepPlanner.Take t : plan.takes) filling.add(t.order.coinid);
+                    setStage("Building transaction… selecting coins and signing");
                     txn.fillSweep(plan, new DexTxn.Result() {
                         @Override public void onPosted(String txpowid) {
                             busy = false;
-                            toast("Sweep posted");
+                            setStage("Posted — waiting for a block to confirm your "
+                                    + (buy ? "buy" : "sell") + " of "
+                                    + PriceMath.fmt(plan.totalMinima) + " MINIMA");
+                            awaitingFill = new java.util.ArrayList<>(filling);
+                            awaitingBuy = buy;
+                            awaitingMinima = plan.totalMinima;
+                            awaitingPrice = SweepPlanner.avgPrice(plan);
                             repo.refresh();
                             // The resting balance is queued, NOT placed now: the sweep has
                             // already committed these funds, so an immediate `send` would
@@ -494,7 +542,10 @@ public class MainActivity extends AppCompatActivity {
                         }
                         @Override public void onFailed(String message) {
                             busy = false;
-                            toast("Sweep failed: " + message);
+                            filling.clear();
+                            setStage("Trade failed — " + message);
+                            toast("Trade failed: " + message);
+                            repaint();
                         }
                     });
                 })
@@ -508,6 +559,28 @@ public class MainActivity extends AppCompatActivity {
      * "posted" would write a permanent phantom trade (and, keyed by coinid with
      * CONFLICT_IGNORE, would block the real record if that coin later filled for real).
      */
+    /** Our own taker fill has no book-diff signature of its own (the coins we consumed just
+     *  vanish), so watch for exactly that and tell the user — otherwise the trade completes in
+     *  total silence and they have to go and check their balance to find out. */
+    private void reconcileTakerFill(Map<String, Order5> book) {
+        if (awaitingFill == null) return;
+        for (String coinid : awaitingFill) {
+            if (book.containsKey(coinid)) return;        // at least one leg still resting
+        }
+        java.util.List<String> done = awaitingFill;
+        awaitingFill = null;
+        filling.removeAll(done);
+        String msg = (awaitingBuy ? "Bought " : "Sold ") + PriceMath.fmt(awaitingMinima)
+                + " MINIMA @ " + PriceMath.fmtPrice(awaitingPrice);
+        setStage("✓ " + msg);
+        Notifier.alert(this, "Trade complete", msg);
+        for (String coinid : done) {
+            db.addMyTrade(coinid, System.currentTimeMillis(), chainBlock, awaitingPrice,
+                    awaitingMinima, awaitingBuy, false, "");
+        }
+        stats.invalidate();
+    }
+
     private void reconcileSweep(Map<String, Order5> book) {
         if (restQueueCoins == null) return;
         for (String coinid : restQueueCoins) {
@@ -601,6 +674,7 @@ public class MainActivity extends AppCompatActivity {
     public BigDecimal usdtSendable() { return usdtSendable; }
     public void setInputFocused(boolean f) { inputFocused = f; }
     public boolean isBusy() { return busy; }
+    public java.util.Set<String> filling() { return filling; }
 
     public void toast(String msg) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();

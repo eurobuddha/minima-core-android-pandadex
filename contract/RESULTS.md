@@ -216,3 +216,37 @@ remainder re-lock at the same address. Everything the solo-node proofs asserted,
 4. **A placed order's optimistic row could never resolve** (the row carried an empty order id
    the matcher could never match), so a perfectly good order sat on "PLACING…" and then
    falsely warned "NOT CONFIRMED — check funds".
+
+
+# SECOND MAINNET SESSION (2026-07-28, v0.1.2)
+
+Another **successful partial fill on mainnet** between the two phones — the maker's orders were
+visible on the taker's device and the fill settled with funds moving correctly. The covenant
+and the sweep construction continue to hold up in the real world.
+
+Defects exposed, all in the layer ABOVE the trade (no funds affected):
+
+1. **Orders were being recorded as trades (CRITICAL, data).** With only resting orders and no
+   trade yet, the ticker reported 24h high 0.052 / low 0.0485 / volume 900 MINIMA — the price
+   range and total size of the user's own order book. Root cause: `FillTape` treats "in the
+   previous book, absent from this one" as a full fill, and a scan returning an EMPTY or
+   PARTIAL array is not `truncated` — it parses fine and looks exactly like "everything
+   filled". Two such scans (~4s apart) minted a fill for every resting order at its own limit
+   price and full size. **The app's own unit test had encoded this as expected behaviour.**
+   Fixed with a sanity gate (never diff an emptied book or a mass-vanish; re-seed instead),
+   plus: no diffing without a chain height (the age guards are blind at block 0), re-seed
+   after a stale gap (the background service's previous book can be half an hour old), the
+   book cache no longer accepts an empty scan as last-good, unparseable coins now mark the
+   scan incomplete, and GTC renew/reprice now record their own spend so the replacement
+   landing a scan later can't read as a trade. The polluted tape is wiped once on upgrade.
+2. **The maker had no signal an order was live.** The optimistic row sat on "Confirming 1/3"
+   while the same order was listed below it as live and cancellable — shown twice, one copy
+   lying. Replaced with an honest two-state lifecycle (Sending… → LIVE on the book, then the
+   row retires) plus a system notification when the order hits the book. An order is live and
+   fillable the moment its id appears; counting further blocks reported doubt that did not
+   exist.
+3. **The taker had no signal at all.** Tapping to fill produced silence through coin
+   selection, signing, proof-of-work and up to a block of waiting. Added a running stage line
+   (Building transaction… → Posted, waiting for a block → ✓ Bought 150 MINIMA @ 0.05150),
+   FILLING markers on the ladder rows being taken, and a completion notification — the taker's
+   own fill produces no book-diff signature of its own, so it had to be detected explicitly.

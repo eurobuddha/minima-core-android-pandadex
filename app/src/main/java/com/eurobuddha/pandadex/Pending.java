@@ -11,13 +11,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Optimistic order lifecycle (the snappiness core): a placed/cancelled/edited order shows
- * INSTANTLY as a pending row and resolves against the live book — never a blank wait for a
- * block (ActivityLog pattern: "Confirming n/3"). Persisted so restarts keep the story.
+ * Optimistic order lifecycle: a placed/cancelled/edited order shows INSTANTLY as a pending
+ * row and disappears the moment the chain shows its result, handing the display over to the
+ * real order. Persisted so a restart keeps the story.
  *
- * Kinds: PLACE (resolves when orderId APPEARS), CANCEL (orderId's coin GONE), EDIT (orderId
- * reappears with the new want). Rows expire to FAILED display after TIMEOUT_MS without
- * resolution (funds are safe either way — the chain is the truth; this is presentation).
+ * Kinds: PLACE (done when orderId APPEARS on the book), CANCEL (its coin GONE), EDIT (old coin
+ * gone AND the orderId back). Funds are safe regardless — the chain is the truth and this is
+ * presentation — so nothing here ever implies money is at risk.
  */
 public final class Pending {
 
@@ -25,8 +25,11 @@ public final class Pending {
     public static final String CANCEL = "CANCEL";
     public static final String EDIT = "EDIT";
 
-    public static final int CONFIRM_BLOCKS = 3;
-    private static final long TIMEOUT_MS = 10 * 60_000;
+    /** After this long without the chain showing the result, say so plainly. */
+    private static final long SLOW_MS = 3 * 60_000;
+    /** Stop claiming anything is in progress after this long — the chain is the truth and the
+     *  book itself will show the real state. */
+    private static final long GIVEUP_MS = 20 * 60_000;
     private static final String PREFS = "pandadex_pending";
     private static final String KEY = "rows";
 
@@ -39,7 +42,6 @@ public final class Pending {
         public BigDecimal price;
         public long submitMs;
         public long submitBlock;
-        public long seenBlock;       // block the resolution was first observed (0 = unresolved)
 
         JSONObject json() throws Exception {
             JSONObject o = new JSONObject();
@@ -51,7 +53,6 @@ public final class Pending {
             o.put("price", price.toPlainString());
             o.put("submitMs", submitMs);
             o.put("submitBlock", submitBlock);
-            o.put("seenBlock", seenBlock);
             return o;
         }
 
@@ -65,21 +66,19 @@ public final class Pending {
             r.price = Util.dec(o.optString("price", "0"));
             r.submitMs = o.optLong("submitMs");
             r.submitBlock = o.optLong("submitBlock");
-            r.seenBlock = o.optLong("seenBlock");
             return r;
         }
 
-        public boolean confirmed(long chainBlock) {
-            return seenBlock > 0 && chainBlock - seenBlock >= CONFIRM_BLOCKS;
-        }
-
+        /**
+         * What the user sees while the outcome is unknown. Blocks are ~50s, so the honest
+         * message is simply that it's on its way — and if it takes unusually long, say THAT
+         * rather than implying the funds are in doubt.
+         */
         public String status(long chainBlock) {
-            if (seenBlock == 0) {
-                if (System.currentTimeMillis() - submitMs > TIMEOUT_MS) return "NOT CONFIRMED — check funds";
-                return kind.equals(PLACE) ? "PLACING…" : kind.equals(CANCEL) ? "CANCELLING…" : "EDITING…";
-            }
-            long n = Math.min(CONFIRM_BLOCKS, Math.max(1, chainBlock - seenBlock + 1));
-            return "Confirming " + n + "/" + CONFIRM_BLOCKS;
+            boolean slow = System.currentTimeMillis() - submitMs > SLOW_MS;
+            if (PLACE.equals(kind)) return slow ? "Still sending — waiting for a block…" : "Sending…";
+            if (CANCEL.equals(kind)) return slow ? "Still cancelling — waiting for a block…" : "Cancelling…";
+            return slow ? "Still updating — waiting for a block…" : "Updating price…";
         }
     }
 
@@ -101,27 +100,45 @@ public final class Pending {
         save();
     }
 
-    /** Resolve rows against the live book; drop rows once confirmed. Returns true if changed. */
-    public boolean resolve(java.util.Map<String, Order5> book, long chainBlock) {
+    /** Told when a row completes, so the host can announce it. */
+    public interface Listener {
+        /** The order is on the book — fillable and cancellable RIGHT NOW. */
+        void onLive(Row r);
+        /** A cancel or reprice took effect. */
+        void onSettled(Row r);
+    }
+
+    /**
+     * Resolve rows against the live book. A row exists ONLY while its outcome is unknown; the
+     * instant the chain shows the result the row is removed and the real order takes over the
+     * display, so an order is never shown twice.
+     *
+     * There is deliberately no block-depth countdown. An order is live the moment its id
+     * appears on the book — it can be filled and cancelled from that instant — so counting
+     * further blocks would report doubt that doesn't exist while the order was already
+     * tradeable. (The old "Confirming n/3" also stalled on 1/3 whenever the block poll paused,
+     * e.g. while an input had focus, which made a perfectly live order look broken.)
+     */
+    public boolean resolve(java.util.Map<String, Order5> book, long chainBlock, Listener l) {
         boolean changed = false;
         java.util.Set<String> liveOrderIds = new java.util.HashSet<>();
         for (Order5 o : book.values()) liveOrderIds.add(o.orderId);
         java.util.Iterator<Row> it = rows.iterator();
         while (it.hasNext()) {
             Row r = it.next();
-            boolean resolvedNow = false;
-            if (r.seenBlock == 0) {
-                if (PLACE.equals(r.kind) && liveOrderIds.contains(r.orderId)) resolvedNow = true;
-                if (CANCEL.equals(r.kind) && !book.containsKey(r.coinid)) resolvedNow = true;
-                if (EDIT.equals(r.kind) && !book.containsKey(r.coinid)
-                        && liveOrderIds.contains(r.orderId)) resolvedNow = true;
-                if (resolvedNow) {
-                    r.seenBlock = chainBlock;
-                    changed = true;
-                }
+            boolean done = false;
+            if (PLACE.equals(r.kind) && liveOrderIds.contains(r.orderId)) {
+                if (l != null) l.onLive(r);
+                done = true;
+            } else if (CANCEL.equals(r.kind) && !book.containsKey(r.coinid)) {
+                if (l != null) l.onSettled(r);
+                done = true;
+            } else if (EDIT.equals(r.kind) && !book.containsKey(r.coinid)
+                    && liveOrderIds.contains(r.orderId)) {
+                if (l != null) l.onSettled(r);
+                done = true;
             }
-            if (r.confirmed(chainBlock)
-                    || System.currentTimeMillis() - r.submitMs > 2 * TIMEOUT_MS) {
+            if (done || System.currentTimeMillis() - r.submitMs > GIVEUP_MS) {
                 it.remove();
                 changed = true;
             }

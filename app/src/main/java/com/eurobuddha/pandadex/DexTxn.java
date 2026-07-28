@@ -263,6 +263,10 @@ public final class DexTxn {
     /** Atomic in-place re-lock: GTC renew (newWant null) or edit (newWant set). ONE txn —
      *  the coin never leaves the book (the V5 owner branch; proven in Phase B chunk D). */
     public void relock(Order5 o, BigDecimal newWant, Result cb) {
+        // WE are spending this coin (renew or reprice). Record it before posting: otherwise
+        // the fill tape sees the old coin vanish and — if the replacement isn't in the same
+        // scan — books a phantom trade at the order's own price and full size.
+        if (db != null) db.noteCancelled(o.coinid);
         BigDecimal want = newWant == null ? o.wantAmt : newWant;
         String txid = "relock_" + System.nanoTime();
         List<String> steps = new ArrayList<>();

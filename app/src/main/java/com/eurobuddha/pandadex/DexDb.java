@@ -24,7 +24,7 @@ import java.util.List;
 public final class DexDb extends SQLiteOpenHelper {
 
     private static final String DB = "pandadex.db";
-    private static final int V = 2;
+    private static final int V = 3;
     private static final int TAPE_CAP = 8000;
 
     public DexDb(Context ctx) {
@@ -50,6 +50,16 @@ public final class DexDb extends SQLiteOpenHelper {
             db.execSQL("CREATE TABLE IF NOT EXISTS cancelled (coinid TEXT PRIMARY KEY, timems INTEGER)");
             db.execSQL("CREATE TABLE IF NOT EXISTS myorder (coinid TEXT PRIMARY KEY, orderid TEXT,"
                     + " json TEXT, timems INTEGER, block INTEGER)");
+        }
+        if (oldV < 3) {
+            // ONE-TIME PURGE of the market tape and personal trade log. Builds before v0.1.3
+            // could record a merely-placed ORDER as a trade when a book scan came back empty
+            // or partial, so the stored history contains fabricated prices and volumes that
+            // feed the ticker, the 24h stats and the candles. There is no way to tell the
+            // invented rows from the real ones after the fact, and a wrong price history is
+            // worse than a short one — so the tape restarts from genuinely observed fills.
+            db.execSQL("DELETE FROM tape");
+            db.execSQL("DELETE FROM mytrade");
         }
     }
 

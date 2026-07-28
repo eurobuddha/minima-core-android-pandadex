@@ -88,13 +88,52 @@ public class FillTapeTest {
     }
 
     @Test public void fullFillNeedsMissGrace() {
-        tape.ingest(book(sell("0xC1", "0xA1", "100", "0.575", 10)), false, 100, sink);
-        tape.ingest(book(), false, 101, sink);       // first absence — grace
+        // one order of several disappears — the rest of the book corroborates the read
+        Order5 keep1 = sell("0xK1", "0xB1", "10", "0.05", 10);
+        Order5 keep2 = sell("0xK2", "0xB2", "10", "0.05", 10);
+        Order5 gone = sell("0xC1", "0xA1", "100", "0.575", 10);
+        tape.ingest(book(gone, keep1, keep2), false, 100, sink);
+        tape.ingest(book(keep1, keep2), false, 101, sink);   // first absence — grace
         assertTrue(fills.isEmpty());
-        tape.ingest(book(), false, 102, sink);       // second absence — fill
+        tape.ingest(book(keep1, keep2), false, 102, sink);   // second absence — fill
         assertEquals(1, fills.size());
         assertEquals(Boolean.FALSE, fills.get(0)[5]);   // full
         assertEquals(0, new BigDecimal("100").compareTo((BigDecimal) fills.get(0)[2]));
+    }
+
+    // ---- the phantom-trade bug: a bad scan must never mint trades ----
+
+    @Test public void emptyScanNeverProducesFills() {
+        // THE 0.1.2 BUG: an empty (but not 'truncated') scan made every resting order look
+        // filled at its own price and size, which is how a book of orders became a fake
+        // 24h high/low/volume on the ticker.
+        tape.ingest(book(sell("0xC1", "0xA1", "300", "15.6", 10),
+                         sell("0xC2", "0xA2", "300", "14.55", 10),
+                         sell("0xC3", "0xA3", "300", "15.0", 10)), false, 100, sink);
+        tape.ingest(book(), false, 101, sink);
+        tape.ingest(book(), false, 102, sink);
+        tape.ingest(book(), false, 103, sink);
+        assertTrue("an empty scan must never mint trades", fills.isEmpty());
+    }
+
+    @Test public void massDisappearanceNeverProducesFills() {
+        Order5 a = sell("0xC1", "0xA1", "300", "15.6", 10);
+        Order5 b = sell("0xC2", "0xA2", "300", "14.55", 10);
+        Order5 c = sell("0xC3", "0xA3", "300", "15.0", 10);
+        Order5 d = sell("0xC4", "0xA4", "300", "15.2", 10);
+        tape.ingest(book(a, b, c, d), false, 100, sink);
+        tape.ingest(book(a), false, 101, sink);      // three of four vanish at once
+        tape.ingest(book(a), false, 102, sink);
+        assertTrue("a mass vanish is a bad read, not a wave of trades", fills.isEmpty());
+    }
+
+    @Test public void noChainHeightNeverProducesFills() {
+        // with chainBlock 0 the age guards are blind, so no fill may be booked
+        Order5 keep = sell("0xK1", "0xB1", "10", "0.05", 10);
+        tape.ingest(book(sell("0xC1", "0xA1", "100", "0.575", 10), keep), false, 100, sink);
+        tape.ingest(book(keep), false, 0, sink);
+        tape.ingest(book(keep), false, 0, sink);
+        assertTrue(fills.isEmpty());
     }
 
     @Test public void reappearanceCancelsMissCounter() {
@@ -122,11 +161,13 @@ public class FillTapeTest {
     }
 
     @Test public void truncatedScanNeverDiffs() {
-        tape.ingest(book(sell("0xC1", "0xA1", "100", "0.575", 10)), false, 100, sink);
+        Order5 keep = sell("0xK1", "0xB1", "10", "0.05", 10);
+        Order5 gone = sell("0xC1", "0xA1", "100", "0.575", 10);
+        tape.ingest(book(gone, keep), false, 100, sink);
         tape.ingest(book(), true, 101, sink);        // truncated — ignored entirely
-        tape.ingest(book(sell("0xC1", "0xA1", "100", "0.575", 10)), false, 102, sink);
-        tape.ingest(book(), false, 103, sink);
-        tape.ingest(book(), false, 104, sink);
+        tape.ingest(book(gone, keep), false, 102, sink);
+        tape.ingest(book(keep), false, 103, sink);   // real disappearance, book corroborates
+        tape.ingest(book(keep), false, 104, sink);
         assertEquals(1, fills.size());               // only the real disappearance counts
     }
 }

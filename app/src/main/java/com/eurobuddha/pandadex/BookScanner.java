@@ -10,10 +10,11 @@ import java.util.Map;
 /**
  * The bounded V5 book scan — TWO commands total (Limit fired ten):
  *
- *   1. coins simplestate:true order:desc depth:1700 address:<V5>   — the book
- *   2. coins relevant:true address:<V5>                             — ownership belt
+ *   1. coins simplestate:true order:desc depth:<SCAN_DEPTH> address:<V5>   — the book
+ *   2. coins relevant:true address:<V5>                                    — ownership belt
  *
- * depth 1700 > EXPIRY 1500 means the scan is COMPLETE by construction: GTC renewal keeps
+ * SCAN_DEPTH sits under the node's ~1024-block visibility trim and above EXPIRY_BLOCKS, so
+ * the scan sees every live order: GTC renewal keeps
  * every live order coin younger than expiry, and anything older is dead (expiry-sweepable)
  * anyway. Bounded because the upstream node's 256KB Binder overflow is an uncatchable
  * app-kill (HARD upstream-node constraint).
@@ -48,7 +49,13 @@ public final class BookScanner {
                     JSONObject c = arr.optJSONObject(i);
                     if (c == null) continue;
                     Order5 o = Order5.from(c);
-                    if (o != null && !found.containsKey(o.coinid)) {
+                    if (o == null) {
+                        // a coin at the book address we can't read = an incomplete view;
+                        // callers must not treat the missing entry as a departed order
+                        truncated[0] = true;
+                        continue;
+                    }
+                    if (!found.containsKey(o.coinid)) {
                         found.put(o.coinid, o);
                         raw.add(c.toString());
                     }

@@ -31,9 +31,20 @@ public final class FillTape {
     }
 
     private static final int MISS_GRACE = 2;
+    /** Above this many simultaneous disappearances (AND more than half the book), the scan is
+     *  treated as unreliable rather than as a wave of trades. Two orders filling in one block
+     *  is ordinary; the whole book vanishing at once is a bad read. */
+    private static final int MAX_VANISH_PER_SCAN = 2;
     /** Below the node's visibility ceiling: past this age a coin leaves the searchable tree,
      *  so its disappearance says nothing about whether it traded. */
     private static final int VANISH_AGE = DexContract.HORIZON_BLOCKS - 80;
+
+    /** A diff is only meaningful between two CONSECUTIVE observations. The background
+     *  service stands down entirely while the Activity is up, so its previous book can be
+     *  half an hour stale — diffing across that gap invents fills for everything that
+     *  legitimately traded, expired or was renewed meanwhile. Re-seed instead. */
+    private static final long STALE_PREV_MS = 4 * 60_000;
+    private long prevAtMs = 0;
 
     private Map<String, Order5> prev = null;            // coinid -> order (last good scan)
     private final Map<String, Integer> missing = new java.util.HashMap<>();
@@ -54,8 +65,37 @@ public final class FillTape {
 
     public void ingest(Map<String, Order5> book, boolean truncated, long chainBlock, Sink sink) {
         if (truncated) return;                           // never diff a failed scan
-        if (prev == null) {                              // first sighting: seed silently
+        if (chainBlock <= 0) return;                     // no chain height = age guards are blind
+        long now = System.currentTimeMillis();
+        boolean stale = prevAtMs > 0 && now - prevAtMs > STALE_PREV_MS;
+        if (prev == null || stale) {                     // first sighting / stale gap: seed silently
             prev = new java.util.HashMap<>(book);
+            prevAtMs = now;
+            missing.clear();
+            return;
+        }
+
+        // ---- SANITY GATE ------------------------------------------------------------
+        // The tape is this app's ONLY source of price truth (ticker, 24h stats, candles,
+        // P&L), so a false entry is worse than a missing one. A disappearance is only
+        // evidence of a trade if the REST of the book was seen intact in the same scan —
+        // otherwise we are looking at a bad scan, not a filled order.
+        //
+        // `truncated` does not catch this: a scan that returns an empty or partial JSON
+        // array parses perfectly and looks like "the book emptied". That is how a session
+        // with nothing but resting orders ended up reporting a 24h high/low/volume made
+        // entirely out of those orders' own prices and sizes.
+        int vanished = 0;
+        for (String coinid : prev.keySet()) if (!book.containsKey(coinid)) vanished++;
+        boolean bookEmptied = book.isEmpty() && !prev.isEmpty();
+        boolean massVanish = vanished > MAX_VANISH_PER_SCAN
+                && vanished * 2 > prev.size();           // over half the book gone at once
+        if (bookEmptied || massVanish) {
+            // Re-seed and stay silent. A real mass-fill re-observes as individual
+            // disappearances over subsequent scans once the book reads consistently again.
+            prev = new java.util.HashMap<>(book);
+            prevAtMs = now;
+            missing.clear();
             return;
         }
 
@@ -110,6 +150,7 @@ public final class FillTape {
             if (gone != null) next.put(id, gone);
         }
         prev = next;
+        prevAtMs = now;
     }
 
     /** Order identity for successor matching: the maker-chosen id is not trustworthy alone,

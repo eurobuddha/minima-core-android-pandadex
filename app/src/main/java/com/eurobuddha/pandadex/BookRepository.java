@@ -94,11 +94,18 @@ public final class BookRepository {
         lastScanMs = now;
         BookScanner.scan(node, (orders, truncated, rawJsons) -> {
             scanning = false;
-            if (!truncated) {
+            // An EMPTY scan is not proof of an empty book — a partial or momentarily-empty
+            // reply parses perfectly and is indistinguishable from "everything traded".
+            // Keep the last-good view rather than blanking the UI and the cache on one bad read.
+            boolean suspectEmpty = orders.isEmpty() && !cached.isEmpty();
+            if (!truncated && !suspectEmpty) {
                 cached = orders;
                 haveLive = true;
                 if (sink != null) tape.ingest(orders, false, chainBlock, sink);
                 persist(orders, rawJsons);
+            } else if (!truncated) {
+                // still feed the tape so its own sanity gate observes and re-seeds
+                if (sink != null) tape.ingest(orders, false, chainBlock, sink);
             }
             // truncated → keep last-good cache (Limit lesson); still notify so views show "syncing"
             for (Listener l : new ArrayList<>(listeners)) l.onBook(cached, truncated && !haveLive);
