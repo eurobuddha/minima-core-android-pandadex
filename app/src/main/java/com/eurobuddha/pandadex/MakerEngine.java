@@ -32,14 +32,12 @@ public final class MakerEngine {
         void onMakerState(String message);
     }
 
-    private final MainActivity act;
     private final MakerConfig cfg;
     private final DexTxn txn;
     private long lastCycleMs = 0;
     private boolean working = false;
 
-    public MakerEngine(MainActivity act, MakerConfig cfg, DexTxn txn) {
-        this.act = act;
+    public MakerEngine(MakerConfig cfg, DexTxn txn) {
         this.cfg = cfg;
         this.txn = txn;
     }
@@ -83,10 +81,16 @@ public final class MakerEngine {
             if (o != null) liveBySlot.put(e.getKey(), o);
         }
 
-        // a rung that has been partly taken is a working position — leave it be
+        // A rung that has been partly taken is a working position — leave it be.
+        // This MUST compare against the size we posted: an order cannot tell you it shrank,
+        // only what it holds now. Comparing `locked` to `minimaAmount()` (as this once did)
+        // is trivially equal for sells and never equal for buys, which silently froze the
+        // entire bid side of the ladder.
         Set<String> partial = new HashSet<>();
-        for (Order5 o : liveBySlot.values()) {
-            if (o.locked.compareTo(o.minimaAmount()) != 0) partial.add(o.coinid);
+        for (Map.Entry<String, Order5> e : liveBySlot.entrySet()) {
+            BigDecimal posted = cfg.postedSizeFor(e.getKey());
+            Order5 o = e.getValue();
+            if (posted != null && o.minimaAmount().compareTo(posted) < 0) partial.add(o.coinid);
         }
 
         List<MakerLadder.Action> actions = MakerLadder.reconcile(desired, liveBySlot,
@@ -94,39 +98,63 @@ public final class MakerEngine {
         if (actions.isEmpty()) return;
 
         lastCycleMs = now;
-        cfg.lastActedMid = mid;
-        cfg.save();
         if (l != null) l.onMakerState("Maker: " + actions.size() + " adjustment"
                 + (actions.size() == 1 ? "" : "s") + " at mid " + PriceMath.fmtPrice(mid));
-        run(actions, 0, l);
+        // lastActedMid is committed in run()'s terminal branch, and only if something actually
+        // posted — recording it up front meant a cycle where every action failed still counted
+        // as "acted at this mid", suppressing retries until the market moved again.
+        run(actions, 0, mid, 0, l);
     }
 
-    /** Execute one action at a time — the node runs a single command at a time and each of
-     *  these grinds proof-of-work. */
-    private void run(List<MakerLadder.Action> actions, int idx, Listener l) {
+    /**
+     * Execute one action at a time — the node runs a single command at a time and each of these
+     * grinds proof-of-work.
+     *
+     * Every path advances EXACTLY ONCE. That is not a stylistic preference: DexTxn's validation
+     * failures both invoke the callback AND return a null order id, so a caller that reacts to
+     * both signals starts two concurrent chains down the same list. Each subsequent action then
+     * runs twice, and a duplicated CREATE posts a second on-chain order whose id is immediately
+     * overwritten in the slot map — leaving real funds committed to an order withdraw can never
+     * find. The `advanced` latch makes the double signal harmless.
+     */
+    private void run(List<MakerLadder.Action> actions, int idx, BigDecimal mid, int posted,
+                     Listener l) {
         if (idx >= actions.size()) {
             working = false;
-            if (l != null) l.onMakerState("Maker: ladder up to date");
+            if (posted > 0) {
+                cfg.lastActedMid = mid;
+                cfg.save();
+            }
+            if (l != null) l.onMakerState(posted > 0
+                    ? "Maker: ladder up to date"
+                    : "Maker: no adjustment could be posted — will retry");
             return;
         }
         working = true;
         MakerLadder.Action a = actions.get(idx);
-        DexTxn.Result next = new DexTxn.Result() {
-            @Override public void onPosted(String txpowid) { run(actions, idx + 1, l); }
+        final boolean[] advanced = {false};
+        DexTxn.Result once = new DexTxn.Result() {
+            @Override public void onPosted(String txpowid) {
+                if (advanced[0]) return;
+                advanced[0] = true;
+                run(actions, idx + 1, mid, posted + 1, l);
+            }
             @Override public void onFailed(String message) {
+                if (advanced[0]) return;
+                advanced[0] = true;
                 // one rung failing must not stall the rest — the next cycle retries it
                 if (l != null) l.onMakerState("Maker: " + a.kind + " failed — " + message);
-                run(actions, idx + 1, l);
+                run(actions, idx + 1, mid, posted, l);
             }
         };
 
         switch (a.kind) {
             case CREATE: {
                 String orderId = txn.createOrder(!a.slot.sell, a.slot.sizeMinima, a.slot.price,
-                        true, BigDecimal.ONE, next);
-                if (orderId == null) { run(actions, idx + 1, l); return; }
-                cfg.slotOrderIds.put(a.slot.id, orderId);
-                cfg.save();
+                        true, minRemainderFor(a.slot), once);
+                // A null id means createOrder rejected it synchronously — and it already called
+                // onFailed, which advanced us. Only record the slot when it really was accepted.
+                if (orderId != null) cfg.rememberSlot(a.slot.id, orderId, a.slot.sizeMinima);
                 break;
             }
             case RELOCK: {
@@ -137,32 +165,48 @@ public final class MakerEngine {
                         ? PriceMath.up(o.locked.multiply(a.slot.price, PriceMath.MC), PriceMath.USDT_DP)
                         : PriceMath.down(o.locked.divide(a.slot.price, PriceMath.MINIMA_DP,
                                 java.math.RoundingMode.DOWN), PriceMath.MINIMA_DP);
-                txn.relock(o, newWant, next);
+                txn.relock(o, newWant, once);
                 break;
             }
             case CANCEL: {
-                forgetSlotFor(a.order);
-                txn.cancel(a.order, next);
+                cfg.forgetSlotByOrderId(a.order.orderId);
+                txn.cancel(a.order, once);
                 break;
             }
         }
+    }
+
+    /**
+     * The anti-dust floor to post with a rung, scaled to its size. A flat 1 MINIMA was rejected
+     * outright for any rung at or below that size ("minimum remainder is larger than the order"),
+     * which is a realistic setting on a small ladder.
+     */
+    static BigDecimal minRemainderFor(MakerLadder.Slot slot) {
+        BigDecimal fivePct = slot.sizeMinima.multiply(new BigDecimal("0.05"), PriceMath.MC);
+        return PriceMath.down(fivePct.max(PriceMath.MIN_ORDER_MINIMA), PriceMath.MINIMA_DP);
     }
 
     /** Cancel every rung we still have on the book (withdraw / disarm). */
     public void cancelAllLadder(List<Order5> live, int idx, Listener l) {
         if (idx >= live.size()) {
             working = false;
-            cfg.slotOrderIds.clear();
-            cfg.save();
+            cfg.clearSlots();
             if (l != null) l.onMakerState("Maker: ladder withdrawn");
             return;
         }
         working = true;
         Order5 o = live.get(idx);
-        forgetSlotFor(o);
+        cfg.forgetSlotByOrderId(o.orderId);
+        final boolean[] advanced = {false};
         txn.cancel(o, new DexTxn.Result() {
-            @Override public void onPosted(String t) { cancelAllLadder(live, idx + 1, l); }
-            @Override public void onFailed(String m) { cancelAllLadder(live, idx + 1, l); }
+            @Override public void onPosted(String t) {
+                if (advanced[0]) return; advanced[0] = true;
+                cancelAllLadder(live, idx + 1, l);
+            }
+            @Override public void onFailed(String m) {
+                if (advanced[0]) return; advanced[0] = true;
+                cancelAllLadder(live, idx + 1, l);
+            }
         });
     }
 
@@ -175,9 +219,4 @@ public final class MakerEngine {
         return out;
     }
 
-    private void forgetSlotFor(Order5 o) {
-        if (o == null) return;
-        cfg.slotOrderIds.values().remove(o.orderId);
-        cfg.save();
-    }
 }

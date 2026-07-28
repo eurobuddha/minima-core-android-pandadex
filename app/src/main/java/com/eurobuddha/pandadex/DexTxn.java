@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *  - order coin(s) are inputs 0..k-1; payments are outputs 0..k-1; the single partial (if
  *    any) is the LAST order input with its remainder at output k (covenant shape).
  */
-public final class DexTxn {
+public class DexTxn {   // non-final so tests can stub the three order actions
 
     public interface Result {
         void onPosted(String txpowid);

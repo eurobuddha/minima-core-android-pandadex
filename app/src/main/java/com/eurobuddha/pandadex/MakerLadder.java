@@ -149,21 +149,24 @@ public final class MakerLadder {
     public static List<Action> reconcile(List<Slot> desired, Map<String, Order5> liveBySlot,
                                          BigDecimal repricePct, Set<String> partiallyFilled,
                                          int maxActions) {
-        List<Action> actions = new ArrayList<>();
+        // Collected by KIND so the cap below drops the least urgent work first.
+        List<Action> relocks = new ArrayList<>();
+        List<Action> creates = new ArrayList<>();
+        List<Action> cancels = new ArrayList<>();
         Map<String, Slot> want = new HashMap<>();
         for (Slot s : desired) want.put(s.id, s);
 
         // rungs we no longer want
         for (Map.Entry<String, Order5> e : liveBySlot.entrySet()) {
             if (!want.containsKey(e.getKey()) && e.getValue() != null) {
-                actions.add(new Action(Kind.CANCEL, null, e.getValue(), "level removed"));
+                cancels.add(new Action(Kind.CANCEL, null, e.getValue(), "level removed"));
             }
         }
 
         for (Slot s : desired) {
             Order5 live = liveBySlot.get(s.id);
             if (live == null) {
-                actions.add(new Action(Kind.CREATE, s, null, "level missing"));
+                creates.add(new Action(Kind.CREATE, s, null, "level missing"));
                 continue;
             }
             if (partiallyFilled != null && partiallyFilled.contains(live.coinid)) {
@@ -174,10 +177,19 @@ public final class MakerLadder {
             BigDecimal movePct = s.price.subtract(livePrice).abs()
                     .divide(livePrice, PriceMath.MC).multiply(new BigDecimal(100));
             if (movePct.compareTo(repricePct) >= 0) {
-                actions.add(new Action(Kind.RELOCK, s, live,
+                relocks.add(new Action(Kind.RELOCK, s, live,
                         "moved " + movePct.setScale(3, RoundingMode.HALF_UP) + "%"));
             }
         }
+
+        // Priority when the cycle budget is tight: fix MISPRICED quotes first (they are the
+        // live risk — someone can trade against them right now), then restore MISSING rungs,
+        // and only then tidy up rungs we no longer want. Appending cancels first would let a
+        // handful of them starve every create, tearing the ladder down without rebuilding it.
+        List<Action> actions = new ArrayList<>();
+        actions.addAll(relocks);
+        actions.addAll(creates);
+        actions.addAll(cancels);
 
         if (maxActions > 0 && actions.size() > maxActions) {
             return new ArrayList<>(actions.subList(0, maxActions));

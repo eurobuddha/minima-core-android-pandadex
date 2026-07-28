@@ -122,7 +122,7 @@ public class MainActivity extends AppCompatActivity {
         repo = new BookRepository(node, db);
         txn = new DexTxn(node, db);
         processor = new DexProcessor(this, txn);
-        maker = new MakerEngine(this, makerCfg, txn);
+        maker = new MakerEngine(makerCfg, txn);
         repo.setFillSink(this::onFillObserved);
         repo.subscribe((orders, syncing) -> {
             pending.resolve(orders, chainBlock, new Pending.Listener() {
@@ -766,15 +766,23 @@ public class MainActivity extends AppCompatActivity {
 
     /** Disarm and take the ladder off the book. */
     public void disarmMaker() {
-        makerCfg.armed = false;
-        makerCfg.save();
-        repaint();
-        withdrawLadder();
+        withdrawLadder();   // disarms, then takes the ladder off the book
     }
 
     /** Cancel every order the ladder currently owns. */
     public void withdrawLadder() {
         if (maker == null || repo == null) return;
+        // Disarm FIRST so no new cycle starts behind us, then refuse to overlap an in-flight
+        // one. Two chains issuing transactions at once breaks the sequential guarantee the
+        // engine is built on, and a reprice completing after we cleared the slot map would
+        // leave a live order the ladder no longer knows about.
+        makerCfg.armed = false;
+        makerCfg.save();
+        repaint();
+        if (maker.isWorking()) {
+            toast("Finishing the current adjustment — the ladder comes off right after");
+            return;
+        }
         java.util.List<Order5> live = maker.liveLadderOrders(book(), keys());
         if (live.isEmpty()) { toast("No ladder orders on the book"); return; }
         setStage("Withdrawing " + live.size() + " ladder order" + (live.size() == 1 ? "" : "s") + "…");

@@ -28,6 +28,7 @@ public final class MakerConfig {
     private static final String K_ARMED = "armed";
     private static final String K_SLOTS = "slots";
     private static final String K_LASTMID = "lastmid";
+    private static final String K_SIZES = "slotsizes";
 
     private final SharedPreferences prefs;
 
@@ -37,11 +38,54 @@ public final class MakerConfig {
     public boolean armed = false;
     /** slot id ("B1"/"A2"…) → the order id we placed for it. */
     public final Map<String, String> slotOrderIds = new HashMap<>();
+    /** slot id → the MINIMA size we POSTED there. Needed to recognise a partial fill: an
+     *  order's own fields can't tell you it shrank, only what it holds now. */
+    public final Map<String, String> slotSizes = new HashMap<>();
     public BigDecimal lastActedMid = null;
 
     public MakerConfig(Context ctx) {
         prefs = ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         load();
+    }
+
+    /** In-memory only, for unit tests — {@link #save()} is a no-op without prefs. */
+    MakerConfig() {
+        prefs = null;
+        defaults();
+    }
+
+    /** Record what we posted for a slot: both the order id and the size, together. */
+    public void rememberSlot(String slotId, String orderId, BigDecimal sizeMinima) {
+        slotOrderIds.put(slotId, orderId);
+        slotSizes.put(slotId, sizeMinima.toPlainString());
+        save();
+    }
+
+    /** Drop a slot by the order id we placed for it, keeping both maps in step. */
+    public void forgetSlotByOrderId(String orderId) {
+        if (orderId == null) return;
+        String slot = null;
+        for (Map.Entry<String, String> e : slotOrderIds.entrySet()) {
+            if (orderId.equals(e.getValue())) { slot = e.getKey(); break; }
+        }
+        if (slot == null) return;
+        slotOrderIds.remove(slot);
+        slotSizes.remove(slot);
+        save();
+    }
+
+    public void clearSlots() {
+        slotOrderIds.clear();
+        slotSizes.clear();
+        save();
+    }
+
+    /** The size we posted for this slot, or null if we never did. */
+    public BigDecimal postedSizeFor(String slotId) {
+        String v = slotSizes.get(slotId);
+        if (v == null || v.isEmpty()) return null;
+        BigDecimal b = Util.dec(v);
+        return b.signum() > 0 ? b : null;
     }
 
     private void load() {
@@ -66,6 +110,14 @@ public final class MakerConfig {
                 slotOrderIds.put(k, o.optString(k, ""));
             }
         } catch (Exception ignore) {}
+        slotSizes.clear();
+        try {
+            JSONObject o = new JSONObject(prefs.getString(K_SIZES, "{}"));
+            for (java.util.Iterator<String> it = o.keys(); it.hasNext(); ) {
+                String k = it.next();
+                slotSizes.put(k, o.optString(k, ""));
+            }
+        } catch (Exception ignore) {}
         String lm = prefs.getString(K_LASTMID, "");
         lastActedMid = lm.isEmpty() ? null : Util.dec(lm);
     }
@@ -83,6 +135,7 @@ public final class MakerConfig {
     }
 
     public void save() {
+        if (prefs == null) return;   // test instance
         JSONArray a = new JSONArray();
         try {
             for (MakerLadder.Level l : levels) {
@@ -93,8 +146,10 @@ public final class MakerConfig {
             }
         } catch (Exception ignore) {}
         JSONObject slots = new JSONObject();
+        JSONObject sizes = new JSONObject();
         try {
             for (Map.Entry<String, String> e : slotOrderIds.entrySet()) slots.put(e.getKey(), e.getValue());
+            for (Map.Entry<String, String> e : slotSizes.entrySet()) sizes.put(e.getKey(), e.getValue());
         } catch (Exception ignore) {}
         prefs.edit()
                 .putString(K_LEVELS, a.toString())
@@ -102,6 +157,7 @@ public final class MakerConfig {
                 .putString(K_REPRICE, repricePct.toPlainString())
                 .putBoolean(K_ARMED, armed)
                 .putString(K_SLOTS, slots.toString())
+                .putString(K_SIZES, sizes.toString())
                 .putString(K_LASTMID, lastActedMid == null ? "" : lastActedMid.toPlainString())
                 .apply();
     }

@@ -172,6 +172,26 @@ public class MakerLadderTest {
         assertEquals("proof-of-work per action means cycles must be capped", 4, acts.size());
     }
 
+    @Test public void mispricedRungsAreFixedBeforeTidyingUp() {
+        // With a tight action budget, cancels must not starve creates/relocks — that would tear
+        // the ladder down without rebuilding it, leaving the maker thin for minutes.
+        List<MakerLadder.Slot> want = MakerLadder.desired(MID, cfg(2, "0", "0.1"), BigDecimal.ONE);
+        Map<String, Order5> live = new HashMap<>();
+        // four rungs we no longer want
+        for (int i = 3; i <= 6; i++) live.put("A" + i, order("0xOld" + i, "0.09", "100"));
+        // and one that is badly mispriced
+        live.put("A1", order("0xC1", "0.070000", "100"));
+        List<MakerLadder.Action> acts = MakerLadder.reconcile(want, live,
+                new BigDecimal("0.1"), new HashSet<>(), 2);
+        assertEquals(2, acts.size());
+        assertEquals("the mispriced rung is the live risk — fix it first",
+                MakerLadder.Kind.RELOCK, acts.get(0).kind);
+        for (MakerLadder.Action a : acts) {
+            assertFalse("cancels must not consume the whole budget",
+                    a.kind == MakerLadder.Kind.CANCEL);
+        }
+    }
+
     @Test public void repricingWaitsForTheMidToActuallyMove() {
         assertFalse(MakerLadder.worthRepricing(new BigDecimal("0.05"),
                 new BigDecimal("0.050004"), new BigDecimal("0.1")));
