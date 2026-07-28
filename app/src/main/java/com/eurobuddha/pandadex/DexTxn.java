@@ -69,22 +69,22 @@ public final class DexTxn {
      * Place an order. buy=true locks mxUSDT wanting MINIMA; sell locks MINIMA wanting mxUSDT.
      * One `send` — appears in the book next block; the caller adds the optimistic row.
      */
-    public void createOrder(boolean buy, BigDecimal minimaAmount, BigDecimal price,
-                            boolean gtc, BigDecimal minRemMinima, Result cb) {
+    public String createOrder(boolean buy, BigDecimal minimaAmount, BigDecimal price,
+                              boolean gtc, BigDecimal minRemMinima, Result cb) {
         if (myPubkey.isEmpty() || myHexAddr.isEmpty()) {
             cb.onFailed("Still reading your wallet identity — try again in a moment");
-            return;
+            return null;
         }
         if (minimaAmount.compareTo(PriceMath.MIN_ORDER_MINIMA) < 0) {
             cb.onFailed("Below minimum order (" + PriceMath.MIN_ORDER_MINIMA + " MINIMA)");
-            return;
+            return null;
         }
         BigDecimal usdt = PriceMath.up(minimaAmount.multiply(price, PriceMath.MC), PriceMath.USDT_DP);
         // The covenant cross-multiplies amounts; MiniNumber rejects values over 1e9 outright,
         // and the overflow argument for the products assumes both legs stay inside that bound.
         if (minimaAmount.compareTo(PriceMath.MAX_ORDER) > 0 || usdt.compareTo(PriceMath.MAX_ORDER) > 0) {
             cb.onFailed("Order too large (max " + PriceMath.MAX_ORDER.toPlainString() + " per leg)");
-            return;
+            return null;
         }
         BigDecimal lock = buy ? usdt : PriceMath.down(minimaAmount, PriceMath.MINIMA_DP);
         BigDecimal want = buy ? PriceMath.down(minimaAmount, PriceMath.MINIMA_DP) : usdt;
@@ -97,7 +97,7 @@ public final class DexTxn {
                 : PriceMath.down(minRemMinima, PriceMath.MINIMA_DP);
         if (minRem.compareTo(lock) > 0) {
             cb.onFailed("Minimum remainder is larger than the order itself");
-            return;
+            return null;
         }
         String orderId = newOrderId();
         String state = "{\"0\":\"" + myPubkey + "\",\"1\":\"" + myHexAddr + "\","
@@ -118,6 +118,9 @@ public final class DexTxn {
             }
             @Override public void onError(String message) { cb.onFailed(message); }
         });
+        // The caller needs this to match its optimistic row against the live book — without
+        // it the row can never resolve and eventually cries "NOT CONFIRMED" on a good order.
+        return orderId;
     }
 
     // ------------------------------------------------------------------ sweep fill

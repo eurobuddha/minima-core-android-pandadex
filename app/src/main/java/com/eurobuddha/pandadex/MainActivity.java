@@ -115,7 +115,7 @@ public class MainActivity extends AppCompatActivity {
                 processor.process(orders, keySet.keys(), chainBlock, new DexProcessor.Listener() {
                     @Override public void onRenewed(Order5 o) {}
                     @Override public void onRenewFailed(Order5 o, String why) {
-                        toast("Renewal failed for order @ " + PriceMath.fmt(o.price()) + " — will retry");
+                        toast("Renewal failed for order @ " + PriceMath.fmtPrice(o.price()) + " — will retry");
                     }
                 });
             }
@@ -136,7 +136,16 @@ public class MainActivity extends AppCompatActivity {
         ContextCompat.registerReceiver(this, notifyReceiver,
                 new IntentFilter(MinimaAPIMessages.MINIMA_API_NOTIFY), ContextCompat.RECEIVER_EXPORTED);
 
-        repaint();
+        // Reveal exactly one tab. MUST run — the tab views are added GONE above.
+        if (savedInstanceState != null) tab = savedInstanceState.getInt(KEY_TAB, TAB_TRADE);
+        selectTab(tab);
+    }
+
+    private static final String KEY_TAB = "tab";
+
+    @Override protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        out.putInt(KEY_TAB, tab);
     }
 
     private void onPaired() {
@@ -239,16 +248,19 @@ public class MainActivity extends AppCompatActivity {
         root.addView(scroller, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        // All five tabs share ONE FrameLayout, so exactly one may ever be visible. They are
+        // added GONE and selectTab() (called at the end of onCreate) reveals the current one.
+        // Without that call every tab painted stacked on top of the others — the chart and
+        // assets text printed straight through the order panel while the user was typing.
         trade = new TradeView(this);
         chartTab = new ChartTab(this);
         tapeTab = new TapeTab(this);
         ordersTab = new OrdersTab(this);
         assetsTab = new AssetsTab(this);
-        content.addView(trade);
-        content.addView(chartTab);
-        content.addView(tapeTab);
-        content.addView(ordersTab);
-        content.addView(assetsTab);
+        for (android.view.View v : new android.view.View[]{trade, chartTab, tapeTab, ordersTab, assetsTab}) {
+            v.setVisibility(android.view.View.GONE);
+            content.addView(v);
+        }
 
         tabBar = new LinearLayout(this);
         tabBar.setBackgroundColor(Design.SURFACE());
@@ -412,10 +424,8 @@ public class MainActivity extends AppCompatActivity {
         row.submitMs = System.currentTimeMillis();
         row.submitBlock = chainBlock;
         row.orderId = "";
-        pending.add(row);
         busy = true;
-        repaint();
-        txn.createOrder(buy, minima, price, gtc, minRem, new DexTxn.Result() {
+        String orderId = txn.createOrder(buy, minima, price, gtc, minRem, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) {
                 busy = false;
                 toast("Order posted");
@@ -428,6 +438,14 @@ public class MainActivity extends AppCompatActivity {
                 repaint();
             }
         });
+        // Only show the optimistic row once the send was actually accepted for posting, and
+        // carry the REAL order id so Pending.resolve can match it against the live book —
+        // an empty id can never match, leaving a good order stuck on "PLACING…" and then
+        // falsely warning "NOT CONFIRMED — check funds".
+        if (orderId == null) { busy = false; repaint(); return; }
+        row.orderId = orderId;
+        pending.add(row);
+        repaint();
     }
 
     /**
@@ -446,11 +464,11 @@ public class MainActivity extends AppCompatActivity {
           .append("  ·  ").append(PriceMath.fmt(plan.totalUsdt)).append(" mxUSDT\n");
         for (SweepPlanner.Take t : plan.takes) {
             sb.append("  • ").append(PriceMath.fmt(t.minima)).append(" @ ")
-              .append(PriceMath.fmt(t.order.price())).append(t.partial ? "  (partial)" : "").append("\n");
+              .append(PriceMath.fmtPrice(t.order.price())).append(t.partial ? "  (partial)" : "").append("\n");
         }
         if (rest.signum() > 0) {
             sb.append("\nResting ").append(PriceMath.fmt(rest)).append(" MINIMA @ ")
-              .append(PriceMath.fmt(price)).append(" as a limit order");
+              .append(PriceMath.fmtPrice(price)).append(" as a limit order");
         }
         new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle(buy ? "Confirm buy" : "Confirm sell")
@@ -567,7 +585,7 @@ public class MainActivity extends AppCompatActivity {
             db.addMyTrade(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                     !order.sell, true, order.orderId);
             toast((partial ? "Partial fill: " : "Filled: ") + PriceMath.fmt(size) + " MINIMA @ "
-                    + PriceMath.fmt(price));
+                    + PriceMath.fmtPrice(price));
             Notifier.fill(this, order.sell, size, price, partial);
         }
         if (isNew) stats.invalidate();

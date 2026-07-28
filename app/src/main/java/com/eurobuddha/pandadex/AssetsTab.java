@@ -73,7 +73,7 @@ public final class AssetsTab extends LinearLayout {
             BigDecimal value = totalU.add(totalM.multiply(mid, PriceMath.MC));
             head.addView(t("≈ " + PriceMath.fmt(value.setScale(4, RoundingMode.HALF_UP)) + " mxUSDT",
                     Design.TEXT(), 22f, Design.monoBold()));
-            head.addView(t("valued at the current book mid " + PriceMath.fmt(mid),
+            head.addView(t("valued at the current book mid " + PriceMath.fmtPrice(mid),
                     Design.DIM2(), 9.5f, Design.sans()));
         } else {
             head.addView(t("—", Design.TEXT(), 22f, Design.monoBold()));

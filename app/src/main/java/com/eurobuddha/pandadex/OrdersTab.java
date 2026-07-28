@@ -89,7 +89,7 @@ public final class OrdersTab extends LinearLayout {
             LinearLayout top = new LinearLayout(getContext());
             top.setGravity(Gravity.CENTER_VERTICAL);
             top.addView(line((o.sell ? "SELL " : "BUY ") + PriceMath.fmt(o.minimaAmount())
-                            + " MINIMA @ " + PriceMath.fmt(o.price()), o.sell ? Design.RED() : Design.IN(), 12f),
+                            + " MINIMA @ " + PriceMath.fmtPrice(o.price()), o.sell ? Design.RED() : Design.IN(), 12f),
                     new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
             TextView edit = line(" ✎ ", Design.DIM(), 14f);
             edit.setOnClickListener(v -> act.editOrder(o));
@@ -162,7 +162,7 @@ public final class OrdersTab extends LinearLayout {
             TextView side = line((buy ? "BUY " : "SELL ") + PriceMath.fmt(size),
                     buy ? Design.IN() : Design.RED(), 10.5f);
             row.addView(side, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.2f));
-            TextView pr = line(PriceMath.fmt(price) + (maker ? "  M" : "  T"), Design.TEXT(), 10.5f);
+            TextView pr = line(PriceMath.fmtPrice(price) + (maker ? "  M" : "  T"), Design.TEXT(), 10.5f);
             pr.setGravity(Gravity.END);
             row.addView(pr, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.2f));
             body.addView(row);

@@ -178,3 +178,41 @@ spent on foreign orders that fail signing) and fed straight into the C1 loss pat
 poisoning P&L, notifications and portfolio value. Registration is now `trackall:false`, and
 `Order5.isMine()` requires a **key match** — the node's relevance flag can no longer stand
 alone.
+
+
+---
+
+# FIRST REAL MAINNET TRADE (2026-07-28)
+
+The covenant has now been exercised with **real funds between two independent devices**:
+
+- Maker (Galaxy Z Fold, v0.1.0): posted a bid and a **300 MINIMA** sell offer.
+- Taker (Galaxy S10, v0.1.0): **partially filled it — bought 150 MINIMA for 0.151 mxUSDT**.
+- The trade settled and the funds transferred correctly on both sides.
+
+This is live confirmation on mainnet of the partial-fill path end to end: the sweep
+construction, the index-aligned maker payment, the pro-rata cross-multiplied pricing and the
+remainder re-lock at the same address. Everything the solo-node proofs asserted, with money.
+
+## Defects found in that session (all UI/correctness, no funds affected)
+
+1. **Ladder merged price levels.** Verified: at the shipped default tick (0.0001) prices of
+   0.0515 and 0.0520 do NOT merge — they only merge at 0.001 or coarser, so the levels were
+   either grouped by an accidentally-tapped tick chip (they were 6×2dp — barely hittable) or
+   the book was visually garbled by defect 3 below. What IS confirmed is the display: the old
+   formatter stripped trailing zeros, so **0.0520 rendered as "0.052"** — exactly the "not
+   enough decimal places" complaint. Fixed: default is now **exact levels (no grouping)**,
+   grouping is opt-in and persisted with proper tap targets, and every price renders at a
+   **fixed 5 decimals**.
+2. **Taker saw the maker's remainder as its own order**, on the opposite side to its trade.
+   Root cause confirmed as the `trackall:true` ownership bug (C2), already fixed in v0.1.1:
+   the remainder coin carries the MAKER's pubkey at port 0 but was created *after* the taker
+   registered the script, so the node flagged it relevant and `isMine()` accepted that flag
+   alone. Ownership now requires a key match. Still to confirm by re-running the same
+   two-device flow on v0.1.2.
+3. **All five tabs painted on top of each other at launch** — the tab views are added to one
+   container but visibility was only ever set on a tab tap, which never happens at startup.
+   This is what put the chart caption and assets text through the order-entry panel.
+4. **A placed order's optimistic row could never resolve** (the row carried an empty order id
+   the matcher could never match), so a perfectly good order sat on "PLACING…" and then
+   falsely warned "NOT CONFIRMED — check funds".

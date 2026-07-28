@@ -89,7 +89,7 @@ public final class TapeTab extends LinearLayout {
             row.addView(time, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 0.9f));
 
             TextView p = new TextView(getContext());
-            p.setText(PriceMath.fmt(price));
+            p.setText(PriceMath.fmtPrice(price));
             p.setTextColor(buy ? Design.IN() : Design.RED());
             p.setTypeface(Design.mono());
             p.setTextSize(11f);

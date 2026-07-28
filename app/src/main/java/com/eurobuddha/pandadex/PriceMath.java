@@ -77,8 +77,22 @@ public final class PriceMath {
         return want.divide(locked, PRICE_DP, RoundingMode.HALF_UP);
     }
 
-    /** Tidy display: strip trailing zeros without exponent form. */
+    /** Tidy display for AMOUNTS: strip trailing zeros without exponent form. */
     public static String fmt(BigDecimal v) {
         return Util.tidyAmount(v.stripTrailingZeros().toPlainString());
+    }
+
+    /** Decimals shown for every PRICE in the UI. */
+    public static final int DISPLAY_DP = 5;
+
+    /**
+     * Display a PRICE at a fixed width. Prices must NOT strip trailing zeros the way amounts
+     * do: in a ladder "0.052" and "0.0520" read as different numbers, and ragged decimals stop
+     * the columns lining up. Always {@link #DISPLAY_DP} places, rounded half-up (display only —
+     * the on-chain price is always derived from the contract-enforced amounts).
+     */
+    public static String fmtPrice(BigDecimal v) {
+        if (v == null) return "—";
+        return v.setScale(DISPLAY_DP, RoundingMode.HALF_UP).toPlainString();
     }
 }

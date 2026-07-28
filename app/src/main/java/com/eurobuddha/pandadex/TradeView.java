@@ -40,9 +40,18 @@ public final class TradeView extends LinearLayout {
     // ladder
     private LinearLayout asksBox, bidsBox;
     private TextView centerPriceTv;
-    private final BigDecimal[] GROUPS = {new BigDecimal("0.00001"), new BigDecimal("0.0001"),
+    /**
+     * Price-level grouping. Index 0 is NO GROUPING (null tick) and is the DEFAULT: two orders
+     * at different prices must never be silently merged into one level — a maker who posts at
+     * 0.05150 and 0.05200 has to see two rows. Coarser ticks are opt-in for deep books, and
+     * the choice is persisted.
+     */
+    private static final BigDecimal[] GROUPS = {null, new BigDecimal("0.0001"),
             new BigDecimal("0.001"), new BigDecimal("0.01")};
-    private int groupIdx = 1;
+    private static final String[] GROUP_LABELS = {"exact", "0.0001", "0.001", "0.01"};
+    private static final String PREFS = "pandadex_ui";
+    private static final String KEY_GROUP = "ladder_group";
+    private int groupIdx = 0;
     private LinearLayout groupRow;
 
     // order panel (build-once)
@@ -138,16 +147,30 @@ public final class TradeView extends LinearLayout {
         head.setGravity(Gravity.CENTER_VERTICAL);
         head.addView(tv("ORDER BOOK", 10f, Design.DIM(), Design.sansBold()),
                 new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        groupIdx = getContext().getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                .getInt(KEY_GROUP, 0);
+        if (groupIdx < 0 || groupIdx >= GROUPS.length) groupIdx = 0;
         groupRow = new LinearLayout(getContext());
         for (int i = 0; i < GROUPS.length; i++) {
             final int idx = i;
-            TextView g = tv(PriceMath.fmt(GROUPS[i]), 9f,
-                    i == groupIdx ? Design.ACCENT() : Design.DIM2(), Design.mono());
-            g.setPadding(dp(6), dp(2), dp(6), dp(2));
-            g.setOnClickListener(v -> { groupIdx = idx; restyleGroups(); act.repaintTrade(); });
-            groupRow.addView(g);
+            TextView g = tv(GROUP_LABELS[i], 10f,
+                    i == groupIdx ? Design.ON_ACCENT() : Design.DIM(), Design.mono());
+            // a real tap target — the old 6x2dp chips were nearly unhittable
+            g.setPadding(dp(9), dp(6), dp(9), dp(6));
+            g.setOnClickListener(v -> {
+                groupIdx = idx;
+                getContext().getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                        .edit().putInt(KEY_GROUP, idx).apply();
+                restyleGroups();
+                act.repaintTrade();
+            });
+            Design.pressable(g);
+            LayoutParams glp = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
+            glp.leftMargin = dp(4);
+            groupRow.addView(g, glp);
         }
         head.addView(groupRow);
+        restyleGroups();
         c.addView(head);
 
         LinearLayout legend = new LinearLayout(getContext());
@@ -177,7 +200,11 @@ public final class TradeView extends LinearLayout {
 
     private void restyleGroups() {
         for (int i = 0; i < groupRow.getChildCount(); i++) {
-            ((TextView) groupRow.getChildAt(i)).setTextColor(i == groupIdx ? Design.ACCENT() : Design.DIM2());
+            TextView g = (TextView) groupRow.getChildAt(i);
+            boolean on = i == groupIdx;
+            g.setTextColor(on ? Design.ON_ACCENT() : Design.DIM());
+            g.setBackground(on ? Design.roundBg(getContext(), Design.ACCENT(), 8)
+                               : Design.roundBg(getContext(), Design.SURFACE2(), 8));
         }
     }
 
@@ -201,7 +228,7 @@ public final class TradeView extends LinearLayout {
         LinearLayout row = new LinearLayout(getContext());
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(3), 0, dp(3));
-        TextView p = tv((mine ? "• " : "") + PriceMath.fmt(price), 11f,
+        TextView p = tv((mine ? "• " : "") + PriceMath.fmtPrice(price), 11f,
                 ask ? Design.RED() : Design.IN(), Design.mono());
         row.addView(p, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.2f));
         TextView am = tv(PriceMath.fmt(amount), 11f, Design.TEXT(), Design.mono());
@@ -405,7 +432,7 @@ public final class TradeView extends LinearLayout {
         // ticker from the local tape
         BigDecimal[] s = act.db().stats24h();
         if (s[0] != null) {
-            String txt = PriceMath.fmt(s[0]);
+            String txt = PriceMath.fmtPrice(s[0]);
             if (shownLast != null && s[0].compareTo(shownLast) != 0) {
                 boolean up = s[0].compareTo(shownLast) > 0;
                 lastPriceTv.setTextColor(up ? Design.IN() : Design.RED());
@@ -420,8 +447,8 @@ public final class TradeView extends LinearLayout {
                 deltaTv.setText((up ? "+" : "") + s[1].toPlainString() + "%");
                 deltaTv.setTextColor(up ? Design.IN() : Design.RED());
             }
-            highTv.setText(s[2] == null ? "—" : PriceMath.fmt(s[2]));
-            lowTv.setText(s[3] == null ? "—" : PriceMath.fmt(s[3]));
+            highTv.setText(PriceMath.fmtPrice(s[2]));
+            lowTv.setText(PriceMath.fmtPrice(s[3]));
             volTv.setText(PriceMath.fmt(s[4]));
         }
 
@@ -438,11 +465,7 @@ public final class TradeView extends LinearLayout {
         TreeMap<BigDecimal, Boolean> mineAt = new TreeMap<>();
         for (Order5 o : book.values()) {
             if (o.expired(chainBlock)) continue;
-            BigDecimal p = o.price();
-            // asks (sells) round UP to the tick, bids round DOWN — conservative both ways
-            BigDecimal g = o.sell
-                    ? p.divide(tick, 0, RoundingMode.CEILING).multiply(tick)
-                    : p.divide(tick, 0, RoundingMode.FLOOR).multiply(tick);
+            BigDecimal g = levelPrice(o, tick);
             (o.sell ? asks : bids).merge(g, o.minimaAmount(), BigDecimal::add);
             if (o.isMine(act.keys())) mineAt.merge(g, true, (x, y) -> true);
         }
@@ -481,13 +504,29 @@ public final class TradeView extends LinearLayout {
         BigDecimal bestAsk = askList.isEmpty() ? null : askList.get(0).getKey();
         BigDecimal bestBid = bidList.isEmpty() ? null : bidList.get(0).getKey();
         if (shownLast != null) {
-            centerPriceTv.setText(PriceMath.fmt(shownLast));
+            centerPriceTv.setText(PriceMath.fmtPrice(shownLast));
         } else if (bestAsk != null && bestBid != null) {
-            centerPriceTv.setText(PriceMath.fmt(
+            centerPriceTv.setText(PriceMath.fmtPrice(
                     bestAsk.add(bestBid).divide(new BigDecimal(2), PriceMath.PRICE_DP, RoundingMode.HALF_UP)));
         } else {
             centerPriceTv.setText("—");
         }
+    }
+
+    /**
+     * The price level an order belongs to. With no tick selected (the default) the level is
+     * the order's own price rounded only to what the UI actually shows — so two orders merge
+     * only when they are genuinely indistinguishable on screen, never because of a grouping
+     * bucket the user didn't ask for. With a tick, asks round UP and bids round DOWN so a
+     * level never flatters the side it's on.
+     */
+    static BigDecimal levelPrice(Order5 o, BigDecimal tick) {
+        BigDecimal p = o.price();
+        if (tick == null) {
+            return p.setScale(PriceMath.DISPLAY_DP, RoundingMode.HALF_UP);
+        }
+        return o.sell ? p.divide(tick, 0, RoundingMode.CEILING).multiply(tick)
+                      : p.divide(tick, 0, RoundingMode.FLOOR).multiply(tick);
     }
 
     private static BigDecimal cumMax(List<Map.Entry<BigDecimal, BigDecimal>> list) {
@@ -501,7 +540,7 @@ public final class TradeView extends LinearLayout {
         for (Pending.Row r : pending) {
             LinearLayout row = orderRowShell();
             row.addView(tv((r.buy ? "BUY " : "SELL ") + PriceMath.fmt(r.minima) + " @ "
-                            + PriceMath.fmt(r.price), 11f,
+                            + PriceMath.fmtPrice(r.price), 11f,
                     r.buy ? Design.IN() : Design.RED(), Design.mono()),
                     new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
             TextView st = tv(r.status(chainBlock), 9.5f, Design.ACCENT(), Design.sans());
@@ -514,7 +553,7 @@ public final class TradeView extends LinearLayout {
             any = true;
             LinearLayout row = orderRowShell();
             String label = (o.sell ? "SELL " : "BUY ") + PriceMath.fmt(o.minimaAmount())
-                    + " @ " + PriceMath.fmt(o.price()) + (o.gtc ? "  ∞" : "");
+                    + " @ " + PriceMath.fmtPrice(o.price()) + (o.gtc ? "  ∞" : "");
             row.addView(tv(label, 11f, o.sell ? Design.RED() : Design.IN(), Design.mono()),
                     new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
             if (o.expired(chainBlock)) {

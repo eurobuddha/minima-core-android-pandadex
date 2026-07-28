@@ -115,7 +115,7 @@ public class DexKeepAliveService extends Service {
                 @Override public void onRenewed(Order5 o) { /* silent — routine upkeep */ }
                 @Override public void onRenewFailed(Order5 o, String why) {
                     Notifier.alert(getApplicationContext(), "Couldn't renew an order",
-                            "Order @ " + PriceMath.fmt(o.price()) + " — will retry. (" + why + ")");
+                            "Order @ " + PriceMath.fmtPrice(o.price()) + " — will retry. (" + why + ")");
                 }
             });
         });
