@@ -23,6 +23,8 @@ public final class BookRepository {
     }
 
     private static final long MIN_INTERVAL_MS = 4_000;
+    /** Consecutive empty scans before we believe the book really is empty. */
+    static final int EMPTY_CONFIRM = 3;
 
     private final NodeApi node;
     private final DexDb db;
@@ -35,6 +37,7 @@ public final class BookRepository {
     private boolean scanning = false;
     private boolean pendingRescan = false;
     private long lastScanMs = 0;
+    private int emptyScans = 0;
     private long chainBlock = 0;
     private FillTape.Sink sink;
 
@@ -95,9 +98,15 @@ public final class BookRepository {
         BookScanner.scan(node, (orders, truncated, rawJsons) -> {
             scanning = false;
             // An EMPTY scan is not proof of an empty book — a partial or momentarily-empty
-            // reply parses perfectly and is indistinguishable from "everything traded".
-            // Keep the last-good view rather than blanking the UI and the cache on one bad read.
-            boolean suspectEmpty = orders.isEmpty() && !cached.isEmpty();
+            // reply parses perfectly and is indistinguishable from "everything traded". But
+            // DISTRUST MUST EXPIRE: the first cut refused an empty book unconditionally, so
+            // once the book legitimately emptied (cancel every order — exactly what a user
+            // does) the cache froze permanently. The stale orders stayed on screen forever and
+            // cancel rows could never clear, because they clear when the coin leaves the book.
+            // Demand repeated confirmation, then believe it.
+            if (orders.isEmpty() && !cached.isEmpty()) emptyScans++; else emptyScans = 0;
+            boolean suspectEmpty = orders.isEmpty() && !cached.isEmpty()
+                    && emptyScans < EMPTY_CONFIRM;
             if (!truncated && !suspectEmpty) {
                 cached = orders;
                 haveLive = true;
