@@ -83,6 +83,18 @@ public final class TradeView extends LinearLayout {
 
     private int dp(int v) { return Design.dp(getContext(), v); }
 
+    /** "12s ago" / "9 minutes ago" / "3 hours ago" — plain English, no clock arithmetic. */
+    private static String ago(long ms) {
+        long s = ms / 1000;
+        if (s < 60) return s + "s ago";
+        long m = s / 60;
+        if (m < 60) return m + (m == 1 ? " minute ago" : " minutes ago");
+        long h = m / 60;
+        if (h < 24) return h + (h == 1 ? " hour ago" : " hours ago");
+        long d = h / 24;
+        return d + (d == 1 ? " day ago" : " days ago");
+    }
+
     private TextView tv(String s, float size, int color, Typeface tf) {
         TextView t = new TextView(getContext());
         t.setText(s);
@@ -133,7 +145,7 @@ public final class TradeView extends LinearLayout {
         lastPriceTv = tv("—", 26f, Design.TEXT(), Design.monoBold());
         mid.addView(lastPriceTv);
         deltaTv = tv("", 12f, Design.DIM(), Design.mono());
-        priceKindTv = tv("MID (book)", 9.5f, Design.DIM(), Design.sansBold());
+        priceKindTv = tv("", 9.5f, Design.DIM(), Design.sans());
         LayoutParams dl = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
         dl.leftMargin = dp(10);
         mid.addView(deltaTv, dl);
@@ -454,16 +466,16 @@ public final class TradeView extends LinearLayout {
         syncDot.setText(syncing ? "● syncing" : "● live");
         syncDot.setTextColor(syncing ? Design.DIM() : Design.IN());
 
-        // ---- the headline price: MID by default, the LAST TRADE for 10 minutes after one ----
-        Object[] hp = act.headlinePrice();
-        BigDecimal price = (BigDecimal) hp[0];
-        boolean isLast = (Boolean) hp[1];
-        long ageMs = (Long) hp[2];
-        if (price == null) {
+        // ---- the headline price is ALWAYS the last trade, with its age ----
+        Object[] lt = act.lastTrade();
+        if (lt == null) {
             lastPriceTv.setText("—");
-            priceKindTv.setText("no orders");
+            lastPriceTv.setTextColor(Design.DIM());
+            priceKindTv.setText("no trades observed yet");
             priceKindTv.setTextColor(Design.DIM2());
         } else {
+            BigDecimal price = (BigDecimal) lt[0];
+            long ageMs = (Long) lt[1];
             String txt = PriceMath.fmtPrice(price);
             if (shownPrice != null && price.compareTo(shownPrice) != 0) {
                 boolean up = price.compareTo(shownPrice) > 0;
@@ -475,17 +487,8 @@ public final class TradeView extends LinearLayout {
                 if (shownPrice == null) lastPriceTv.setTextColor(Design.TEXT());
             }
             shownPrice = price;
-            // ALWAYS say which quantity this is — showing two different things in one slot
-            // with no label is what made two phones look broken against the same book
-            if (isLast) {
-                long secs = ageMs / 1000;
-                priceKindTv.setText("LAST TRADE · " + (secs < 60 ? secs + "s ago"
-                        : (secs / 60) + "m ago"));
-                priceKindTv.setTextColor(Design.ACCENT());
-            } else {
-                priceKindTv.setText("MID (book)");
-                priceKindTv.setTextColor(Design.DIM());
-            }
+            priceKindTv.setText("last trade · " + ago(ageMs));
+            priceKindTv.setTextColor(Design.DIM());
         }
 
         BigDecimal[] s = act.db().stats24h();
@@ -557,16 +560,13 @@ public final class TradeView extends LinearLayout {
                     exactAt.get(e.getKey())));
         }
 
-        // The ladder centre shows the SAME number as the headline, from the same source. It
-        // must never compute its own mid from the GROUPED level keys — that disagreed with
-        // MainActivity.bookMid() (and therefore with Assets and P&L) by up to half a tick
-        // whenever grouping was switched on.
-        Object[] hp2 = act.headlinePrice();
-        BigDecimal centre = (BigDecimal) hp2[0];
-        boolean centreIsLast = (Boolean) hp2[1];
-        centerPriceTv.setText(centre == null ? "—"
-                : PriceMath.fmtPrice(centre) + (centreIsLast ? "  LAST" : "  MID"));
-        centerPriceTv.setTextColor(centreIsLast ? Design.ACCENT() : Design.TEXT());
+        // The centre of the book is ALWAYS the mid — it cannot be anything else, so it
+        // carries no label. Taken from MainActivity.bookMid() (raw order prices) rather than
+        // from the GROUPED level keys, which disagreed with Assets and P&L by up to half a
+        // tick whenever grouping was switched on.
+        BigDecimal mid = act.bookMid();
+        centerPriceTv.setText(mid == null ? "—" : PriceMath.fmtPrice(mid));
+        centerPriceTv.setTextColor(Design.TEXT());
     }
 
     /**

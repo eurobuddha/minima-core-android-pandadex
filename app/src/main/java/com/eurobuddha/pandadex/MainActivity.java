@@ -189,17 +189,6 @@ public class MainActivity extends AppCompatActivity {
                 txn.setIdentity(r.optString("publickey", ""), r.optString("address", ""));
                 receiveAddr = r.optString("miniaddress", r.optString("address", ""));
                 repaint();
-                // Recover this wallet's own trades from the chain. Live book-diffing only
-                // captures what THIS device was awake to witness, which is why two phones that
-                // traded with each other could show completely different 24h figures.
-                new TradeBackfill(node, db, r.optString("address", "")).runOnce(n -> {
-                    if (n > 0) {
-                        stats.invalidate();
-                        setStage("Recovered " + n + " past trade" + (n == 1 ? "" : "s")
-                                + " from the chain");
-                        repaint();
-                    }
-                });
             }
             @Override public void onError(String message) {
                 // identity is required before ANY spend — retry rather than leaving the user
@@ -274,6 +263,16 @@ public class MainActivity extends AppCompatActivity {
         logo.setTypeface(Design.monoBold());
         logo.setTextSize(15f);
         header.addView(logo, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        // The build version lives HERE, not buried in the footer: a silently-failed update
+        // (an over-the-top install that doesn't take) once looked like an app bug for a whole
+        // round of testing because two phones were running different builds.
+        TextView verPill = Design.pill(this, "v" + BuildConfig.VERSION_NAME,
+                Design.SURFACE2(), Design.DIM2());
+        LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        vp.rightMargin = Design.dp(this, 6);
+        header.addView(verPill, vp);
+
         pairPill = Design.pill(this, "PAIRING…", Design.SURFACE2(), Design.DIM());
         header.addView(pairPill);
         blockPill = Design.pill(this, "# —", Design.SURFACE2(), Design.DIM());
@@ -381,31 +380,21 @@ public class MainActivity extends AppCompatActivity {
         return true;
     }
 
-    /** How long after a trade its price stays on the headline before reverting to the mid. */
-    public static final long LAST_TRADE_WINDOW_MS = 10 * 60_000;
-
     /**
-     * The single price the whole app shows: [price, isLast, ageMs].
+     * The most recent observed trade as [price, ageMs], or null if none.
      *
-     * The book MID by default — it is derived from resting orders, so every device with the
-     * same book computes the same number. For LAST_TRADE_WINDOW_MS after a trade it shows that
-     * trade instead (each new trade restarts the window), because while it's fresh that IS the
-     * market. Then it reverts.
-     *
-     * The bug this replaces: the last trade was shown with NO expiry and NO label, so a stale
-     * price displayed as current forever and two phones showed different quantities in the
-     * same slot with no way to tell which was which.
+     * The headline price is ALWAYS the last trade — it never substitutes the mid. Each price
+     * slot in the UI has exactly one meaning: the big number is the last trade, the number
+     * between the bid and the ask is the mid. An earlier build switched the headline between
+     * the two depending on recency, which meant the same slot showed different quantities at
+     * different moments and needed a label to explain itself.
      */
-    public Object[] headlinePrice() {
+    public Object[] lastTrade() {
         Object[] lf = stats == null ? null : stats.lastFill();
-        if (lf != null) {
-            long age = System.currentTimeMillis() - (Long) lf[0];
-            if (age >= 0 && age < LAST_TRADE_WINDOW_MS) {
-                return new Object[]{(BigDecimal) lf[1], Boolean.TRUE, age};
-            }
-        }
-        BigDecimal mid = bookMid();
-        return new Object[]{mid, Boolean.FALSE, 0L};
+        if (lf == null) return null;
+        long age = System.currentTimeMillis() - (Long) lf[0];
+        if (age < 0) age = 0;
+        return new Object[]{(BigDecimal) lf[1], age};
     }
 
     /** Mid-price of the live book (best bid/ask) — orders only, so it is identical on every

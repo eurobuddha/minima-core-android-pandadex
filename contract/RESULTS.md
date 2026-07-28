@@ -311,3 +311,24 @@ skipped 0.1.3, so no purge ran.** That correction was right and led to the real 
    other people that this node never saw remain unrecoverable; there is no server to ask.
 5. **No further destructive migrations.** The v3 purge cost the user real history; corrupt rows
    are now prevented at the source and missing ones recovered from the chain.
+
+
+# v0.1.6 (2026-07-28) — simplified price display, backfill removed
+
+- **Each price slot now has ONE fixed meaning.** The big headline price is ALWAYS the last
+  trade, with how long ago it happened. The number between the bid and the ask is ALWAYS the
+  mid, and carries no label because it cannot be anything else. v0.1.5 switched the headline
+  between last-trade and mid depending on recency, so the same slot meant different things at
+  different moments — over-engineered, and it needed a label to explain itself.
+- **`TradeBackfill` removed.** It was added in v0.1.5 to reconstruct history from the chain and
+  never worked for the maker: it identified a trade by two opposing wallet legs, which is the
+  taker's signature. Verified against the node source and live data — with the covenant
+  registered `trackall:false`, a maker's `difference` for a fill contains only the incoming
+  payment (one leg), because `difference` keys purely off coin ADDRESS and never inspects
+  state variables. Recovering both sides would mean parsing each consumed coin's state ports;
+  history recovery isn't needed, so the feature was deleted rather than expanded.
+- **Build version moved into the header.** A phone silently stayed on 0.1.4 through a round of
+  testing and looked like an app bug (two builds compared side by side). The version is now
+  always visible next to the pairing pill.
+- Retained from v0.1.5 and re-verified: a genuine fill that empties the book IS recorded, and
+  no migration destroys stored history.
