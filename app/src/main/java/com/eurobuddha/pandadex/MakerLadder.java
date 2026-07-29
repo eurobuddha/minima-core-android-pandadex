@@ -305,8 +305,11 @@ public final class MakerLadder {
         Map<String, Slot> want = new HashMap<>();
         for (Slot s : desired) want.put(s.id, s);
 
-        // rungs we no longer want
+        // rungs we no longer want — but never one with an action already in flight: the cancel
+        // and the in-flight relock would spend the same coin, so one of the two is dead on
+        // arrival with its proof-of-work wasted
         for (Map.Entry<String, Order5> e : liveBySlot.entrySet()) {
+            if (settlingSlots != null && settlingSlots.contains(e.getKey())) continue;
             if (!want.containsKey(e.getKey()) && e.getValue() != null) {
                 cancels.add(new Action(Kind.CANCEL, null, e.getValue(), "level removed"));
             }

@@ -142,7 +142,10 @@ public class MainActivity extends AppCompatActivity {
             reconcileTakerFill(orders);
             // the market maker rides the same book updates as everything else; it rate-limits
             // itself internally because every adjustment costs proof-of-work
-            if (paired && keySet.ready() && chainBlock > 0 && !busy) {
+            // FOREGROUND gate: while we are paused the background service drives the maker, and
+            // two actors posting from the same slot map would duplicate rungs — the same
+            // single-actor discipline DexProcessor uses for renewals.
+            if (paired && keySet.ready() && chainBlock > 0 && !busy && FOREGROUND) {
                 // tombstone sweep runs ARMED OR NOT: cancelled-but-unconfirmed orders and
                 // late-confirming orphans must be chased even after a withdraw disarmed us
                 maker.sweepTombstones(orders, keySet.keys(), chainBlock, makerListener);
@@ -858,9 +861,11 @@ public class MainActivity extends AppCompatActivity {
                         + "ladder quotes wider, then withdraws."
                         : "NOT pegged: the book gets YOUR exact prices — never repriced, never "
                         + "withdrawn, even if the price feed dies.")
-                        + "\n\nRungs post one per side per cycle (each is an on-chain transaction "
-                        + "your phone does proof-of-work for), so a full ladder takes a few "
-                        + "minutes to build. The Maker tab shows each rung's progress.")
+                        + "\n\nRungs post ONE PER SIDE per cycle — each is an on-chain "
+                        + "transaction your phone does proof-of-work for, and each one's change "
+                        + "has to confirm before the next on that side can be funded — so a full "
+                        + "ladder takes a few minutes to build and a rung may retry before it "
+                        + "sticks. The Maker tab shows each rung's progress.")
                 .setPositiveButton("Publish", (d, w) -> {
                     makerCfg.armed = true;
                     makerCfg.lastActedMid = null;      // act on the next cycle
@@ -995,6 +1000,9 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         FOREGROUND = true;
         inputFocused = false;
+        // The service may have posted or cancelled rungs while we were away — take over from
+        // what is on disk, never from our stale in-memory copy (saving that would orphan them).
+        if (makerCfg != null) makerCfg.reload();
         ui.removeCallbacks(pollTask);
         ui.post(pollTask);
         ui.removeCallbacks(uiTick);

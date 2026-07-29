@@ -48,6 +48,8 @@ public final class MakerTab extends LinearLayout {
     private boolean filling = false;
     /** Peg turned on before the first price landed — fill the moment it does. */
     private boolean pegAwaitFill = false;
+    /** Cache for the status panel's my-orders lookup, keyed on book identity. */
+    private java.util.Map<String, Order5> bookSeen, myById;
 
     public MakerTab(MainActivity act, MakerConfig cfg) {
         super(act);
@@ -305,9 +307,12 @@ public final class MakerTab extends LinearLayout {
 
         pegModeUi();
         pegSw.setOnCheckedChangeListener((btn, on) -> {
-            // Persist the flip IMMEDIATELY: tapping a switch blurs no field, so without this
-            // an ARMED engine kept running in the old mode until some unrelated blur committed.
-            // A targeted write, not commit() — the fields may hold a half-typed value.
+            // COMMIT FIRST. Unpegging promotes the rows on screen to the authoritative prices,
+            // but the peg fills them by setText only — nothing commits until a field blurs, and
+            // a switch blurs nothing. Without this the engine reads whatever was committed last
+            // (stale prices, or zeros from a machine-filled ladder) and either reprices live
+            // orders to numbers the user never saw or silently abandons the ladder.
+            commit();
             cfg.pegged = on;
             cfg.save();
             pegModeUi();
@@ -590,16 +595,19 @@ public final class MakerTab extends LinearLayout {
     /** The per-rung on-chain story + the engine's latest message, both refreshed cheaply. */
     private void updateStatus() {
         stageTv.setText(act.stage());
-        java.util.Map<String, Order5> mine = new java.util.HashMap<>();
-        for (Order5 o : act.book().values()) {
-            if (o.isMine(act.keys())) mine.put(o.orderId, o);
+        if (!cfg.armed) {
+            // Not published: nothing is being reconciled, so don't narrate rungs as though
+            // something were acting on them. Records may survive an interrupted withdraw.
+            int n = cfg.slots.size(), t = cfg.cancelTombstones.size();
+            slotsTv.setText(n == 0 && t == 0 ? "nothing on-chain"
+                    : "not published — " + n + " rung" + (n == 1 ? "" : "s") + " still recorded"
+                    + (t > 0 ? ", " + t + " awaiting cancellation" : ""));
+            return;
         }
-        java.util.List<MakerLadder.Slot> desired = cfg.armed ? desiredNow()
-                : java.util.Collections.emptyList();
-        java.util.List<MakerStatus.Line> lines = MakerStatus.lines(desired, cfg.slots,
-                cfg.cancelTombstones, mine, act.chainBlock());
+        java.util.List<MakerStatus.Line> lines = MakerStatus.lines(desiredNow(), cfg.slots,
+                cfg.cancelTombstones, myOrdersById(), act.chainBlock());
         if (lines.isEmpty()) {
-            slotsTv.setText(cfg.armed ? "waiting for the first cycle…" : "nothing on-chain");
+            slotsTv.setText("waiting for the first cycle…");
             return;
         }
         StringBuilder sb = new StringBuilder();
@@ -610,6 +618,18 @@ public final class MakerTab extends LinearLayout {
             sb.append(l.text);
         }
         slotsTv.setText(sb.toString());
+    }
+
+    /** My orders keyed by orderId, rebuilt only when the book actually changes — the status
+     *  panel refreshes every 2s and the book is the same object between scans. */
+    private java.util.Map<String, Order5> myOrdersById() {
+        java.util.Map<String, Order5> book = act.book();
+        if (book == bookSeen && myById != null) return myById;
+        java.util.Map<String, Order5> mine = new java.util.HashMap<>();
+        for (Order5 o : book.values()) if (o.isMine(act.keys())) mine.put(o.orderId, o);
+        bookSeen = book;
+        myById = mine;
+        return mine;
     }
 
     private java.util.List<MakerLadder.Slot> desiredNow() {

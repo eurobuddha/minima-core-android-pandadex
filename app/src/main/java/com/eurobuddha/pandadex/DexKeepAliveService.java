@@ -40,6 +40,8 @@ public class DexKeepAliveService extends Service {
     private DexDb db;
     private DexTxn txn;
     private DexProcessor processor;
+    private MakerConfig makerCfg;
+    private MakerEngine maker;
     private KeySet keySet;
     private FillTape tape;
     private boolean started = false;
@@ -56,6 +58,8 @@ public class DexKeepAliveService extends Service {
         db = new DexDb(getApplicationContext());
         txn = new DexTxn(node, db);
         processor = new DexProcessor(getApplicationContext(), txn);
+        makerCfg = new MakerConfig(getApplicationContext());
+        maker = new MakerEngine(makerCfg, txn);
         keySet = new KeySet(getApplicationContext(), null);
         tape = new FillTape(new FillTape.CancelLog() {
             @Override public void note(String coinid) { db.noteCancelled(coinid); }
@@ -118,7 +122,27 @@ public class DexKeepAliveService extends Service {
                             "Order @ " + PriceMath.fmtPrice(o.price()) + " — will retry. (" + why + ")");
                 }
             });
+            driveMaker(orders);
         });
+    }
+
+    /**
+     * Keep a PUBLISHED ladder honest while the app is closed.
+     *
+     * This is a safety obligation, not a convenience: the publish dialog promises that a pegged
+     * ladder withdraws itself when the price feed dies, and GTC renewal above actively keeps
+     * those orders ALIVE on the book. Without this the app could be swiped away and leave real
+     * funds quoting a price nobody was tracking any more.
+     *
+     * Exactly ONE actor drives the maker: pass() has already returned if the Activity is
+     * foreground. Reload first — the Activity owns the same prefs and our in-memory slot map
+     * would otherwise be stale enough to re-post rungs it already placed.
+     */
+    private void driveMaker(java.util.Map<String, Order5> orders) {
+        makerCfg.reload();
+        MakerEngine.Listener l = message -> { /* nobody is watching — the Maker tab replays it */ };
+        maker.sweepTombstones(orders, keySet.keys(), chainBlock, l);
+        maker.onBook(orders, keySet.keys(), chainBlock, l);
     }
 
     private void onFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,

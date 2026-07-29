@@ -223,9 +223,17 @@ public class MakerEngineTest {
                 Arrays.asList("CANCEL 0xC2"), txn.calls);
     }
 
+    @Test public void aCondemnedOrderIsCancelledTheInstantItSurfaces() {
+        // no attempt recorded yet — don't make a doomed order wait out a patience window
+        cfg.tombstone("0xORDER1", 100, 0);
+        Order5 o = order("0xC1", "0xORDER1", "0.051", "100");
+        engine.sweepTombstones(bookOf(o), MY_KEYS, 100, m -> {});
+        assertEquals(1, txn.calls.size());
+    }
+
     @Test public void aTombstonedOrderIsNotReCancelledEveryScan() {
         // each cancel is proof-of-work; re-send only after the patience window
-        cfg.tombstone("0xORDER1", 100);
+        cfg.tombstone("0xORDER1", 100, 100);
         Order5 o = order("0xC1", "0xORDER1", "0.051", "100");
         engine.sweepTombstones(bookOf(o), MY_KEYS, 101, m -> {});
         assertTrue("still within patience — no second cancel", txn.calls.isEmpty());
@@ -234,12 +242,42 @@ public class MakerEngineTest {
     }
 
     @Test public void aTombstoneRetiresOnceItsCoinIsGoneForGood() {
-        cfg.tombstone("0xORDER1", 100);
+        cfg.tombstone("0xORDER1", 100, 100);
         engine.sweepTombstones(new HashMap<>(), MY_KEYS, 101, m -> {});
         assertTrue("gone but still recent — keep watching", cfg.cancelTombstones.containsKey("0xORDER1"));
         engine.sweepTombstones(new HashMap<>(), MY_KEYS,
                 100 + MakerEngine.TOMBSTONE_EXPIRE_BLOCKS, m -> {});
         assertTrue("finished business", cfg.cancelTombstones.isEmpty());
+    }
+
+    @Test public void retryingACancelNeverShortensTheProtectionWindow() {
+        // the two clocks must stay independent: attempts pace the re-send, but expiry is
+        // measured from CONDEMNATION, so a slow-confirming order is still chased
+        cfg.tombstone("0xORDER1", 100, 0);
+        Order5 o = order("0xC1", "0xORDER1", "0.051", "100");
+        for (long b = 100; b < 100 + MakerEngine.TOMBSTONE_EXPIRE_BLOCKS; b += MakerEngine.PATIENCE_BLOCKS) {
+            engine.sweepTombstones(bookOf(o), MY_KEYS, b, m -> {});
+        }
+        assertEquals("condemned at block 100, never re-dated", 100,
+                cfg.cancelTombstones.get("0xORDER1").createdBlock);
+    }
+
+    @Test public void theStaleFeedWithdrawAlsoChasesUnconfirmedRungs() {
+        // the automatic retreat runs unattended — cancelling only what it can SEE and then
+        // clearing the slot map would orphan whatever was still mining
+        MarketPrice.testSnapshot(0.05, 1);      // ancient timestamp => mustWithdraw
+        cfg.armed = true;
+        cfg.pegged = true;
+        cfg.stepPct = new BigDecimal("0.20");
+        seedRungs(cfg.bids, 2, "100");
+        cfg.rememberSlot("B1", "0xORDER1", new BigDecimal("100"), 100);   // live
+        cfg.rememberSlot("B2", "0xORDER2", new BigDecimal("100"), 100);   // still mining
+        Order5 live = order("0xC1", "0xORDER1", "0.049", "100");
+
+        engine.onBook(bookOf(live), MY_KEYS, 100, m -> {});
+        assertEquals("the visible rung is cancelled", 1, txn.calls.size());
+        assertTrue("and the in-flight one is condemned, not forgotten",
+                cfg.cancelTombstones.containsKey("0xORDER2"));
     }
 
     @Test public void anIdleEngineRunsQueuedWorkImmediately() {

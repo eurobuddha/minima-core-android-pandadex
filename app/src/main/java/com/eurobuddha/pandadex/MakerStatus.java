@@ -36,7 +36,7 @@ public final class MakerStatus {
      */
     public static List<Line> lines(List<MakerLadder.Slot> desired,
                                    Map<String, MakerConfig.SlotRec> slots,
-                                   Map<String, Long> tombstones,
+                                   Map<String, ?> tombstones,
                                    Map<String, Order5> myBookByOrderId,
                                    long chainBlock) {
         List<Line> out = new ArrayList<>();

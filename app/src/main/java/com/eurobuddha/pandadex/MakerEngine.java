@@ -115,12 +115,15 @@ public final class MakerEngine {
             MarketPrice.refreshAsync();
 
             // ---- feed too old to quote on: take the ladder off the book ----
+            // withdrawAll, NOT cancelAllLadder: this fires unattended, and a rung still mining
+            // is invisible to liveLadderOrders. Cancelling only what we can see and then
+            // clearing the slot map would orphan the in-flight ones — the exact failure the
+            // tombstones exist to prevent, in the one path nobody is watching.
             if (MarketPrice.mustWithdraw()) {
-                List<Order5> live = liveLadderOrders(book, myKeys);
-                if (!live.isEmpty()) {
+                if (!cfg.slots.isEmpty()) {
                     lastCycleMs = now;
                     if (l != null) l.onMakerState("Price feed stale — withdrawing the ladder");
-                    cancelAllLadder(live, 0, chainBlock, l);
+                    withdrawAll(book, myKeys, chainBlock, l);
                 }
                 return;
             }
@@ -130,9 +133,10 @@ public final class MakerEngine {
             widen = BigDecimal.valueOf(MarketPrice.widenFactor());
         }
         List<MakerLadder.Slot> desired = MakerLadder.desired(mid, cfg.toLadderConfig(), widen);
-        if (desired.isEmpty()) return;
 
         // ---- slot bookkeeping: stamp legacy records, expire the patient dead ----
+        // Runs BEFORE the empty-ladder bail-out: a config that currently quotes nothing still
+        // has records that must age out honestly, or they linger forever as phantom rungs.
         Map<String, Order5> byOrderId = new HashMap<>();
         for (Order5 o : book.values()) {
             if (o.isMine(myKeys) && !cfg.cancelTombstones.containsKey(o.orderId)) {
@@ -159,6 +163,9 @@ public final class MakerEngine {
             }
         }
         if (dirty) cfg.save();
+        // Nothing to quote (every rung blank, or a manual ladder with no valid prices) is
+        // MISCONFIGURED, not "cancel everything" — deliberate teardown is the Withdraw button.
+        if (desired.isEmpty()) return;
 
         Map<String, Order5> liveBySlot = new HashMap<>();
         Set<String> settling = new HashSet<>();
@@ -344,11 +351,9 @@ public final class MakerEngine {
         Set<String> liveIds = new HashSet<>();
         for (Order5 o : live) liveIds.add(o.orderId);
         for (MakerConfig.SlotRec r : cfg.slots.values()) {
-            if (!liveIds.contains(r.orderId)) {
-                // BACKDATED so the sweep cancels it the instant it surfaces, instead of
-                // granting a cancel-patience window to an order we already know must die.
-                cfg.tombstone(r.orderId, chainBlock - PATIENCE_BLOCKS);
-            }
+            // lastAttempt 0 = never tried, so the sweep acts the instant it surfaces — and the
+            // expiry clock still runs from NOW, giving it the full window to confirm
+            if (!liveIds.contains(r.orderId)) cfg.tombstone(r.orderId, chainBlock, 0);
         }
         cancelAllLadder(live, 0, chainBlock, l);
     }
@@ -372,14 +377,14 @@ public final class MakerEngine {
         DexTxn.Result once = new DexTxn.Result() {
             @Override public void onPosted(String t) {
                 if (advanced[0]) return; advanced[0] = true;
-                cfg.tombstone(o.orderId, chainBlock);
+                cfg.tombstone(o.orderId, chainBlock, chainBlock);   // sent — pace the next try
                 if (l != null) l.onCancelSent(o);
                 cancelAllLadder(live, idx + 1, chainBlock, l);
             }
             @Override public void onFailed(String m) {
                 if (advanced[0]) return; advanced[0] = true;
-                // keep the tombstone anyway — the sweep will retry the cancel
-                cfg.tombstone(o.orderId, chainBlock - PATIENCE_BLOCKS);
+                // condemn it anyway, with no attempt recorded — the sweep retries immediately
+                cfg.tombstone(o.orderId, chainBlock, 0);
                 cancelAllLadder(live, idx + 1, chainBlock, l);
             }
         };
@@ -389,7 +394,7 @@ public final class MakerEngine {
             // a throw must not strand the withdraw half-done with `working` stuck true
             if (!advanced[0]) {
                 advanced[0] = true;
-                cfg.tombstone(o.orderId, chainBlock - PATIENCE_BLOCKS);
+                cfg.tombstone(o.orderId, chainBlock, 0);
                 cancelAllLadder(live, idx + 1, chainBlock, l);
             }
         }
@@ -408,19 +413,23 @@ public final class MakerEngine {
 
         List<String> done = new ArrayList<>();
         Order5 target = null;
-        for (Map.Entry<String, Long> e : cfg.cancelTombstones.entrySet()) {
+        for (Map.Entry<String, MakerConfig.Tomb> e : cfg.cancelTombstones.entrySet()) {
+            MakerConfig.Tomb t = e.getValue();
             Order5 o = mineById.get(e.getKey());
             if (o == null) {
-                if (chainBlock - e.getValue() >= TOMBSTONE_EXPIRE_BLOCKS) done.add(e.getKey());
-            } else if (target == null && chainBlock - e.getValue() >= PATIENCE_BLOCKS) {
-                target = o;
+                // absent long enough after CONDEMNATION (not after the last attempt) that the
+                // cancel must have mined — or the order never existed
+                if (chainBlock - t.createdBlock >= TOMBSTONE_EXPIRE_BLOCKS) done.add(e.getKey());
+            } else if (target == null
+                    && (t.lastAttemptBlock <= 0 || chainBlock - t.lastAttemptBlock >= PATIENCE_BLOCKS)) {
+                target = o;                      // never tried, or the last try had its chance
             }
         }
         for (String id : done) cfg.clearTombstone(id);
         if (target == null) return;
 
         final Order5 o = target;
-        cfg.tombstone(o.orderId, chainBlock);   // restart the cancel-patience clock
+        cfg.tombstone(o.orderId, chainBlock, chainBlock);   // pace the next attempt
         if (l != null) l.onMakerState("Maker: cancelling a late order (" +
                 (o.sell ? "ask" : "bid") + " " + PriceMath.fmtPrice(o.price()) + ")");
         working = true;

@@ -91,10 +91,27 @@ public final class MakerConfig {
     public BigDecimal repricePct = new BigDecimal("0.25");
     public boolean armed = false;
 
+    /**
+     * An orderId condemned to die, with TWO independent clocks. They must not share one field:
+     * expiry has to be measured from when we condemned it (so a slow-confirming order is still
+     * chased), while re-send pacing is measured from the last attempt (so we don't burn
+     * proof-of-work every scan). Backdating one clock to hurry the other shortened the
+     * protection window to a few blocks.
+     */
+    public static final class Tomb {
+        public final long createdBlock;      // when it was condemned — expiry is measured here
+        public long lastAttemptBlock;        // last cancel sent, or 0 for "never tried"
+
+        public Tomb(long createdBlock, long lastAttemptBlock) {
+            this.createdBlock = createdBlock;
+            this.lastAttemptBlock = lastAttemptBlock;
+        }
+    }
+
     /** slot id ("B1"/"A2"…) → what we posted for it and when. */
     public final Map<String, SlotRec> slots = new LinkedHashMap<>();
-    /** orderId → block its cancel was sent. Lives until the coin is verifiably gone. */
-    public final Map<String, Long> cancelTombstones = new LinkedHashMap<>();
+    /** orderId → its death warrant. Lives until the coin is verifiably gone for good. */
+    public final Map<String, Tomb> cancelTombstones = new LinkedHashMap<>();
     public BigDecimal lastActedMid = null;
 
     public MakerConfig(Context ctx) {
@@ -154,10 +171,22 @@ public final class MakerConfig {
 
     // ---------------------------------------------------------------- tombstones
 
-    public void tombstone(String orderId, long block) {
+    /** Condemn an orderId. Keeps the original createdBlock if it is already condemned, so
+     *  repeated attempts can never extend (or shorten) its protection window. */
+    public void tombstone(String orderId, long createdBlock, long lastAttemptBlock) {
         if (orderId == null || orderId.isEmpty()) return;
-        cancelTombstones.put(orderId, block);
+        Tomb existing = cancelTombstones.get(orderId);
+        if (existing == null) {
+            cancelTombstones.put(orderId, new Tomb(createdBlock, lastAttemptBlock));
+        } else {
+            existing.lastAttemptBlock = lastAttemptBlock;
+        }
         save();
+    }
+
+    /** Condemn without having sent a cancel yet — the sweep picks it up on its next pass. */
+    public void tombstone(String orderId, long block) {
+        tombstone(orderId, block, 0);
     }
 
     public void clearTombstone(String orderId) {
@@ -165,6 +194,13 @@ public final class MakerConfig {
     }
 
     // ---------------------------------------------------------------- load / save
+
+    /** Re-read persisted state. The foreground Activity and the background service each hold
+     *  their own instance; whichever is about to ACT must reload first, or it will save a
+     *  stale slot map over the other's records and orphan whatever the other posted. */
+    public void reload() {
+        if (prefs != null) load();
+    }
 
     private void load() {
         asks.clear();
@@ -244,7 +280,14 @@ public final class MakerConfig {
             JSONObject o = new JSONObject(prefs.getString(K_TOMB, "{}"));
             for (Iterator<String> it = o.keys(); it.hasNext(); ) {
                 String k = it.next();
-                cancelTombstones.put(k, o.optLong(k, 0));
+                JSONObject t = o.optJSONObject(k);
+                if (t != null) {
+                    cancelTombstones.put(k, new Tomb(t.optLong("made", 0), t.optLong("try", 0)));
+                } else {
+                    // 0.2.7.0 wrote a bare block number — carry it over as both clocks
+                    long b = o.optLong(k, 0);
+                    cancelTombstones.put(k, new Tomb(b, b));
+                }
             }
         } catch (Exception ignore) {}
 
@@ -295,7 +338,12 @@ public final class MakerConfig {
                 o.put("act", r.lastActionBlock);
                 recs.put(e.getKey(), o);
             }
-            for (Map.Entry<String, Long> e : cancelTombstones.entrySet()) tomb.put(e.getKey(), e.getValue());
+            for (Map.Entry<String, Tomb> e : cancelTombstones.entrySet()) {
+                JSONObject t = new JSONObject();
+                t.put("made", e.getValue().createdBlock);
+                t.put("try", e.getValue().lastAttemptBlock);
+                tomb.put(e.getKey(), t);
+            }
         } catch (Exception ignore) {}
         prefs.edit()
                 .putString(K_ASKS, levelsJson(asks).toString())
