@@ -38,7 +38,7 @@ public final class MakerTab extends LinearLayout {
     private final MainActivity act;
     private final MakerConfig cfg;
 
-    private TextView stateTv, feedTv, midTv, armBtn, previewTv, pegPxTv, slotsTv, stageTv;
+    private TextView stateTv, feedTv, midTv, armBtn, previewTv, pegPxTv, slotsTv, stageTv, applyBtn;
     private SwitchCompat pegSw;
     private EditText midIn, stepIn, levelsIn, askSizeIn, bidSizeIn, skewIn, repriceIn;
     private final EditText[][] askRows = new EditText[MakerLadder.MAX_LEVELS][];
@@ -341,6 +341,33 @@ public final class MakerTab extends LinearLayout {
         LayoutParams al = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
         al.bottomMargin = dp(8);
         addView(armBtn, al);
+
+        // ---- apply edits in place: the engine already reprices a rung with a single re-lock
+        // that never moves the funds, so tearing the whole ladder down to change a price was
+        // never necessary — there was just no way to ask for it ----
+        applyBtn = tv("APPLY EDITS TO THE LIVE LADDER", 12f, Design.ACCENT(), Design.sansBold());
+        applyBtn.setGravity(Gravity.CENTER);
+        applyBtn.setPadding(0, dp(11), 0, dp(11));
+        applyBtn.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
+        applyBtn.setOnClickListener(v -> applyEdits());
+        Design.pressable(applyBtn);
+        LayoutParams ap = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+        ap.bottomMargin = dp(8);
+        addView(applyBtn, ap);
+    }
+
+    /** Commit the fields and ask the engine to reconcile the live ladder to them. */
+    private void applyEdits() {
+        commit();
+        if (cfg.pegged) {
+            double m = MarketPrice.mid();
+            if (!(m > 0) || !MarketPrice.fresh()) {
+                MarketPrice.refreshAsync();
+                act.toast("Waiting for the MEXC price — try again in a few seconds");
+                return;
+            }
+        }
+        act.applyMakerEdits(cfg.pegged ? BigDecimal.valueOf(MarketPrice.mid()) : null);
     }
 
     // ---------------------------------------------------------------- auto-fill (AtomiX)
@@ -681,6 +708,8 @@ public final class MakerTab extends LinearLayout {
                               : "NOT PUBLISHED");
         stateTv.setTextColor(armed ? (cfg.pegged && MarketPrice.mustWithdraw() ? Design.RED() : Design.IN())
                                    : Design.DIM());
+        // only meaningful against a live ladder
+        applyBtn.setVisibility(armed ? VISIBLE : GONE);
         armBtn.setText(armed ? "WITHDRAW LADDER (cancels all rungs)" : "PUBLISH LADDER");
         armBtn.setBackground(Design.ripple(Design.roundBg(getContext(),
                 armed ? Design.RED() : Design.IN(), 12)));

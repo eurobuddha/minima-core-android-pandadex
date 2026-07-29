@@ -80,6 +80,53 @@ public final class MakerEngine {
 
     public boolean isWorking() { return working; }
 
+    /** Let the next book update act immediately instead of waiting out the cycle gate. For a
+     *  DELIBERATE edit only — the gate exists to stop the maker burning proof-of-work on every
+     *  tick, so nothing automatic may call this. */
+    public void nudge() { lastCycleMs = 0; }
+
+    /**
+     * What applying the current config to the live book would cost, as {relocks, reposts,
+     * creates, cancels}. Uses the real reconciliation with no budget, so the preview cannot
+     * drift from what the engine will actually do.
+     */
+    public int[] previewEdits(Map<String, Order5> book, Set<String> myKeys, long chainBlock,
+                              BigDecimal mid) {
+        List<MakerLadder.Slot> desired = MakerLadder.desired(mid, cfg.toLadderConfig(),
+                BigDecimal.ONE);
+        Map<String, Order5> byOrderId = new HashMap<>();
+        for (Order5 o : book.values()) {
+            if (o.isMine(myKeys) && !cfg.cancelTombstones.containsKey(o.orderId)) {
+                byOrderId.put(o.orderId, o);
+            }
+        }
+        Map<String, Order5> liveBySlot = new HashMap<>();
+        Map<String, BigDecimal> postedSizes = new HashMap<>();
+        for (Map.Entry<String, MakerConfig.SlotRec> e : cfg.slots.entrySet()) {
+            Order5 o = byOrderId.get(e.getValue().orderId);
+            if (o == null) continue;
+            liveBySlot.put(e.getKey(), o);
+            BigDecimal posted = cfg.postedSizeFor(e.getKey());
+            if (posted != null) postedSizes.put(e.getKey(), posted);
+        }
+        BigDecimal threshold = cfg.pegged ? cfg.repricePct : BigDecimal.ZERO;
+        List<MakerLadder.Action> actions = MakerLadder.reconcile(desired, liveBySlot, null, null,
+                threshold, new HashSet<>(), postedSizes,
+                new MakerLadder.Budget(0, Integer.MAX_VALUE));
+        // Count by REASON, not by kind: a resize emits a CANCEL+CREATE pair for one rung, and
+        // pairing them by arithmetic would miscount an unrelated new rung against an unrelated
+        // removed one. reconcile() tags the pair "size changed".
+        int relocks = 0, reposts = 0, creates = 0, cancels = 0;
+        for (MakerLadder.Action a : actions) {
+            boolean resize = "size changed".equals(a.reason);
+            if (a.kind == MakerLadder.Kind.RELOCK) relocks++;
+            else if (resize) { if (a.kind == MakerLadder.Kind.CREATE) reposts++; }
+            else if (a.kind == MakerLadder.Kind.CREATE) creates++;
+            else cancels++;
+        }
+        return new int[]{relocks, reposts, creates, cancels};
+    }
+
     /** Run {@code r} now if idle, otherwise the instant the current chain finishes. */
     public void runWhenIdle(Runnable r) {
         if (r == null) return;

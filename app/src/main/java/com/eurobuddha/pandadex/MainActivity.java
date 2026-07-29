@@ -52,6 +52,7 @@ public class MainActivity extends AppCompatActivity {
     private BookRepository repo;
     private DexTxn txn;
     private KeySet keySet;
+    private FillVerifier verifier;
     private Pending pending;
     private DexProcessor processor;
     private boolean keepAliveAsked = false;
@@ -123,6 +124,7 @@ public class MainActivity extends AppCompatActivity {
             if (enabled) onPaired();
         });
         repo = new BookRepository(node, db);
+        verifier = new FillVerifier(node);
         txn = new DexTxn(node, db);
         processor = new DexProcessor(this, txn);
         maker = new MakerEngine(makerCfg, txn);
@@ -910,6 +912,52 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    /**
+     * Apply ladder edits to the LIVE book without tearing it down.
+     *
+     * A price change is one re-lock — the covenant's owner branch changes the price in a single
+     * transaction and the funds never leave the book, so the rung is never missing. An AMOUNT
+     * change cannot work that way (the locked value is fixed), so that rung has to be cancelled
+     * and reposted, and it does leave the book for a block or two. The dialog says which is
+     * which, because those are very different promises.
+     */
+    public void applyMakerEdits(BigDecimal mid) {
+        if (!ready() || maker == null) return;
+        if (!makerCfg.armed) { toast("Publish the ladder first"); return; }
+        if (maker.isWorking()) { toast("Mid-adjustment — try again in a moment"); return; }
+
+        int[] p = maker.previewEdits(book(), keys(), chainBlock, mid);
+        int relocks = p[0], reposts = p[1], creates = p[2], cancels = p[3];
+        if (relocks + reposts + creates + cancels == 0) {
+            toast("The live ladder already matches these settings");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (relocks > 0) sb.append("• ").append(relocks).append(relocks == 1 ? " rung re-prices" : " rungs re-price")
+                .append(" in place — one transaction each, funds never leave the book.\n");
+        if (reposts > 0) sb.append("• ").append(reposts).append(reposts == 1 ? " rung changes" : " rungs change")
+                .append(" AMOUNT — locked funds can't be resized, so each is cancelled and "
+                        + "reposted and leaves the book for a block or two.\n");
+        if (creates > 0) sb.append("• ").append(creates).append(creates == 1 ? " new rung" : " new rungs")
+                .append(" posted.\n");
+        if (cancels > 0) sb.append("• ").append(cancels).append(cancels == 1 ? " rung removed" : " rungs removed")
+                .append(".\n");
+        sb.append("\nRungs post one per side per cycle, so a large batch lands over a few "
+                + "minutes. The status panel shows each one.");
+
+        new AlertDialog.Builder(this, Design.dialogTheme())
+                .setTitle("Apply edits to the live ladder")
+                .setMessage(sb.toString())
+                .setPositiveButton("Apply", (d, w) -> {
+                    maker.nudge();          // don't wait out the cycle gate for a deliberate edit
+                    setStage("Applying ladder edits…");
+                    repo.refresh();
+                    repaint();
+                })
+                .setNegativeButton("Not yet", null)
+                .show();
+    }
+
     /** Withdraw the ladder: disarm, cancel everything it owns, chase what hasn't confirmed. */
     public void withdrawLadder() {
         if (maker == null || repo == null) return;
@@ -994,6 +1042,23 @@ public class MainActivity extends AppCompatActivity {
 
     private void onFillObserved(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
                                 boolean takerBuy, boolean partial) {
+        // A PARTIAL is proven by the remainder coin — the delta is exact, record it. A whole
+        // coin vanishing is ambiguous (fill or somebody's cancel), so ask the chain first.
+        if (!partial) {
+            verifier.verify(order, chainBlock, v -> {
+                if (v == FillVerifier.Verdict.CANCELLED) {
+                    db.noteCancelled(spentCoin);   // settled — never adjudicate it again
+                    return;
+                }
+                recordFill(spentCoin, order, size, price, takerBuy, false);
+            });
+            return;
+        }
+        recordFill(spentCoin, order, size, price, takerBuy, true);
+    }
+
+    private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
+                            boolean takerBuy, boolean partial) {
         boolean mine = order.isMine(keys(), addrs());
         boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                 takerBuy, partial, mine);

@@ -42,6 +42,7 @@ public class DexKeepAliveService extends Service {
     private DexProcessor processor;
     private MakerConfig makerCfg;
     private MakerEngine maker;
+    private FillVerifier verifier;
     private KeySet keySet;
     private FillTape tape;
     private boolean started = false;
@@ -60,6 +61,7 @@ public class DexKeepAliveService extends Service {
         processor = new DexProcessor(getApplicationContext(), txn);
         makerCfg = new MakerConfig(getApplicationContext());
         maker = new MakerEngine(makerCfg, txn);
+        verifier = new FillVerifier(node);
         keySet = new KeySet(getApplicationContext(), null);
         // The staleness ceiling must clear OUR polling gap, or every pass re-seeds and this
         // service can never record a fill (nor fire the "order filled" notification).
@@ -157,6 +159,20 @@ public class DexKeepAliveService extends Service {
 
     private void onFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
                         boolean takerBuy, boolean partial) {
+        // Same rule as the Activity: a partial is proven by its remainder, a whole coin
+        // vanishing has to be settled against the chain before it becomes a trade.
+        if (!partial) {
+            verifier.verify(order, chainBlock, v -> {
+                if (v == FillVerifier.Verdict.CANCELLED) { db.noteCancelled(spentCoin); return; }
+                recordFill(spentCoin, order, size, price, takerBuy, false);
+            });
+            return;
+        }
+        recordFill(spentCoin, order, size, price, takerBuy, true);
+    }
+
+    private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
+                            boolean takerBuy, boolean partial) {
         boolean mine = order.isMine(keySet.keys(), keySet.addrs());
         boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                 takerBuy, partial, mine);
