@@ -271,4 +271,15 @@ public final class DexDb extends SQLiteOpenHelper {
         }
         return out;
     }
+
+    /** Every coin THIS device cancelled, in one query. Used to keep the cold-start snapshot
+     *  from painting orders we already know are spent — a per-coin lookup would be hundreds
+     *  of queries on the main thread at launch. */
+    public java.util.Set<String> cancelledIds() {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT coinid FROM cancelled", null)) {
+            while (c.moveToNext()) out.add(c.getString(0));
+        } catch (Exception ignore) {}
+        return out;
+    }
 }

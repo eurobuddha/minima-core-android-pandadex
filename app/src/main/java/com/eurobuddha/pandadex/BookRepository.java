@@ -49,11 +49,15 @@ public final class BookRepository {
             @Override public void note(String coinid) { db.noteCancelled(coinid); }
             @Override public boolean consume(String coinid) { return db.wasCancelled(coinid); }
         });
-        // local-first: seed the cache from the persisted last-good book BEFORE any node work
+        // local-first: seed the cache from the persisted last-good book BEFORE any node work.
+        // Skip anything WE cancelled: the snapshot is only as fresh as the last scan that wrote
+        // it, so after cancelling orders it still lists them, and painting them on launch shows
+        // the user rows they already killed — with cancel buttons on coins that no longer exist.
+        java.util.Set<String> dead = db.cancelledIds();
         for (String json : db.loadBook()) {
             try {
                 Order5 o = Order5.from(new JSONObject(json));
-                if (o != null) cached.put(o.coinid, o);
+                if (o != null && !dead.contains(o.coinid)) cached.put(o.coinid, o);
             } catch (Exception ignore) {}
         }
     }
@@ -112,7 +116,8 @@ public final class BookRepository {
             if (!truncated) {
                 if (orders.isEmpty() && !cached.isEmpty()) emptyScans++; else emptyScans = 0;
             }
-            boolean believable = believable(truncated, orders.isEmpty(), cached.isEmpty(), emptyScans);
+            boolean believable = believable(truncated, orders.isEmpty(), cached.isEmpty(),
+                    emptyScans, haveLive);
             if (believable) {
                 cached = orders;
                 haveLive = true;
@@ -150,8 +155,13 @@ public final class BookRepository {
      * empty, in which case there is nothing to contradict.
      */
     static boolean believable(boolean truncated, boolean ordersEmpty, boolean cachedEmpty,
-                              int emptyScans) {
+                              int emptyScans, boolean haveLive) {
         if (truncated) return false;
+        // Before the FIRST live scan the cache is a guess loaded from disk, not an observation.
+        // The confirmation gate exists to stop one bad read destroying a book we have actually
+        // seen — it must not defend a stale snapshot against fresh evidence, or a cold start
+        // after cancelling everything paints dead orders until three scans talk it round.
+        if (!haveLive) return true;
         boolean suspectEmpty = ordersEmpty && !cachedEmpty && emptyScans < EMPTY_CONFIRM;
         return !suspectEmpty;
     }
