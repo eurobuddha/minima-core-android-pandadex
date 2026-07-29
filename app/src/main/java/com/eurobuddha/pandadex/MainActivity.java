@@ -211,6 +211,7 @@ public class MainActivity extends AppCompatActivity {
                 JSONObject r = json.optJSONObject("response");
                 if (r == null) return;
                 keySet.addExtra(r.optString("publickey", ""));
+                keySet.addExtraAddr(r.optString("address", ""));
                 txn.setIdentity(r.optString("publickey", ""), r.optString("address", ""));
                 receiveAddr = r.optString("miniaddress", r.optString("address", ""));
                 repaint();

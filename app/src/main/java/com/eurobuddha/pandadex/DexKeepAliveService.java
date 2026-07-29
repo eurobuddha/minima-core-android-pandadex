@@ -92,6 +92,7 @@ public class DexKeepAliveService extends Service {
                 JSONObject r = json.optJSONObject("response");
                 if (r == null) return;
                 keySet.addExtra(r.optString("publickey", ""));
+                keySet.addExtraAddr(r.optString("address", ""));
                 txn.setIdentity(r.optString("publickey", ""), r.optString("address", ""));
                 readBlockThenBook();
             }

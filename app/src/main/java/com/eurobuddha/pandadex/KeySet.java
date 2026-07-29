@@ -83,6 +83,19 @@ public final class KeySet {
         if (pubkey != null && !pubkey.isEmpty()) keys.add(pubkey);
     }
 
+    /**
+     * Union in the address we actually PAY OURSELVES TO — the one written into port 1 of every
+     * order this app creates.
+     *
+     * Without this the two-factor check has a catastrophic failure mode: a populated address
+     * set that happens to omit our own payout address makes our own live orders read as
+     * strangers', and the maker would then post its whole ladder a second time. The fallback
+     * only covers an EMPTY set, so the set must be right whenever it is non-empty.
+     */
+    public void addExtraAddr(String address) {
+        if (address != null && !address.isEmpty()) addrs.add(address);
+    }
+
     /** Load the full key set from the node; retry with backoff; never shrink on failure. */
     public void refresh(NodeApi node) {
         node.cmd("keys", new NodeApi.Cb() {
@@ -129,14 +142,26 @@ public final class KeySet {
                         if (!a.isEmpty()) found.add(a);
                     }
                 }
-                if (found.isEmpty()) return;                  // keep what we had — never shrink
+                if (found.isEmpty()) { scheduleAddrRetry(node); return; }   // never shrink
                 addrs.clear();
                 addrs.addAll(found);
+                addrAttempt = 0;
                 prefs.edit().putString(ADDRS, new JSONArray(found).toString()).apply();
                 if (listener != null) listener.onKeysReady();
             }
-            @Override public void onError(String message) { /* keep the cached set */ }
+            @Override public void onError(String message) { scheduleAddrRetry(node); }
         });
+    }
+
+    /** Retry like the key load does. Without this a single failed `scripts` call left the
+     *  address set empty for the whole session — silently reverting ownership to the weaker
+     *  key-only check, since refresh() only runs on pairing. */
+    private int addrAttempt = 0;
+
+    private void scheduleAddrRetry(NodeApi node) {
+        long delay = BACKOFF_MS[Math.min(addrAttempt, BACKOFF_MS.length - 1)];
+        addrAttempt++;
+        ui.postDelayed(() -> refreshAddrs(node), delay);
     }
 
     private void scheduleRetry(NodeApi node) {

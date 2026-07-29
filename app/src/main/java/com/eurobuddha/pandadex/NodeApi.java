@@ -149,7 +149,12 @@ public class NodeApi {
             // ALWAYS dispatch: a caller that never hears back can wedge forever — BookRepository
             // sets `scanning = true` before calling and only clears it in the callback, so a
             // silent return makes every later refresh() a no-op.
-            if (cb != null) cb.onError("Node API released");
+            //
+            // POSTED, never inline: every other reply in this class arrives via mMain, and
+            // callers set their own state AFTER the call returns. Running the callback inside
+            // cmd() would re-enter them mid-setup — BookScanner would chain its next query and
+            // deliver a whole book callback before refresh() had even finished starting.
+            if (cb != null) mMain.post(() -> cb.onError("Node API released"));
             return;
         }
         final boolean isWrite = timeoutFor(command) == WRITE_TIMEOUT_MS;
