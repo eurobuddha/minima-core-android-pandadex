@@ -77,6 +77,34 @@ public final class OrdersTab extends LinearLayout {
         Map<String, Order5> book = act.book();
         long block = act.chainBlock();
         boolean any = false;
+
+        // ---- in-flight rows first: orders MINING toward the book and cancels CONFIRMING off
+        // it. The confirmed book lags a posted transaction by a block or more — without these
+        // the user stares at an unchanged screen for minutes (the 0.2.6 complaint).
+        java.util.Set<String> cancelling = new java.util.HashSet<>();
+        for (Pending.Row r : act.pendingRows()) {
+            if (Pending.CANCEL.equals(r.kind)) {
+                cancelling.add(r.coinid);
+                continue;
+            }
+            if (!Pending.PLACE.equals(r.kind)) continue;
+            any = true;
+            LinearLayout card = new LinearLayout(getContext());
+            card.setOrientation(VERTICAL);
+            card.setBackground(Design.card(getContext(), 10));
+            int pp = Design.dp(getContext(), 10);
+            card.setPadding(pp, pp, pp, pp);
+            card.setAlpha(0.75f);
+            card.addView(line((r.buy ? "BUY " : "SELL ") + PriceMath.fmt(r.minima)
+                            + " MINIMA @ " + PriceMath.fmtPrice(r.price),
+                    r.buy ? Design.IN() : Design.RED(), 12f));
+            card.addView(line("⏳ MINING — on the book when a block confirms it (~50s)",
+                    Design.ACCENT(), 9.5f));
+            LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = Design.dp(getContext(), 8);
+            body.addView(card, lp);
+        }
+
         int mineCount = 0;
         for (Order5 o : book.values()) if (o.isMine(act.keys())) mineCount++;
         if (mineCount > 1) {
@@ -93,29 +121,37 @@ public final class OrdersTab extends LinearLayout {
         for (Order5 o : book.values()) {
             if (!o.isMine(act.keys())) continue;
             any = true;
+            boolean isCancelling = cancelling.contains(o.coinid);
             LinearLayout card = new LinearLayout(getContext());
             card.setOrientation(VERTICAL);
             card.setBackground(Design.card(getContext(), 10));
             int p = Design.dp(getContext(), 10);
             card.setPadding(p, p, p, p);
+            if (isCancelling) card.setAlpha(0.6f);
 
             LinearLayout top = new LinearLayout(getContext());
             top.setGravity(Gravity.CENTER_VERTICAL);
             top.addView(line((o.sell ? "SELL " : "BUY ") + PriceMath.fmt(o.minimaAmount())
                             + " MINIMA @ " + PriceMath.fmtPrice(o.price()), o.sell ? Design.RED() : Design.IN(), 12f),
                     new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-            TextView edit = line(" ✎ ", Design.DIM(), 14f);
-            edit.setOnClickListener(v -> act.editOrder(o));
-            top.addView(edit);
-            TextView cancel = line(" ✕ ", Design.RED(), 14f);
-            cancel.setOnClickListener(v -> act.cancelOrder(o));
-            top.addView(cancel);
+            if (!isCancelling) {
+                // no edit/cancel affordances on an order that is already being cancelled —
+                // a second cancel would just burn proof-of-work on a doomed coin
+                TextView edit = line(" ✎ ", Design.DIM(), 14f);
+                edit.setOnClickListener(v -> act.editOrder(o));
+                top.addView(edit);
+                TextView cancel = line(" ✕ ", Design.RED(), 14f);
+                cancel.setOnClickListener(v -> act.cancelOrder(o));
+                top.addView(cancel);
+            }
             card.addView(top);
 
             String meta = (o.gtc ? "GTC ∞" : "expires") + "  ·  age " + o.age(block) + " blk"
                     + "  ·  min remainder " + PriceMath.fmt(o.minRem)
                     + "  ·  total " + PriceMath.fmt(o.usdtAmount()) + " mxUSDT";
             card.addView(line(meta, Design.DIM2(), 9.5f));
+            if (isCancelling) card.addView(line("⏳ CANCELLING — gone when a block confirms it (~50s)",
+                    Design.ACCENT(), 9.5f));
             if (o.expired(block)) card.addView(line("EXPIRED — refundable to your wallet", Design.ACCENT(), 9.5f));
 
             LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);

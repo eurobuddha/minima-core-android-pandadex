@@ -27,20 +27,33 @@ public class MakerLadderTest {
 
     private static final BigDecimal MID = new BigDecimal("0.050000");
 
-    /** A pegged config — AtomiX's quick-generate seed parameters. */
+    /** A pegged config with UNIFORM sizes — synthesized into positional rung rows, the way
+     *  the auto-fill seeds them. Per-rung control is exercised by the dedicated tests. */
     private static MakerLadder.Config pegged(int levels, String step, String askSize,
                                              String bidSize, String skew, String reprice) {
-        return new MakerLadder.Config(true, new BigDecimal(step), levels,
-                new BigDecimal(askSize), new BigDecimal(bidSize),
-                new ArrayList<>(), new ArrayList<>(),
+        List<MakerLadder.Level> asks = new ArrayList<>();
+        List<MakerLadder.Level> bids = new ArrayList<>();
+        for (int i = 0; i < levels; i++) {
+            if (new BigDecimal(askSize).signum() > 0)
+                asks.add(new MakerLadder.Level(BigDecimal.ZERO, new BigDecimal(askSize)));
+            if (new BigDecimal(bidSize).signum() > 0)
+                bids.add(new MakerLadder.Level(BigDecimal.ZERO, new BigDecimal(bidSize)));
+        }
+        return new MakerLadder.Config(true, new BigDecimal(step), asks, bids,
                 new BigDecimal(skew), new BigDecimal(reprice));
+    }
+
+    /** A pegged config with EXPLICIT positional rung rows (per-rung sizes). */
+    private static MakerLadder.Config peggedRows(String step, List<MakerLadder.Level> asks,
+                                                 List<MakerLadder.Level> bids) {
+        return new MakerLadder.Config(true, new BigDecimal(step), asks, bids,
+                BigDecimal.ZERO, new BigDecimal("0.1"));
     }
 
     /** A manual config — explicit rungs, quoted as typed. */
     private static MakerLadder.Config manual(List<MakerLadder.Level> asks,
                                              List<MakerLadder.Level> bids) {
-        return new MakerLadder.Config(false, BigDecimal.ZERO, 1,
-                BigDecimal.ZERO, BigDecimal.ZERO, asks, bids,
+        return new MakerLadder.Config(false, BigDecimal.ZERO, asks, bids,
                 BigDecimal.ZERO, new BigDecimal("0.1"));
     }
 
@@ -161,12 +174,54 @@ public class MakerLadderTest {
 
     @Test public void manualLaddersIgnoreWideningAndSkew() {
         // fixed prices must never move — widening/skew are peg concepts
-        MakerLadder.Config c = new MakerLadder.Config(false, BigDecimal.ZERO, 1,
-                BigDecimal.ZERO, BigDecimal.ZERO,
+        MakerLadder.Config c = new MakerLadder.Config(false, BigDecimal.ZERO,
                 Arrays.asList(lvl("0.052", "100")), new ArrayList<>(),
                 new BigDecimal("5"), new BigDecimal("0.1"));
         List<MakerLadder.Slot> slots = MakerLadder.desired(MID, c, new BigDecimal(6));
         assertEquals(0, new BigDecimal("0.052").compareTo(find(slots, "A1").price));
+    }
+
+    // ---------------- per-rung sizes while pegged (the user's control) ----------------
+
+    @Test public void peggedSizesComeFromTheRungRowsNotAUniformSeed() {
+        // rung i keeps ITS OWN size; only the prices are generated around the mid
+        MakerLadder.Config c = peggedRows("0.20",
+                Arrays.asList(lvl("0", "100"), lvl("0", "250")),
+                Arrays.asList(lvl("0", "80")));
+        List<MakerLadder.Slot> slots = MakerLadder.desired(MID, c, BigDecimal.ONE);
+        assertEquals(3, slots.size());
+        assertEquals(0, new BigDecimal("100").compareTo(find(slots, "A1").sizeMinima));
+        assertEquals(0, new BigDecimal("250").compareTo(find(slots, "A2").sizeMinima));
+        assertEquals(0, new BigDecimal("80").compareTo(find(slots, "B1").sizeMinima));
+        assertTrue("A2 sits further out than A1",
+                find(slots, "A2").price.compareTo(find(slots, "A1").price) > 0);
+    }
+
+    @Test public void aZeroSizedRungIsAGapWithStableIds() {
+        // blanking B2 must not shift B3 inward — position IS identity
+        MakerLadder.Config c = peggedRows("0.20",
+                new ArrayList<>(),
+                Arrays.asList(lvl("0", "100"), lvl("0", "0"), lvl("0", "300")));
+        List<MakerLadder.Slot> slots = MakerLadder.desired(MID, c, BigDecimal.ONE);
+        assertEquals(2, slots.size());
+        assertNull("B2 is a gap", find(slots, "B2"));
+        MakerLadder.Slot b1 = find(slots, "B1"), b3 = find(slots, "B3");
+        assertEquals(0, new BigDecimal("300").compareTo(b3.sizeMinima));
+        assertTrue("B3 keeps its 3-step price", b3.price.compareTo(b1.price) < 0);
+        // 0.20% and 0.60% below the 0.05 mid
+        assertEquals("0.049900", PriceMath.fmtPrice(b1.price));
+        assertEquals("0.049700", PriceMath.fmtPrice(b3.price));
+    }
+
+    @Test public void commitmentsSumEachSideInItsOwnToken() {
+        MakerLadder.Config c = manual(
+                Arrays.asList(lvl("0.05", "100"), lvl("0.06", "200")),
+                Arrays.asList(lvl("0.04", "50")));
+        MakerLadder.Commitments cm = MakerLadder.commitments(
+                MakerLadder.desired(null, c, BigDecimal.ONE));
+        assertEquals("asks lock MINIMA", 0, new BigDecimal("300").compareTo(cm.askMinima));
+        // bid locks 50 × 0.04 = 2 mxUSDT
+        assertEquals("bids lock mxUSDT", 0, new BigDecimal("2").compareTo(cm.bidUsdt));
     }
 
     @Test public void crossedMarketIsDetected() {
@@ -293,6 +348,60 @@ public class MakerLadderTest {
             assertFalse("cancels must not consume the whole budget",
                     a.kind == MakerLadder.Kind.CANCEL);
         }
+    }
+
+    // ---------------- settling + per-side create budget ----------------
+
+    @Test public void aSettlingSlotIsNeitherCreatedNorRelockedNorResized() {
+        List<MakerLadder.Slot> want = want(2);   // B1,A1,B2,A2
+        Map<String, Order5> live = new HashMap<>();
+        live.put("A1", order("0xC1", "0.070000", "100"));    // badly mispriced — would relock
+        Map<String, BigDecimal> posted = new HashMap<>();
+        posted.put("A1", new BigDecimal("999"));             // and size-changed — would resize
+        HashSet<String> settling = new HashSet<>(Arrays.asList("A1", "B1"));
+        List<MakerLadder.Action> acts = MakerLadder.reconcile(want, live, settling,
+                new BigDecimal("0.1"), new HashSet<>(), posted,
+                new MakerLadder.Budget(0, Integer.MAX_VALUE));
+        for (MakerLadder.Action a : acts) {
+            assertFalse("settling A1 must not be touched",
+                    (a.slot != null && "A1".equals(a.slot.id))
+                            || (a.order != null && "0xC1".equals(a.order.coinid)));
+            assertFalse("settling B1 must not be re-created",
+                    a.slot != null && "B1".equals(a.slot.id));
+        }
+    }
+
+    @Test public void createsAreCappedPerSidePerCycle() {
+        // funding-coin contention: one create per side per cycle — B1 and A1 only,
+        // never two same-side sends racing for the same wallet coins
+        List<MakerLadder.Action> acts = MakerLadder.reconcile(want(6), new HashMap<>(), null,
+                new BigDecimal("0.1"), new HashSet<>(), null,
+                new MakerLadder.Budget(0, 1));
+        assertEquals(2, acts.size());
+        int bids = 0, asks = 0;
+        for (MakerLadder.Action a : acts) {
+            assertEquals(MakerLadder.Kind.CREATE, a.kind);
+            if (a.slot.sell) asks++; else bids++;
+            assertTrue("the BEST missing rung goes first",
+                    "B1".equals(a.slot.id) || "A1".equals(a.slot.id));
+        }
+        assertEquals(1, bids);
+        assertEquals(1, asks);
+    }
+
+    @Test public void relocksAndCancelsAreNotSideCapped() {
+        // the per-side budget exists for funding contention; relocks/cancels spend only the
+        // order coin itself and must not be starved by it
+        List<MakerLadder.Slot> want = want(2);
+        Map<String, Order5> live = new HashMap<>();
+        live.put("A1", order("0xC1", "0.070000", "100"));
+        live.put("A2", order("0xC2", "0.080000", "100"));
+        List<MakerLadder.Action> acts = MakerLadder.reconcile(want, live, null,
+                new BigDecimal("0.1"), new HashSet<>(), null,
+                new MakerLadder.Budget(0, 1));
+        int relocks = 0;
+        for (MakerLadder.Action a : acts) if (a.kind == MakerLadder.Kind.RELOCK) relocks++;
+        assertEquals("both mispriced asks relock in one cycle", 2, relocks);
     }
 
     // ---------------- exact mode (manual ladder — threshold ≤ 0) ----------------

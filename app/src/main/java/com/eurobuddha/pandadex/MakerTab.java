@@ -38,7 +38,7 @@ public final class MakerTab extends LinearLayout {
     private final MainActivity act;
     private final MakerConfig cfg;
 
-    private TextView stateTv, feedTv, midTv, armBtn, previewTv, pegPxTv;
+    private TextView stateTv, feedTv, midTv, armBtn, previewTv, pegPxTv, slotsTv, stageTv;
     private SwitchCompat pegSw;
     private EditText midIn, stepIn, levelsIn, askSizeIn, bidSizeIn, skewIn, repriceIn;
     private final EditText[][] askRows = new EditText[MakerLadder.MAX_LEVELS][];
@@ -121,7 +121,7 @@ public final class MakerTab extends LinearLayout {
         return t;
     }
 
-    /** A rung row: label + price + amount, AtomiX's numRow2. Returns {price, amount}. */
+    /** A rung row: label + price + amount + ✕ clear, AtomiX's numRow2. Returns {price, amount}. */
     private EditText[] rungRow(LinearLayout parent, String label, MakerLadder.Level seed, int labelColour) {
         LinearLayout row = new LinearLayout(getContext());
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -134,6 +134,12 @@ public final class MakerTab extends LinearLayout {
         l1.rightMargin = dp(6);
         row.addView(price, l1);
         row.addView(amount, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        TextView clr = tv("✕", 12f, Design.DIM2(), Design.sans());
+        clr.setGravity(Gravity.CENTER);
+        clr.setPadding(dp(8), dp(4), dp(2), dp(4));
+        clr.setOnClickListener(v -> { price.setText(""); amount.setText(""); });
+        Design.pressable(clr);
+        row.addView(clr);
         parent.addView(row);
         return new EditText[]{price, amount};
     }
@@ -212,7 +218,7 @@ public final class MakerTab extends LinearLayout {
         lc.addView(pegRow);
 
         // ---- auto-fill: seeds the rungs; rows regenerate as these change (no Generate button) ----
-        lc.addView(sectionLabel("AUTO-FILL (mid · step % · levels, then ask/bid size — seeds the rungs; edit any rung after while unpegged)"));
+        lc.addView(sectionLabel("AUTO-FILL (mid · step % · levels, then ask/bid size — seeds the rungs; edit any rung after)"));
         LinearLayout gen = new LinearLayout(getContext());
         gen.setGravity(Gravity.CENTER_VERTICAL);
         gen.setPadding(0, dp(4), 0, dp(2));
@@ -267,6 +273,16 @@ public final class MakerTab extends LinearLayout {
         previewTv.setPadding(0, dp(10), 0, dp(2));
         lc.addView(previewTv);
 
+        // ---- per-rung on-chain status: the story 0.2.6 never told (mining/live/failed) ----
+        lc.addView(sectionLabel("ON-CHAIN STATUS"));
+        slotsTv = tv("", 10.5f, Design.DIM(), Design.mono());
+        slotsTv.setLineSpacing(dp(2), 1f);
+        slotsTv.setPadding(0, dp(2), 0, dp(2));
+        lc.addView(slotsTv);
+        stageTv = tv("", 9.5f, Design.DIM2(), Design.sans());
+        stageTv.setPadding(0, dp(2), 0, dp(2));
+        lc.addView(stageTv);
+
         // Watchers attach AFTER all initial seeding, so opening the tab never stomps a saved
         // (possibly hand-tuned) ladder; only an actual edit regenerates — same as AtomiX.
         TextWatcher pw = onChange(this::updatePreview);
@@ -274,15 +290,18 @@ public final class MakerTab extends LinearLayout {
         for (EditText[] row : bidRows) { row[0].addTextChangedListener(pw); row[1].addTextChangedListener(pw); }
         updatePreview();
 
-        // AUTO-GENERATE: any seed-param edit rebuilds the 6+6 rows. repriceIn isn't watched
-        // (the reprice threshold doesn't shape the rows).
-        TextWatcher gw = onChange(this::autoGen);
-        midIn.addTextChangedListener(gw);
-        stepIn.addTextChangedListener(gw);
-        levelsIn.addTextChangedListener(gw);
-        askSizeIn.addTextChangedListener(gw);
-        bidSizeIn.addTextChangedListener(gw);
-        skewIn.addTextChangedListener(gw);
+        // AUTO-GENERATE, split by what the edit means for the user's per-rung sizes:
+        //  - size/levels seed edits REBUILD the rows (that's what the user asked for);
+        //  - mid/step/skew edits touch PRICES ONLY — hand-tuned rung sizes must survive.
+        // repriceIn isn't watched (the reprice threshold doesn't shape the rows).
+        TextWatcher seedW = onChange(this::seedGen);
+        levelsIn.addTextChangedListener(seedW);
+        askSizeIn.addTextChangedListener(seedW);
+        bidSizeIn.addTextChangedListener(seedW);
+        TextWatcher priceW = onChange(this::priceGen);
+        midIn.addTextChangedListener(priceW);
+        stepIn.addTextChangedListener(priceW);
+        skewIn.addTextChangedListener(priceW);
 
         pegModeUi();
         pegSw.setOnCheckedChangeListener((btn, on) -> {
@@ -294,35 +313,37 @@ public final class MakerTab extends LinearLayout {
             pegModeUi();
             if (on) {
                 MarketPrice.refreshAsync();
-                if (MarketPrice.fresh()) fillFromPeg();
-                else { pegAwaitFill = true; act.toast("Fetching MEXC price…"); }
+                boolean haveSizes = anyRowSized();
+                if (MarketPrice.fresh()) {
+                    // sized rows are the user's — pegging on refreshes PRICES only;
+                    // an empty ladder seeds fresh from the auto-fill fields
+                    if (haveSizes) refreshPrices(BigDecimal.valueOf(MarketPrice.mid()));
+                    else seedGen();
+                } else {
+                    pegAwaitFill = !haveSizes;
+                    act.toast("Fetching MEXC price…");
+                }
             }
         });
 
-        // ---- arm / withdraw ----
-        armBtn = tv("ARM MARKET MAKER", 14f, Design.ON_ACCENT(), Design.sansBold());
+        // ---- publish / withdraw: ONE button, honest words (0.2.6 had "DISARM (cancels the
+        // ladder)" AND "Withdraw ladder now" — the same action twice under different names) ----
+        armBtn = tv("PUBLISH LADDER", 14f, Design.ON_ACCENT(), Design.sansBold());
         armBtn.setGravity(Gravity.CENTER);
         armBtn.setPadding(0, dp(13), 0, dp(13));
-        armBtn.setOnClickListener(v -> toggleArm());
+        armBtn.setOnClickListener(v -> togglePublish());
         Design.pressable(armBtn);
         LayoutParams al = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
         al.bottomMargin = dp(8);
         addView(armBtn, al);
-
-        TextView withdraw = tv("Withdraw ladder now", 11f, Design.RED(), Design.sans());
-        withdraw.setGravity(Gravity.CENTER);
-        withdraw.setPadding(0, dp(10), 0, dp(10));
-        withdraw.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
-        withdraw.setOnClickListener(v -> act.withdrawLadder());
-        Design.pressable(withdraw);
-        addView(withdraw, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
     }
 
     // ---------------------------------------------------------------- auto-fill (AtomiX)
 
-    /** While pegged the oracle owns the mid AND the rungs — grey out everything it writes.
-     *  A hand-edited rung would be silently ignored by the engine and stomped by the next
-     *  fill, so the rows are only editable unpegged. */
+    /** While pegged the engine owns the PRICES — the mid and the rung price cells grey out.
+     *  Every rung's AMOUNT stays editable at all times (AtomiX parity, and the whole point
+     *  of per-rung sizes): the engine reads sizes from these rows and keeps them across
+     *  reprices. */
     private void pegModeUi() {
         boolean on = pegSw.isChecked();
         midIn.setEnabled(!on);
@@ -330,39 +351,56 @@ public final class MakerTab extends LinearLayout {
         for (EditText[][] side : new EditText[][][]{askRows, bidRows}) {
             for (EditText[] row : side) {
                 if (row == null) continue;
-                for (EditText e : row) {
-                    e.setEnabled(!on);
-                    e.setAlpha(on ? 0.5f : 1f);
-                }
+                row[0].setEnabled(!on);          // price — engine-owned while pegged
+                row[0].setAlpha(on ? 0.5f : 1f);
             }
         }
     }
 
-    private void autoGen() {
-        if (filling) return;
+    private BigDecimal liveOrManualMid() {
         if (pegSw.isChecked()) {
-            if (MarketPrice.fresh()) fillFromPeg();
-            else { pegAwaitFill = true; MarketPrice.refreshAsync(); }   // the tick fills once the price lands
-        } else {
-            genRows(Util.dec(midIn.getText().toString()));
+            double m = MarketPrice.mid();
+            return (m > 0 && MarketPrice.fresh()) ? BigDecimal.valueOf(m) : null;
         }
+        BigDecimal m = Util.dec(midIn.getText().toString());
+        return m.signum() > 0 ? m : null;
     }
 
-    /** Seed the rows from the live MEXC mid (AtomiX fillFromPeg). */
-    private void fillFromPeg() {
-        double m = MarketPrice.mid();
-        if (!(m > 0) || !MarketPrice.fresh()) return;
-        pegAwaitFill = false;
-        genRows(BigDecimal.valueOf(m));
+    private boolean anyRowSized() {
+        for (EditText[] row : askRows) if (Util.dec(row[1].getText().toString()).signum() > 0) return true;
+        for (EditText[] row : bidRows) if (Util.dec(row[1].getText().toString()).signum() > 0) return true;
+        return false;
+    }
+
+    /** A size/levels seed edit — rebuild the rows (sizes AND prices). */
+    private void seedGen() {
+        if (filling) return;
+        BigDecimal mid = liveOrManualMid();
+        if (mid == null) {
+            if (pegSw.isChecked()) { pegAwaitFill = true; MarketPrice.refreshAsync(); }
+            return;                                   // the tick seeds once the price lands
+        }
+        seedFill(mid);
+    }
+
+    /** A mid/step/skew edit — reprice the rows, never touch a rung's size. */
+    private void priceGen() {
+        if (filling) return;
+        BigDecimal mid = liveOrManualMid();
+        if (mid == null) {
+            if (pegSw.isChecked()) MarketPrice.refreshAsync();
+            return;
+        }
+        refreshPrices(mid);
     }
 
     /**
-     * Regenerate the 6+6 rows around {@code mid} — skew shifts the quoted mid, rung i sits at
-     * ±(i+1)·step %, each side at its own size, and a side whose size is blank/0 is blanked
-     * entirely (one-sided market). Silent: this fires per keystroke, so invalid/partial params
-     * just pause row updates rather than toasting on every character.
+     * Seed the 6+6 rows around {@code mid} — skew shifts the quoted mid, rung i sits at
+     * ±(i+1)·step %, each side at its seed size, and a side whose seed size is blank/0 is
+     * blanked entirely (one-sided market). Silent: this fires per keystroke, so
+     * invalid/partial params just pause row updates rather than toasting per character.
      */
-    private void genRows(BigDecimal mid) {
+    private void seedFill(BigDecimal mid) {
         BigDecimal step = Util.dec(stepIn.getText().toString());
         BigDecimal askSize = Util.dec(askSizeIn.getText().toString());
         BigDecimal bidSize = Util.dec(bidSizeIn.getText().toString());
@@ -370,6 +408,7 @@ public final class MakerTab extends LinearLayout {
         if (mid == null || mid.signum() <= 0) return;
         BigDecimal hundred = new BigDecimal(100);
         BigDecimal quoted = mid.multiply(BigDecimal.ONE.add(skew.divide(hundred, PriceMath.MC)), PriceMath.MC);
+        pegAwaitFill = false;
         filling = true;
         try {
             if (pegSw.isChecked()) midIn.setText(trim(quoted.setScale(PriceMath.DISPLAY_DP,
@@ -386,6 +425,34 @@ public final class MakerTab extends LinearLayout {
                 bidRows[i][0].setText(bidOn ? trim(quoted.multiply(BigDecimal.ONE.subtract(off), PriceMath.MC)
                         .setScale(PriceMath.DISPLAY_DP, java.math.RoundingMode.DOWN)) : "");
                 bidRows[i][1].setText(bidOn ? trim(bidSize) : "");
+            }
+        } finally {
+            filling = false;
+        }
+        updatePreview();
+    }
+
+    /** Rewrite ONLY the price cells of sized rows — the per-rung amounts are the user's. */
+    private void refreshPrices(BigDecimal mid) {
+        BigDecimal step = Util.dec(stepIn.getText().toString());
+        BigDecimal skew = clampSkew(Util.dec(skewIn.getText().toString()));
+        if (mid == null || mid.signum() <= 0 || step.signum() <= 0) return;
+        BigDecimal hundred = new BigDecimal(100);
+        BigDecimal quoted = mid.multiply(BigDecimal.ONE.add(skew.divide(hundred, PriceMath.MC)), PriceMath.MC);
+        filling = true;
+        try {
+            if (pegSw.isChecked()) midIn.setText(trim(quoted.setScale(PriceMath.DISPLAY_DP,
+                    java.math.RoundingMode.HALF_UP)));
+            for (int i = 0; i < MakerLadder.MAX_LEVELS; i++) {
+                BigDecimal off = step.multiply(new BigDecimal(i + 1), PriceMath.MC).divide(hundred, PriceMath.MC);
+                if (Util.dec(askRows[i][1].getText().toString()).signum() > 0) {
+                    askRows[i][0].setText(trim(quoted.multiply(BigDecimal.ONE.add(off), PriceMath.MC)
+                            .setScale(PriceMath.DISPLAY_DP, java.math.RoundingMode.UP)));
+                }
+                if (Util.dec(bidRows[i][1].getText().toString()).signum() > 0) {
+                    bidRows[i][0].setText(trim(quoted.multiply(BigDecimal.ONE.subtract(off), PriceMath.MC)
+                            .setScale(PriceMath.DISPLAY_DP, java.math.RoundingMode.DOWN)));
+                }
             }
         } finally {
             filling = false;
@@ -461,34 +528,35 @@ public final class MakerTab extends LinearLayout {
         cfg.skewPct = clampSkew(Util.dec(skewIn.getText().toString()));
         BigDecimal r = Util.dec(repriceIn.getText().toString());
         cfg.repricePct = r.signum() > 0 ? r : new BigDecimal("0.25");
-        cfg.save();   // sanitize lives in save(): drops blanks/invalids, caps 6, sorts best-first
+        cfg.save();   // POSITIONAL — rows persist as typed; position is a rung's identity now
     }
 
-    private void toggleArm() {
+    private void togglePublish() {
         commit();
         if (cfg.armed) {
-            act.disarmMaker();
+            act.withdrawLadder();
             return;
         }
-        int nAsks, nBids;
-        BigDecimal totalAsk, totalBid;
+        java.util.List<MakerLadder.Slot> desired;
         if (cfg.pegged) {
-            if (cfg.stepPct.signum() <= 0 || (cfg.askSize.signum() <= 0 && cfg.bidSize.signum() <= 0)) {
-                act.toast("Peg needs a step % and an ask or bid size");
+            if (cfg.stepPct.signum() <= 0) {
+                act.toast("Peg needs a step %");
                 return;
             }
-            nAsks = cfg.askSize.signum() > 0 ? cfg.levelCount : 0;
-            nBids = cfg.bidSize.signum() > 0 ? cfg.levelCount : 0;
-            totalAsk = cfg.askSize.multiply(new BigDecimal(nAsks));
-            totalBid = cfg.bidSize.multiply(new BigDecimal(nBids));
+            if (!MakerLadder.hasSizedRung(cfg.asks) && !MakerLadder.hasSizedRung(cfg.bids)) {
+                act.toast("Set a MINIMA amount on at least one rung");
+                return;
+            }
+            double m = MarketPrice.mid();
+            if (!(m > 0) || !MarketPrice.fresh()) {
+                MarketPrice.refreshAsync();
+                act.toast("Waiting for the MEXC price — try again in a few seconds");
+                return;
+            }
+            desired = MakerLadder.desired(BigDecimal.valueOf(m), cfg.toLadderConfig(), BigDecimal.ONE);
         } else {
-            nAsks = cfg.asks.size();
-            nBids = cfg.bids.size();
-            totalAsk = BigDecimal.ZERO;
-            totalBid = BigDecimal.ZERO;
-            for (MakerLadder.Level l : cfg.asks) totalAsk = totalAsk.add(l.sizeMinima);
-            for (MakerLadder.Level l : cfg.bids) totalBid = totalBid.add(l.sizeMinima);
-            if (nAsks == 0 && nBids == 0) {
+            desired = MakerLadder.desired(null, cfg.toLadderConfig(), BigDecimal.ONE);
+            if (desired.isEmpty()) {
                 act.toast("No levels set — add a bid or ask rung first");
                 return;
             }
@@ -496,24 +564,62 @@ public final class MakerTab extends LinearLayout {
                 act.toast("⚠ Your best bid ≥ best ask (crossed market)");
             }
         }
-        act.armMaker(nBids, nAsks, totalBid, totalAsk, cfg.pegged);
+        act.publishMaker(desired, cfg.pegged);
     }
 
     // ---------------------------------------------------------------- render / peg tick
 
-    /** Poll the peg price line while visible (AtomiX polls its dialog every 2s). */
+    /** Poll the peg price + status lines while visible (AtomiX polls its dialog every 2s). */
     private final Runnable pegTick = new Runnable() {
         @Override public void run() {
             // Stops itself while hidden — setVisibility(VISIBLE) restarts it.
             if (!isAttachedToWindow() || getVisibility() != VISIBLE) return;
             pegPxTv.setText(pegLine());
+            updateStatus();
             if (pegSw.isChecked()) {
                 MarketPrice.refreshAsync();
-                if (pegAwaitFill) fillFromPeg();   // fill once the first price lands
+                if (MarketPrice.fresh()) {
+                    if (pegAwaitFill) seedFill(BigDecimal.valueOf(MarketPrice.mid()));
+                    else refreshPrices(BigDecimal.valueOf(MarketPrice.mid()));   // live tracking, sizes untouched
+                }
             }
             postDelayed(this, 2000);
         }
     };
+
+    /** The per-rung on-chain story + the engine's latest message, both refreshed cheaply. */
+    private void updateStatus() {
+        stageTv.setText(act.stage());
+        java.util.Map<String, Order5> mine = new java.util.HashMap<>();
+        for (Order5 o : act.book().values()) {
+            if (o.isMine(act.keys())) mine.put(o.orderId, o);
+        }
+        java.util.List<MakerLadder.Slot> desired = cfg.armed ? desiredNow()
+                : java.util.Collections.emptyList();
+        java.util.List<MakerStatus.Line> lines = MakerStatus.lines(desired, cfg.slots,
+                cfg.cancelTombstones, mine, act.chainBlock());
+        if (lines.isEmpty()) {
+            slotsTv.setText(cfg.armed ? "waiting for the first cycle…" : "nothing on-chain");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (MakerStatus.Line l : lines) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(l.tone == MakerStatus.OK ? "✓ " : l.tone == MakerStatus.FAIL ? "✗ " : "⏳ ");
+            if (!l.slotId.isEmpty()) sb.append(l.slotId).append("  ");
+            sb.append(l.text);
+        }
+        slotsTv.setText(sb.toString());
+    }
+
+    private java.util.List<MakerLadder.Slot> desiredNow() {
+        if (cfg.pegged) {
+            double m = MarketPrice.mid();
+            if (!(m > 0)) return java.util.Collections.emptyList();
+            return MakerLadder.desired(BigDecimal.valueOf(m), cfg.toLadderConfig(), BigDecimal.ONE);
+        }
+        return MakerLadder.desired(null, cfg.toLadderConfig(), BigDecimal.ONE);
+    }
 
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
@@ -550,13 +656,15 @@ public final class MakerTab extends LinearLayout {
         pegPxTv.setText(pegLine());
 
         boolean armed = cfg.armed;
-        stateTv.setText(armed ? (cfg.pegged && MarketPrice.mustWithdraw() ? "WITHDRAWN" : "ARMED")
-                              : "DISARMED");
+        stateTv.setText(armed ? (cfg.pegged && MarketPrice.mustWithdraw()
+                        ? "WITHDRAWN — STALE FEED" : "PUBLISHED")
+                              : "NOT PUBLISHED");
         stateTv.setTextColor(armed ? (cfg.pegged && MarketPrice.mustWithdraw() ? Design.RED() : Design.IN())
                                    : Design.DIM());
-        armBtn.setText(armed ? "DISARM (cancels the ladder)" : "ARM MARKET MAKER");
+        armBtn.setText(armed ? "WITHDRAW LADDER (cancels all rungs)" : "PUBLISH LADDER");
         armBtn.setBackground(Design.ripple(Design.roundBg(getContext(),
                 armed ? Design.RED() : Design.IN(), 12)));
+        updateStatus();
 
         MarketPrice.refreshAsync();
     }

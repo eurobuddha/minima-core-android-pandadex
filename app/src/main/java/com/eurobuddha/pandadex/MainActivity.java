@@ -143,7 +143,10 @@ public class MainActivity extends AppCompatActivity {
             // the market maker rides the same book updates as everything else; it rate-limits
             // itself internally because every adjustment costs proof-of-work
             if (paired && keySet.ready() && chainBlock > 0 && !busy) {
-                maker.onBook(orders, keySet.keys(), chainBlock, this::setStage);
+                // tombstone sweep runs ARMED OR NOT: cancelled-but-unconfirmed orders and
+                // late-confirming orphans must be chased even after a withdraw disarmed us
+                maker.sweepTombstones(orders, keySet.keys(), chainBlock, makerListener);
+                maker.onBook(orders, keySet.keys(), chainBlock, makerListener);
             }
             filling.retainAll(orders.keySet());   // never let a marker stick
             // remember my own live orders so they can still be found after they age out of
@@ -728,6 +731,18 @@ public class MainActivity extends AppCompatActivity {
         busy = true;
         Order5 o = list.get(idx);
         setStage("Cancelling " + (idx + 1) + " of " + list.size() + "…");
+        // an optimistic CANCEL row per order, so the Orders tab shows "CANCELLING — waiting
+        // for a block" instead of an unchanged book for minutes (the 0.2.6 complaint)
+        Pending.Row row = new Pending.Row();
+        row.kind = Pending.CANCEL;
+        row.orderId = o.orderId;
+        row.coinid = o.coinid;
+        row.buy = !o.sell;
+        row.minima = o.minimaAmount();
+        row.price = o.price();
+        row.submitMs = System.currentTimeMillis();
+        row.submitBlock = chainBlock;
+        pending.add(row);
         repo.tape().noteMyCancel(o.coinid);
         db.forgetMyOrder(o.coinid);
         txn.cancel(o, new DexTxn.Result() {
@@ -740,30 +755,117 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    /** Arm the ladder, after showing what is about to be committed. */
-    public void armMaker(int nBids, int nAsks, BigDecimal totalBidMinima,
-                         BigDecimal totalAskMinima, boolean pegged) {
+    /** Maker events → the stage line AND optimistic Pending rows, so every rung's journey
+     *  (mining → live, cancelling → gone) is visible on the Trade/Orders/Maker surfaces —
+     *  0.2.6 routed everything into one 45s status line only the Trade tab rendered. */
+    private final MakerEngine.Listener makerListener = new MakerEngine.Listener() {
+        @Override public void onMakerState(String message) { setStage(message); }
+
+        @Override public void onCreateSent(MakerLadder.Slot slot, String orderId) {
+            Pending.Row row = new Pending.Row();
+            row.kind = Pending.PLACE;
+            row.orderId = orderId;
+            row.buy = !slot.sell;
+            row.minima = slot.sizeMinima;
+            row.price = slot.price;
+            row.submitMs = System.currentTimeMillis();
+            row.submitBlock = chainBlock;
+            pending.add(row);
+            repaint();
+        }
+
+        @Override public void onCancelSent(Order5 o) {
+            Pending.Row row = new Pending.Row();
+            row.kind = Pending.CANCEL;
+            row.orderId = o.orderId;
+            row.coinid = o.coinid;
+            row.buy = !o.sell;
+            row.minima = o.minimaAmount();
+            row.price = o.price();
+            row.submitMs = System.currentTimeMillis();
+            row.submitBlock = chainBlock;
+            pending.add(row);
+            repo.tape().noteMyCancel(o.coinid);   // persisted — the bg service's tape reads it too
+            db.forgetMyOrder(o.coinid);
+            repaint();
+        }
+
+        @Override public void onRelockSent(Order5 o, BigDecimal newPrice) {
+            Pending.Row row = new Pending.Row();
+            row.kind = Pending.EDIT;
+            row.orderId = o.orderId;
+            row.coinid = o.coinid;
+            row.buy = !o.sell;
+            row.minima = o.minimaAmount();
+            row.price = newPrice;
+            row.submitMs = System.currentTimeMillis();
+            row.submitBlock = chainBlock;
+            pending.add(row);
+            repaint();
+        }
+    };
+
+    /** Publish the ladder — after an affordability check and showing what will be committed. */
+    public void publishMaker(java.util.List<MakerLadder.Slot> desired, boolean pegged) {
         if (!ready()) return;
-        String sides = (nAsks > 0 ? nAsks + " ask" + (nAsks == 1 ? "" : "s") + " committing about "
-                        + PriceMath.fmt(totalAskMinima) + " MINIMA" : "no asks")
+        if (desired == null || desired.isEmpty()) {
+            toast("No rungs to publish — set a price and size first");
+            return;
+        }
+        int nAsks = 0, nBids = 0;
+        for (MakerLadder.Slot s : desired) { if (s.sell) nAsks++; else nBids++; }
+        MakerLadder.Commitments c = MakerLadder.commitments(desired);
+
+        // ---- affordability FIRST: an unfunded rung fails as an invisible async reject
+        // (observed live — 4 bids sent, 1 funded), so refuse to publish what can't be paid for
+        StringBuilder lack = new StringBuilder();
+        if (c.askMinima.compareTo(minimaSendable) > 0) {
+            lack.append("Asks need ").append(PriceMath.fmt(c.askMinima))
+                    .append(" MINIMA — you have ").append(PriceMath.fmt(minimaSendable))
+                    .append(" sendable");
+            if (minimaPending.signum() > 0) lack.append(" (").append(PriceMath.fmt(minimaPending))
+                    .append(" more still confirming)");
+            lack.append(".\n");
+        }
+        if (c.bidUsdt.compareTo(usdtSendable) > 0) {
+            lack.append("Bids need ").append(PriceMath.fmt(c.bidUsdt))
+                    .append(" mxUSDT — you have ").append(PriceMath.fmt(usdtSendable))
+                    .append(" sendable");
+            if (usdtPending.signum() > 0) lack.append(" (").append(PriceMath.fmt(usdtPending))
+                    .append(" more still confirming)");
+            lack.append(".\n");
+        }
+        if (lack.length() > 0) {
+            new AlertDialog.Builder(this, Design.dialogTheme())
+                    .setTitle("Not enough available funds")
+                    .setMessage(lack + "\nShrink the rung sizes or free up funds, then publish.")
+                    .setPositiveButton("OK", null)
+                    .show();
+            return;
+        }
+
+        String sides = (nAsks > 0 ? nAsks + " ask" + (nAsks == 1 ? "" : "s") + " locking "
+                        + PriceMath.fmt(c.askMinima) + " MINIMA" : "no asks")
                 + " and "
-                + (nBids > 0 ? nBids + " bid" + (nBids == 1 ? "" : "s") + " committing its mxUSDT "
-                        + "equivalent of about " + PriceMath.fmt(totalBidMinima) + " MINIMA" : "no bids");
+                + (nBids > 0 ? nBids + " bid" + (nBids == 1 ? "" : "s") + " locking "
+                        + PriceMath.fmt(c.bidUsdt) + " mxUSDT" : "no bids");
         new AlertDialog.Builder(this, Design.dialogTheme())
-                .setTitle("Arm the market maker")
-                .setMessage("This will post up to " + (nBids + nAsks) + " orders — " + sides + ".\n\n"
+                .setTitle("Publish the ladder")
+                .setMessage("This puts " + (nBids + nAsks) + " orders on the book — " + sides + ".\n\n"
                         + (pegged
-                        ? "The ladder tracks the MEXC mid and reprices itself. If the price "
-                        + "feed goes stale it quotes wider, then withdraws."
-                        : "The ladder quotes YOUR fixed prices. It is NOT pegged: it never "
-                        + "reprices and stays on the book even if the price feed dies.")
-                        + "\n\nEach adjustment is an on-chain transaction your phone does "
-                        + "proof-of-work for.")
-                .setPositiveButton("Arm", (d, w) -> {
+                        ? "PEGGED: prices track the MEXC mid and reprice when it moves past your "
+                        + "threshold; your per-rung sizes are kept. If the feed goes stale the "
+                        + "ladder quotes wider, then withdraws."
+                        : "NOT pegged: the book gets YOUR exact prices — never repriced, never "
+                        + "withdrawn, even if the price feed dies.")
+                        + "\n\nRungs post one per side per cycle (each is an on-chain transaction "
+                        + "your phone does proof-of-work for), so a full ladder takes a few "
+                        + "minutes to build. The Maker tab shows each rung's progress.")
+                .setPositiveButton("Publish", (d, w) -> {
                     makerCfg.armed = true;
                     makerCfg.lastActedMid = null;      // act on the next cycle
                     makerCfg.save();
-                    setStage("Market maker armed — posting the ladder");
+                    setStage("Ladder publishing — posting the first rungs");
                     repo.refresh();
                     repaint();
                 })
@@ -771,12 +873,7 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    /** Disarm and take the ladder off the book. */
-    public void disarmMaker() {
-        withdrawLadder();   // disarms, then takes the ladder off the book
-    }
-
-    /** Cancel every order the ladder currently owns. */
+    /** Withdraw the ladder: disarm, cancel everything it owns, chase what hasn't confirmed. */
     public void withdrawLadder() {
         if (maker == null || repo == null) return;
         // Disarm FIRST so no new cycle starts behind us, then refuse to overlap an in-flight
@@ -793,10 +890,12 @@ public class MainActivity extends AppCompatActivity {
             maker.runWhenIdle(this::withdrawLadder);
             return;
         }
-        java.util.List<Order5> live = maker.liveLadderOrders(book(), keys());
-        if (live.isEmpty()) { toast("No ladder orders on the book"); return; }
-        setStage("Withdrawing " + live.size() + " ladder order" + (live.size() == 1 ? "" : "s") + "…");
-        maker.cancelAllLadder(live, 0, this::setStage);
+        if (makerCfg.slots.isEmpty() && makerCfg.cancelTombstones.isEmpty()) {
+            toast("No ladder orders to withdraw");
+            return;
+        }
+        setStage("Withdrawing the ladder — cancels leave the book as blocks confirm them");
+        maker.withdrawAll(book(), keys(), chainBlock, makerListener);
     }
 
     public void cancelOrder(Order5 o) {
@@ -877,6 +976,7 @@ public class MainActivity extends AppCompatActivity {
     public Set<String> keys() { return keySet.keys(); }
     public Map<String, Order5> book() { return repo == null ? new java.util.LinkedHashMap<>() : repo.book(); }
     public long chainBlock() { return chainBlock; }
+    public java.util.List<Pending.Row> pendingRows() { return pending.rows(); }
     public BigDecimal minimaSendable() { return minimaSendable; }
     public BigDecimal usdtSendable() { return usdtSendable; }
     public BigDecimal minimaPending() { return minimaPending; }

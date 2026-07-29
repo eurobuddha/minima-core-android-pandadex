@@ -60,7 +60,9 @@ public final class MakerConfig {
         /** Block the CREATE send was accepted at. 0 = unknown (legacy/restart) — the engine
          *  stamps the current block on first sight, giving a fresh patience window. */
         public long sentBlock;
-        /** Block of the last create/relock sent for this slot — the settling window. */
+        /** Block a RELOCK was sent for this slot, or 0 for none in flight. Explicitly not
+         *  "max(create, relock)": the old coin stays visible at its old price until the
+         *  relock mines, so without an unambiguous marker every cycle would re-relock it. */
         public long lastActionBlock;
 
         public SlotRec(String orderId, BigDecimal size, long sentBlock, long lastActionBlock) {
@@ -109,7 +111,7 @@ public final class MakerConfig {
 
     /** Record a CREATE that the node ACCEPTED (call from onPosted, never before). */
     public void rememberSlot(String slotId, String orderId, BigDecimal sizeMinima, long block) {
-        slots.put(slotId, new SlotRec(orderId, sizeMinima, block, block));
+        slots.put(slotId, new SlotRec(orderId, sizeMinima, block, 0));
         save();
     }
 

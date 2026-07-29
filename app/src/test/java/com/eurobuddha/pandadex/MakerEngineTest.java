@@ -2,6 +2,8 @@ package com.eurobuddha.pandadex;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -15,6 +17,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The engine spends money: every action it takes is an on-chain transaction. These tests drive
@@ -39,17 +42,19 @@ public class MakerEngineTest {
         StubTxn() { super(null, null); }
 
         @Override public String createOrder(boolean buy, BigDecimal minima, BigDecimal price,
-                                            boolean gtc, BigDecimal minRem, Result cb) {
+                                            boolean gtc, BigDecimal minRem, String orderId, Result cb) {
             calls.add("CREATE " + PriceMath.fmtPrice(price));
             if (throwOnCall) throw new IllegalStateException("node exploded");
             if (rejectSynchronously) {
                 cb.onFailed("rejected before posting");
                 return null;
             }
-            String id = "0xORDER" + (nextId++);
-            if (failCreates) { cb.onFailed("post failed"); return id; }
+            nextId++;
+            // mimics the real contract: the id comes BACK even when the node rejects the send
+            // asynchronously, which is exactly why the engine records only in onPosted
+            if (failCreates) { cb.onFailed("post failed"); return orderId; }
             cb.onPosted("0xTX");
-            return id;
+            return orderId;
         }
 
         @Override public void relock(Order5 o, BigDecimal newWant, Result cb) {
@@ -81,16 +86,32 @@ public class MakerEngineTest {
     }
 
     private static MakerLadder.Slot slot(String id, boolean sell, String price, String size) {
-        // one-sided pegged config: only the side under test gets a size, so desired() yields
-        // exactly one rung (A1 or B1)
-        MakerLadder.Config c = new MakerLadder.Config(true, new BigDecimal("0.20"), 1,
-                sell ? new BigDecimal(size) : BigDecimal.ZERO,
-                sell ? BigDecimal.ZERO : new BigDecimal(size),
-                new ArrayList<>(), new ArrayList<>(),
+        // one-sided pegged config: only the side under test has a sized rung, so desired()
+        // yields exactly one rung (A1 or B1)
+        List<MakerLadder.Level> rungs = Arrays.asList(
+                new MakerLadder.Level(BigDecimal.ZERO, new BigDecimal(size)));
+        MakerLadder.Config c = new MakerLadder.Config(true, new BigDecimal("0.20"),
+                sell ? rungs : new ArrayList<>(), sell ? new ArrayList<>() : rungs,
                 BigDecimal.ZERO, new BigDecimal("0.1"));
         List<MakerLadder.Slot> out = MakerLadder.desired(new BigDecimal(price), c, BigDecimal.ONE);
         return out.get(0);
     }
+
+    /** Give a side one sized rung per level, the way the auto-fill seeds it. */
+    private static void seedRungs(List<MakerLadder.Level> side, int levels, String size) {
+        side.clear();
+        for (int i = 0; i < levels; i++) {
+            side.add(new MakerLadder.Level(BigDecimal.ZERO, new BigDecimal(size)));
+        }
+    }
+
+    private static Map<String, Order5> bookOf(Order5... orders) {
+        Map<String, Order5> m = new HashMap<>();
+        for (Order5 o : orders) m.put(o.coinid, o);
+        return m;
+    }
+
+    private static final Set<String> MY_KEYS = new HashSet<>(Arrays.asList("0xMINE"));
 
     // ---------------- the critical one ----------------
 
@@ -107,15 +128,37 @@ public class MakerEngineTest {
     @Test public void aRejectedCreateIsNotRecordedAsALadderSlot() throws Exception {
         txn.rejectSynchronously = true;
         invokeRun(Arrays.asList(newCreate(slot("A1", true, "0.05", "100"))));
-        assertTrue("a slot that never posted must not be remembered", cfg.slotOrderIds.isEmpty());
+        assertTrue("a slot that never posted must not be remembered", cfg.slots.isEmpty());
         assertNull(cfg.postedSizeFor("A1"));
     }
 
-    @Test public void anAcceptedCreateRecordsBothIdAndPostedSize() throws Exception {
+    @Test public void anAsyncSendFailureRecordsNothing() throws Exception {
+        // THE 0.2.6 BUG: the slot was recorded as soon as createOrder returned, so a send the
+        // node rejected later (unfunded — the live mxUSDT contention case) left a dead id in
+        // the map that could never resolve and was re-created + overwritten every cycle.
+        txn.failCreates = true;
+        invokeRun(Arrays.asList(newCreate(slot("B1", false, "0.05", "100"))));
+        assertTrue("only an ACCEPTED send may be remembered", cfg.slots.isEmpty());
+    }
+
+    @Test public void anAcceptedCreateRecordsIdSizeAndBlock() throws Exception {
         MakerLadder.Slot s = slot("A1", true, "0.05", "250");
         invokeRun(Arrays.asList(newCreate(s)));
-        assertEquals(1, cfg.slotOrderIds.size());
+        assertEquals(1, cfg.slots.size());
         assertEquals(0, new BigDecimal("250").compareTo(cfg.postedSizeFor(s.id)));
+        assertEquals("the send block is recorded for the patience window",
+                100, cfg.slots.get("A1").sentBlock);
+    }
+
+    @Test public void theListenerLearnsTheOrderIdThatWasRecorded() throws Exception {
+        final String[] seen = {null};
+        MakerLadder.Slot s = slot("A1", true, "0.05", "100");
+        invokeRun(Arrays.asList(newCreate(s)), new MakerEngine.Listener() {
+            @Override public void onMakerState(String m) {}
+            @Override public void onCreateSent(MakerLadder.Slot slot, String orderId) { seen[0] = orderId; }
+        });
+        assertEquals("the UI must track the SAME id the engine recorded",
+                cfg.orderIdFor("A1"), seen[0]);
     }
 
     // ---------------- lastActedMid only on success ----------------
@@ -149,16 +192,54 @@ public class MakerEngineTest {
     // ---------------- withdraw ----------------
 
     @Test public void withdrawCancelsEveryRungAndForgetsThem() {
-        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"));
-        cfg.rememberSlot("B1", "0xORDER2", new BigDecimal("100"));
+        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"), 100);
+        cfg.rememberSlot("B1", "0xORDER2", new BigDecimal("100"), 100);
         List<Order5> live = Arrays.asList(
                 order("0xC1", "0xORDER1", "0.051", "100"),
                 order("0xC2", "0xORDER2", "0.049", "100"));
-        engine.cancelAllLadder(live, 0, m -> {});
+        engine.cancelAllLadder(live, 0, 100, m -> {});
         assertEquals(2, txn.calls.size());
-        assertTrue(cfg.slotOrderIds.isEmpty());
-        assertTrue(cfg.slotSizes.isEmpty());
+        assertTrue(cfg.slots.isEmpty());
         assertFalse(engine.isWorking());
+    }
+
+    @Test public void withdrawTombstonesSentSlotsAndCancelsThemWhenTheyConfirm() {
+        // 0.2.6 only cancelled what it could SEE, so an order still mining at withdraw time
+        // surfaced afterwards as an orphan no button could ever reach.
+        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"), 100);   // live
+        cfg.rememberSlot("B1", "0xORDER2", new BigDecimal("100"), 100);   // still mining
+        Order5 liveOne = order("0xC1", "0xORDER1", "0.051", "100");
+        engine.withdrawAll(bookOf(liveOne), MY_KEYS, 100, m -> {});
+        assertEquals("only the visible rung can be cancelled now",
+                Arrays.asList("CANCEL 0xC1"), txn.calls);
+        assertTrue("the unconfirmed rung is marked for death",
+                cfg.cancelTombstones.containsKey("0xORDER2"));
+
+        // ...and when it finally confirms, the sweep kills it
+        txn.calls.clear();
+        Order5 late = order("0xC2", "0xORDER2", "0.049", "100");
+        engine.sweepTombstones(bookOf(late), MY_KEYS, 101, m -> {});
+        assertEquals("the late order is cancelled the moment it appears",
+                Arrays.asList("CANCEL 0xC2"), txn.calls);
+    }
+
+    @Test public void aTombstonedOrderIsNotReCancelledEveryScan() {
+        // each cancel is proof-of-work; re-send only after the patience window
+        cfg.tombstone("0xORDER1", 100);
+        Order5 o = order("0xC1", "0xORDER1", "0.051", "100");
+        engine.sweepTombstones(bookOf(o), MY_KEYS, 101, m -> {});
+        assertTrue("still within patience — no second cancel", txn.calls.isEmpty());
+        engine.sweepTombstones(bookOf(o), MY_KEYS, 100 + MakerEngine.PATIENCE_BLOCKS, m -> {});
+        assertEquals(1, txn.calls.size());
+    }
+
+    @Test public void aTombstoneRetiresOnceItsCoinIsGoneForGood() {
+        cfg.tombstone("0xORDER1", 100);
+        engine.sweepTombstones(new HashMap<>(), MY_KEYS, 101, m -> {});
+        assertTrue("gone but still recent — keep watching", cfg.cancelTombstones.containsKey("0xORDER1"));
+        engine.sweepTombstones(new HashMap<>(), MY_KEYS,
+                100 + MakerEngine.TOMBSTONE_EXPIRE_BLOCKS, m -> {});
+        assertTrue("finished business", cfg.cancelTombstones.isEmpty());
     }
 
     @Test public void anIdleEngineRunsQueuedWorkImmediately() {
@@ -172,9 +253,9 @@ public class MakerEngineTest {
         // dropped while a chain is in flight, the ladder stays on the book forever while the
         // user has been told it is coming off.
         txn.deferCancels = true;
-        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"));
+        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"), 100);
         List<Order5> live = Arrays.asList(order("0xC1", "0xORDER1", "0.051", "100"));
-        engine.cancelAllLadder(live, 0, m -> {});
+        engine.cancelAllLadder(live, 0, 100, m -> {});
         assertTrue("the chain is open, so the engine is working", engine.isWorking());
 
         final boolean[] ran = {false};
@@ -206,20 +287,115 @@ public class MakerEngineTest {
         cfg.armed = true;
         cfg.pegged = true;
         cfg.stepPct = BigDecimal.ZERO;              // the cleared field
-        cfg.askSize = new BigDecimal("100");
-        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"));
-        Map<String, Order5> book = new HashMap<>();
-        book.put("0xC1", order("0xC1", "0xORDER1", "0.051", "100"));
-        HashSet<String> keys = new HashSet<>(Arrays.asList("0xMINE"));
+        seedRungs(cfg.asks, 1, "100");
+        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"), 100);
+        Map<String, Order5> book = bookOf(order("0xC1", "0xORDER1", "0.051", "100"));
 
-        engine.onBook(book, keys, 10, m -> {});
+        engine.onBook(book, MY_KEYS, 100, m -> {});
         assertTrue("a blank step field must not cancel the ladder", txn.calls.isEmpty());
 
         cfg.stepPct = new BigDecimal("0.20");
-        cfg.askSize = BigDecimal.ZERO;              // both sizes cleared mid-edit
-        cfg.bidSize = BigDecimal.ZERO;
-        engine.onBook(book, keys, 10, m -> {});
+        cfg.asks.clear();                           // every rung amount cleared mid-edit
+        cfg.bids.clear();
+        engine.onBook(book, MY_KEYS, 100, m -> {});
         assertTrue("blank sizes must not cancel the ladder either", txn.calls.isEmpty());
+    }
+
+    // ---------------- slot lifecycle: the 0.2.6 duplicate/orphan bug ----------------
+
+    @Test public void anUnconfirmedCreateIsNotDuplicatedOnTheNextCycle() {
+        // THE headline bug: an accepted order takes a block+ to appear in the confirmed book.
+        // 0.2.6 read that as "level missing", posted a SECOND order and overwrote the record —
+        // orphaning real funds. Within the patience window the slot must simply wait.
+        MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
+        cfg.armed = true;
+        cfg.pegged = true;
+        cfg.stepPct = new BigDecimal("0.20");
+        seedRungs(cfg.bids, 1, "100");
+
+        engine.onBook(new HashMap<>(), MY_KEYS, 100, m -> {});
+        assertEquals("cycle 1 posts the rung", 1, txn.calls.size());
+        String firstId = cfg.orderIdFor("B1");
+        assertNotNull(firstId);
+
+        forceNextCycle();
+        engine.onBook(new HashMap<>(), MY_KEYS, 101, m -> {});   // still mining, book empty
+        assertEquals("cycle 2 must NOT post it again", 1, txn.calls.size());
+        assertEquals("and must not overwrite the record", firstId, cfg.orderIdFor("B1"));
+    }
+
+    @Test public void aSlotThatNeverSurfacesIsRetriedAfterThePatienceWindow() {
+        MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
+        cfg.armed = true;
+        cfg.pegged = true;
+        cfg.stepPct = new BigDecimal("0.20");
+        seedRungs(cfg.bids, 1, "100");
+        cfg.rememberSlot("B1", "0xLOST", new BigDecimal("100"), 100);
+
+        forceNextCycle();
+        engine.onBook(new HashMap<>(), MY_KEYS, 100 + MakerEngine.PATIENCE_BLOCKS, m -> {});
+        assertEquals("patience expired — the rung is re-created", 1, txn.calls.size());
+        assertNotEquals("with a fresh id, the dead one dropped", "0xLOST", cfg.orderIdFor("B1"));
+    }
+
+    @Test public void theRepriceGateOnlyGuardsACompleteLadder() {
+        // 0.2.6 gated on "any rung live", so a 1-of-4 ladder froze until the market moved a
+        // whole threshold — the user's "only 2 of 10 posted, then nothing" report.
+        MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
+        cfg.armed = true;
+        cfg.pegged = true;
+        cfg.stepPct = new BigDecimal("0.20");
+        cfg.repricePct = new BigDecimal("5");        // huge: nothing would ever reprice
+        seedRungs(cfg.bids, 2, "100");
+        cfg.lastActedMid = new BigDecimal("0.05");   // "already acted at this exact mid"
+        cfg.rememberSlot("B1", "0xORDER1", new BigDecimal("100"), 100);
+
+        MakerLadder.Slot b1 = slot("B1", false, "0.05", "100");
+        Order5 live = order("0xC1", "0xORDER1", b1.price.toPlainString(), "100");
+        forceNextCycle();
+        engine.onBook(bookOf(live), MY_KEYS, 100, m -> {});
+        assertEquals("the missing B2 must still be posted", 1, txn.calls.size());
+        assertNotNull(cfg.orderIdFor("B2"));
+
+        // now the ladder IS complete — the gate applies and the cycle costs nothing
+        txn.calls.clear();
+        Order5 live2 = order("0xC2", cfg.orderIdFor("B2"),
+                slot("B1", false, "0.05", "100").price.toPlainString(), "100");
+        forceNextCycle();
+        engine.onBook(bookOf(live, live2), MY_KEYS, 100, m -> {});
+        assertTrue("a complete ladder at an unmoved mid does nothing", txn.calls.isEmpty());
+    }
+
+    @Test public void oneCreatePerSidePerCycleAvoidsFundingContention() {
+        // two same-side sends in one cycle fight over the same wallet coins: the second fails
+        // unfunded until the first's change confirms (observed live with mxUSDT bids)
+        MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
+        cfg.armed = true;
+        cfg.pegged = true;
+        cfg.stepPct = new BigDecimal("0.20");
+        seedRungs(cfg.bids, 3, "100");
+        seedRungs(cfg.asks, 3, "100");
+
+        engine.onBook(new HashMap<>(), MY_KEYS, 100, m -> {});
+        assertEquals("exactly one bid and one ask", 2, txn.calls.size());
+        assertNotNull(cfg.orderIdFor("B1"));
+        assertNotNull(cfg.orderIdFor("A1"));
+        assertNull(cfg.orderIdFor("B2"));
+    }
+
+    @Test public void aLegacySlotRecordGetsAFreshPatienceWindow() {
+        // upgrading mid-flight: a record with no send block must neither duplicate (instant
+        // re-create) nor orphan (never expire)
+        MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
+        cfg.armed = true;
+        cfg.pegged = true;
+        cfg.stepPct = new BigDecimal("0.20");
+        seedRungs(cfg.bids, 1, "100");
+        cfg.slots.put("B1", new MakerConfig.SlotRec("0xLEGACY", new BigDecimal("100"), 0, 0));
+
+        engine.onBook(new HashMap<>(), MY_KEYS, 500, m -> {});
+        assertTrue("no immediate duplicate", txn.calls.isEmpty());
+        assertEquals("stamped with the current block", 500, cfg.slots.get("B1").sentBlock);
     }
 
     @Test public void anUnpeggedPriceEditIsHonouredExactly() {
@@ -229,12 +405,27 @@ public class MakerEngineTest {
         cfg.pegged = false;
         cfg.repricePct = new BigDecimal("0.25");
         cfg.asks.add(new MakerLadder.Level(new BigDecimal("0.0501"), new BigDecimal("100")));
-        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"));
-        Map<String, Order5> book = new HashMap<>();
-        book.put("0xC1", order("0xC1", "0xORDER1", "0.0500", "100"));
+        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"), 100);
+        Map<String, Order5> book = bookOf(order("0xC1", "0xORDER1", "0.0500", "100"));
 
-        engine.onBook(book, new HashSet<>(Arrays.asList("0xMINE")), 10, m -> {});
+        engine.onBook(book, MY_KEYS, 100, m -> {});
         assertEquals(Arrays.asList("RELOCK 0xC1"), txn.calls);
+    }
+
+    @Test public void aRelockInFlightIsNotRelockedAgain() {
+        // the old coin stays visible at its old price until the relock mines — without a
+        // settling window every cycle would re-relock it and burn proof-of-work forever
+        cfg.armed = true;
+        cfg.pegged = false;
+        cfg.asks.add(new MakerLadder.Level(new BigDecimal("0.0501"), new BigDecimal("100")));
+        cfg.rememberSlot("A1", "0xORDER1", new BigDecimal("100"), 100);
+        Map<String, Order5> book = bookOf(order("0xC1", "0xORDER1", "0.0500", "100"));
+
+        engine.onBook(book, MY_KEYS, 100, m -> {});
+        assertEquals(1, txn.calls.size());
+        forceNextCycle();
+        engine.onBook(book, MY_KEYS, 101, m -> {});
+        assertEquals("still settling — no second relock", 1, txn.calls.size());
     }
 
     // ---------------- helpers ----------------
@@ -248,12 +439,26 @@ public class MakerEngineTest {
     }
 
     /** run() is private by design — the engine's public surface is onBook/cancelAllLadder. */
-    @SuppressWarnings("unchecked")
     private void invokeRun(List<MakerLadder.Action> actions) throws Exception {
+        invokeRun(actions, msg -> {});
+    }
+
+    private void invokeRun(List<MakerLadder.Action> actions, MakerEngine.Listener l) throws Exception {
         java.lang.reflect.Method m = MakerEngine.class.getDeclaredMethod("run",
-                List.class, int.class, BigDecimal.class, int.class, MakerEngine.Listener.class);
+                List.class, int.class, BigDecimal.class, int.class, long.class,
+                MakerEngine.Listener.class);
         m.setAccessible(true);
-        m.invoke(engine, actions, 0, new BigDecimal("0.05"), 0, (MakerEngine.Listener) msg -> {});
+        m.invoke(engine, actions, 0, new BigDecimal("0.05"), 0, 100L, l);
+    }
+
+    /** onBook refuses to run twice inside MIN_CYCLE_MS — rewind its clock so a test can
+     *  observe the NEXT cycle without sleeping a minute. */
+    private void forceNextCycle() {
+        try {
+            java.lang.reflect.Field f = MakerEngine.class.getDeclaredField("lastCycleMs");
+            f.setAccessible(true);
+            f.setLong(engine, 0L);
+        } catch (Exception e) { throw new RuntimeException(e); }
     }
 
     private static Order5 order(String coinid, String orderId, String price, String minima) {

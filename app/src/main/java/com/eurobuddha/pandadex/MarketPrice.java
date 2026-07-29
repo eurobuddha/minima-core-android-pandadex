@@ -49,6 +49,17 @@ public final class MarketPrice {
     private static boolean fetching = false;
     private static String  lastError = null;
 
+    /** Unit tests only — plants a snapshot so engine cycles can run without the network.
+     *  Also pins the fetch pacer so refreshAsync() stays inert during the test. */
+    static void testSnapshot(double m, long fetchedAtMs) {
+        synchronized (LOCK) {
+            mid = m;
+            fetchedAt = fetchedAtMs;
+            lastTryMs = System.currentTimeMillis();
+            fetching = false;
+        }
+    }
+
     // ---- cached snapshot accessors ----
 
     /** Last good mid (USDT per 1 MINIMA), or 0 if never fetched. */
