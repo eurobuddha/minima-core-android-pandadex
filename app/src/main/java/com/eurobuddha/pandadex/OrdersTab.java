@@ -105,6 +105,7 @@ public final class OrdersTab extends LinearLayout {
             body.addView(card, lp);
         }
 
+        java.util.Set<String> makerIds = act.makerOrderIds();
         int mineCount = 0;
         for (Order5 o : book.values()) if (o.isMine(act.keys(), act.addrs())) mineCount++;
         if (mineCount > 1) {
@@ -150,6 +151,12 @@ public final class OrdersTab extends LinearLayout {
                     + "  ·  min remainder " + PriceMath.fmt(o.minRem)
                     + "  ·  total " + PriceMath.fmt(o.usdtAmount()) + " mxUSDT";
             card.addView(line(meta, Design.DIM2(), 9.5f));
+            // the ladder's own orders: cancelling one by hand is a different act from
+            // cancelling something you placed yourself — the maker will put this one back
+            if (makerIds.contains(o.orderId)) {
+                card.addView(line("MAKER RUNG — the published ladder owns this one",
+                        Design.ACCENT(), 9f));
+            }
             if (isCancelling) card.addView(line("⏳ CANCELLING — gone when a block confirms it (~50s)",
                     Design.ACCENT(), 9.5f));
             if (o.expired(block)) card.addView(line("EXPIRED — refundable to your wallet", Design.ACCENT(), 9.5f));

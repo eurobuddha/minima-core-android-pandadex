@@ -58,6 +58,9 @@ public class MainActivity extends AppCompatActivity {
     private boolean keepAliveAsked = false;
     private boolean scriptReady = true;   // covenant verified+registered on this node
     private volatile boolean busy = false;          // a spend is in flight — lock the CTA
+    /** Cancels posted but not yet confirmed, so the "funds are back" line waits for the coins
+     *  to actually leave the book rather than for the transactions to be sent. */
+    private int awaitingCancels = 0;
     private Runnable restQueue;                     // limit balance to place once a sweep lands
     private java.util.List<String> restQueueCoins;  // the swept coins we're waiting to vanish
     private long restQueueBlock = 0;                // when we started waiting
@@ -139,8 +142,15 @@ public class MainActivity extends AppCompatActivity {
                     Notifier.alert(MainActivity.this, "Order live", what + " is on the order book");
                 }
                 @Override public void onSettled(Pending.Row r) {
-                    setStage(Pending.CANCEL.equals(r.kind) ? "Order cancelled — funds back in your wallet"
-                                                           : "New price is live on the book");
+                    if (!Pending.CANCEL.equals(r.kind)) { setStage("New price is live on the book"); return; }
+                    // the coin has actually left the book — THIS is when a cancel is real
+                    if (awaitingCancels > 1 && --awaitingCancels > 0) {
+                        setStage(awaitingCancels + " cancel" + (awaitingCancels == 1 ? "" : "s")
+                                + " still confirming…");
+                        return;
+                    }
+                    awaitingCancels = 0;
+                    setStage("Order cancelled — funds back in your wallet");
                 }
                 @Override public void onGaveUp(Pending.Row r) {
                     setStage(Pending.PLACE.equals(r.kind)
@@ -735,14 +745,39 @@ public class MainActivity extends AppCompatActivity {
             if (o.sell) totalMinima = totalMinima.add(o.locked);
             else totalUsdt = totalUsdt.add(o.locked);
         }
+        // How many of these belong to the published ladder? Cancelling those without stopping
+        // the maker is futile: it would read each rung as missing and rebuild the whole ladder
+        // within minutes, spending proof-of-work to re-commit the funds just freed.
+        int rungs = 0;
+        if (makerCfg.armed && maker != null) {
+            java.util.Set<String> owned = maker.ownedOrderIds();
+            for (Order5 o : mine) if (owned.contains(o.orderId)) rungs++;
+        }
+        final boolean stopMaker = makerCfg.armed;
+
         String msg = "Cancel all " + mine.size() + " open order" + (mine.size() == 1 ? "" : "s")
                 + "?\n\nThis returns " + PriceMath.fmt(totalMinima) + " MINIMA and "
                 + PriceMath.fmt(totalUsdt) + " mxUSDT to your wallet.\n\nEach cancel is a "
-                + "separate transaction, so this takes a moment.";
+                + "separate transaction, so this takes a moment — the orders stay on the book, "
+                + "and stay fillable, until each one confirms."
+                + (stopMaker ? "\n\nThe market maker is PUBLISHING"
+                        + (rungs > 0 ? " and " + rungs + " of these are its rungs" : "")
+                        + ". It will be stopped too, so the ladder is not rebuilt." : "");
         new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle("Cancel all orders")
                 .setMessage(msg)
-                .setPositiveButton("Cancel them", (d, w) -> cancelSequentially(mine, 0, 0, 0, onDone))
+                .setPositiveButton(stopMaker ? "Cancel all & stop" : "Cancel them", (d, w) -> {
+                    if (stopMaker) {
+                        // Disarm BEFORE posting: onBook returns immediately once disarmed, so
+                        // no maker cycle can interleave with the cancel run.
+                        makerCfg.armed = false;
+                        makerCfg.clearSlots();       // no memory of a ladder left to restore
+                        makerCfg.save();
+                        setStage("Market maker stopped — cancelling every order");
+                        repaint();
+                    }
+                    cancelSequentially(mine, 0, 0, 0, onDone);
+                })
                 .setNegativeButton("Keep them", null)
                 .show();
     }
@@ -751,10 +786,18 @@ public class MainActivity extends AppCompatActivity {
                                     Runnable onDone) {
         if (idx >= list.size()) {
             busy = false;
+            // SENT, not done. Every cancel is a transaction: until it mines the order is still
+            // resting and can still be filled, so announcing "cancelled" here told the user the
+            // funds were back while they were demonstrably still at risk — and contradicted the
+            // Orders tab, which shows those same rows as CANCELLING at that moment. The honest
+            // completion is reported from Pending.onSettled, when the coins actually go.
+            awaitingCancels = ok;
             String summary = failed == 0
-                    ? "Cancelled " + ok + " order" + (ok == 1 ? "" : "s")
-                    : "Cancelled " + ok + ", " + failed + " could not be cancelled — they may "
-                            + "have just been filled. Check your open orders.";
+                    ? "Cancel sent for " + ok + " order" + (ok == 1 ? "" : "s")
+                            + " — each leaves the book when a block confirms it, and can still "
+                            + "be filled until then"
+                    : "Cancel sent for " + ok + "; " + failed + " could not be cancelled — they "
+                            + "may have just been filled. Check your open orders.";
             setStage(summary);
             toast(summary);
             repo.refresh();
@@ -998,7 +1041,10 @@ public class MainActivity extends AppCompatActivity {
         db.forgetMyOrder(o.coinid);
         repaint();
         txn.cancel(o, new DexTxn.Result() {
-            @Override public void onPosted(String txpowid) { toast("Cancel posted"); repo.refresh(); }
+            @Override public void onPosted(String txpowid) {
+                toast("Cancel sent — the order leaves the book when a block confirms it");
+                repo.refresh();
+            }
             @Override public void onFailed(String message) { toast("Cancel failed: " + message); }
         });
     }
@@ -1081,6 +1127,14 @@ public class MainActivity extends AppCompatActivity {
     public Map<String, Order5> book() { return repo == null ? new java.util.LinkedHashMap<>() : repo.book(); }
     public long chainBlock() { return chainBlock; }
     public java.util.List<Pending.Row> pendingRows() { return pending.rows(); }
+
+    /** Order ids belonging to the published ladder, so the Orders tab can say which rows the
+     *  maker owns — cancelling one of those by hand is a different act from cancelling a
+     *  hand-placed order. Empty when nothing is published. */
+    public java.util.Set<String> makerOrderIds() {
+        return (maker == null || !makerCfg.armed) ? java.util.Collections.emptySet()
+                                                  : maker.ownedOrderIds();
+    }
     public BigDecimal minimaSendable() { return minimaSendable; }
     public BigDecimal usdtSendable() { return usdtSendable; }
     public BigDecimal minimaPending() { return minimaPending; }

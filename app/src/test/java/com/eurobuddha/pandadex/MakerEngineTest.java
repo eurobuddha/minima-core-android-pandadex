@@ -274,6 +274,44 @@ public class MakerEngineTest {
         assertTrue("still paced — no duplicate cancel", txn.calls.isEmpty());
     }
 
+    @Test public void cancellingEveryOrderByHandDoesNotRebuildTheLadder() {
+        // The live sequence: 12 rungs published, then Cancel All on the Orders page. Once the
+        // cancels mined, each slot's order was absent, the record aged out, and the engine
+        // rebuilt the whole ladder — spending work to re-commit funds just freed. Cancel-all
+        // now disarms and clears the slots, so there is nothing left to restore.
+        MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
+        cfg.armed = true;
+        cfg.pegged = true;
+        cfg.stepPct = new BigDecimal("0.20");
+        seedRungs(cfg.bids, 2, "100");
+        cfg.rememberSlot("B1", "0xORDER1", new BigDecimal("100"), 100);
+        cfg.rememberSlot("B2", "0xORDER2", new BigDecimal("100"), 100);
+
+        // what cancelAll now does before posting its cancels
+        cfg.armed = false;
+        cfg.clearSlots();
+
+        forceNextCycle();
+        engine.onBook(new HashMap<>(), MY_KEYS, 100 + MakerEngine.PATIENCE_BLOCKS, m -> {});
+        assertTrue("a stopped maker must never re-post the ladder", txn.calls.isEmpty());
+        assertTrue(cfg.slots.isEmpty());
+    }
+
+    @Test public void aPublishedLadderStillRebuildsARungThatVanishesOnItsOwn() {
+        // the other side of that coin: while PUBLISHED, a rung that disappears (taken, or
+        // cancelled behind the maker's back) is still the maker's job to restore
+        MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
+        cfg.armed = true;
+        cfg.pegged = true;
+        cfg.stepPct = new BigDecimal("0.20");
+        seedRungs(cfg.bids, 1, "100");
+        cfg.rememberSlot("B1", "0xGONE", new BigDecimal("100"), 100);
+
+        forceNextCycle();
+        engine.onBook(new HashMap<>(), MY_KEYS, 100 + MakerEngine.PATIENCE_BLOCKS, m -> {});
+        assertEquals("a published ladder heals itself", 1, txn.calls.size());
+    }
+
     @Test public void theStaleFeedWithdrawAlsoChasesUnconfirmedRungs() {
         // the automatic retreat runs unattended — cancelling only what it can SEE and then
         // clearing the slot map would orphan whatever was still mining
