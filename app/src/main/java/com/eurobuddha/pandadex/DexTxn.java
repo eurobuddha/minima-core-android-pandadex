@@ -71,6 +71,14 @@ public class DexTxn {   // non-final so tests can stub the three order actions
      */
     public String createOrder(boolean buy, BigDecimal minimaAmount, BigDecimal price,
                               boolean gtc, BigDecimal minRemMinima, Result cb) {
+        return createOrder(buy, minimaAmount, price, gtc, minRemMinima, newOrderId(), cb);
+    }
+
+    /** As above with a caller-supplied order id — the maker pre-generates it so a slot can be
+     *  recorded in the ASYNC success callback (recording before the node accepts is how 0.2.6
+     *  ended up with dead ids for orders that were never funded). */
+    public String createOrder(boolean buy, BigDecimal minimaAmount, BigDecimal price,
+                              boolean gtc, BigDecimal minRemMinima, String orderId, Result cb) {
         if (myPubkey.isEmpty() || myHexAddr.isEmpty()) {
             cb.onFailed("Still reading your wallet identity — try again in a moment");
             return null;
@@ -99,7 +107,6 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             cb.onFailed("Minimum remainder is larger than the order itself");
             return null;
         }
-        String orderId = newOrderId();
         String state = "{\"0\":\"" + myPubkey + "\",\"1\":\"" + myHexAddr + "\","
                 + "\"2\":\"" + want.toPlainString() + "\","
                 + "\"3\":\"" + (buy ? "0x00" : DexContract.USDT_ID) + "\","
@@ -236,7 +243,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
      */
     private static final java.security.SecureRandom RNG = new java.security.SecureRandom();
 
-    private static String newOrderId() {
+    static String newOrderId() {
         byte[] b = new byte[8];
         RNG.nextBytes(b);
         StringBuilder sb = new StringBuilder("0x");

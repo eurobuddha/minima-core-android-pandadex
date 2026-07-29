@@ -15,10 +15,12 @@ import java.util.Set;
  * then work out the SMALLEST set of on-chain actions that moves the live book to match.
  *
  * The ladder model is AtomiX's (Order.Level / editOrderDialog), not an offset table: a rung is
- * an explicit PRICE + AMOUNT. When PEGGED the rungs are regenerated around the live MEXC mid
- * from the same seed parameters AtomiX uses — step % spacing, a level count, and INDEPENDENT
- * ask/bid sizes (a side with size 0 is simply not quoted — a one-sided market). When NOT
- * pegged the rungs are quoted exactly as typed and never repriced.
+ * an explicit PRICE + AMOUNT. When PEGGED only the PRICES are engine-owned — rung i quotes at
+ * quoted-mid × (1 ± (i+1)·step%) — while every rung's SIZE is the user's own, read positionally
+ * from the rung rows and PRESERVED across reprices (a deliberate deviation from AtomiX's
+ * applyPeg, which rebuilds uniform sizes; chosen by the user for per-rung control). A rung with
+ * size 0 is a gap, a side with no sized rungs is not quoted (one-sided market). When NOT pegged
+ * the rungs are quoted exactly as typed — price and size — and never repriced.
  *
  * Pure and side-effect free so it can be unit-tested exhaustively — every decision here spends
  * real money (each action is a transaction with proof-of-work on a phone), so the arithmetic
@@ -49,30 +51,40 @@ public final class MakerLadder {
     }
 
     public static final class Config {
-        public final boolean pegged;          // regenerate the rungs around the live mid
+        public final boolean pegged;          // regenerate rung PRICES around the live mid
         public final BigDecimal stepPct;      // pegged: spacing per rung out (e.g. 0.20 = 0.20%)
-        public final int levels;              // pegged: rungs per side (1..MAX_LEVELS)
-        public final BigDecimal askSize;      // pegged: MINIMA per ask rung; 0 = no asks
-        public final BigDecimal bidSize;      // pegged: MINIMA per bid rung; 0 = no bids
-        public final List<Level> asks;        // manual: explicit rungs, best (lowest) first
-        public final List<Level> bids;        // manual: explicit rungs, best (highest) first
+        /** The rung rows. Pegged: POSITIONAL — index i is rung i±1 out from the mid, its size
+         *  is authoritative, its price is ignored (engine-generated). Manual: explicit rungs,
+         *  sanitized/sorted inside desired(). The seed size fields never reach the engine. */
+        public final List<Level> asks;
+        public final List<Level> bids;
         public final BigDecimal skewPct;      // + shifts the whole ladder UP (bullish)
         public final BigDecimal repricePct;   // don't touch anything until the mid moves this far
 
-        public Config(boolean pegged, BigDecimal stepPct, int levels,
-                      BigDecimal askSize, BigDecimal bidSize,
+        public Config(boolean pegged, BigDecimal stepPct,
                       List<Level> asks, List<Level> bids,
                       BigDecimal skewPct, BigDecimal repricePct) {
             this.pegged = pegged;
             this.stepPct = stepPct;
-            this.levels = levels;
-            this.askSize = askSize;
-            this.bidSize = bidSize;
             this.asks = asks;
             this.bids = bids;
             this.skewPct = skewPct;
             this.repricePct = repricePct;
         }
+    }
+
+    /** Positional rung size — 0 for a missing/blank/invalid row (a gap in the ladder). */
+    static BigDecimal sizeAt(List<Level> rungs, int i) {
+        if (rungs == null || i >= rungs.size()) return BigDecimal.ZERO;
+        Level l = rungs.get(i);
+        return (l == null || l.sizeMinima == null || l.sizeMinima.signum() <= 0)
+                ? BigDecimal.ZERO : l.sizeMinima;
+    }
+
+    /** Does this side quote anything at all? (Any rung with a positive size.) */
+    public static boolean hasSizedRung(List<Level> rungs) {
+        for (int i = 0; i < MAX_LEVELS; i++) if (sizeAt(rungs, i).signum() > 0) return true;
+        return false;
     }
 
     /**
@@ -123,11 +135,12 @@ public final class MakerLadder {
     /**
      * Build the rungs we want on the book.
      *
-     * PEGGED — AtomiX's fillFromPeg arithmetic: the quoted mid is the reference mid shifted by
-     * skew, rung i sits at quoted × (1 ± (i+1)·step%), asks above / bids below, each side at its
-     * own uniform size, and a side whose size is zero is not quoted at all. Widening multiplies
-     * the step — used to quote worse as the price feed ages rather than blindly standing on a
-     * stale number.
+     * PEGGED — the quoted mid is the reference mid shifted by skew, rung i sits at
+     * quoted × (1 ± (i+1)·step%), asks above / bids below, and each rung carries ITS OWN size
+     * read positionally from the rung rows (preserved across reprices — the user's per-rung
+     * control). A zero-size row is a gap with stable slot ids; a side with no sized rows is
+     * not quoted. Widening multiplies the step — used to quote worse as the price feed ages
+     * rather than blindly standing on a stale number.
      *
      * MANUAL — the explicit rungs, exactly as typed. No mid, no skew, no widening: the prices
      * do not depend on the feed, so they are never repriced and never withdrawn for staleness.
@@ -151,31 +164,56 @@ public final class MakerLadder {
 
         if (mid == null || mid.signum() <= 0) return out;
         if (cfg.stepPct == null || cfg.stepPct.signum() <= 0) return out;
-        boolean asksOn = cfg.askSize != null && cfg.askSize.signum() > 0;
-        boolean bidsOn = cfg.bidSize != null && cfg.bidSize.signum() > 0;
-        if (!asksOn && !bidsOn) return out;
+        if (!hasSizedRung(cfg.asks) && !hasSizedRung(cfg.bids)) return out;
 
         BigDecimal widen = (widenFactor == null || widenFactor.signum() <= 0)
                 ? BigDecimal.ONE : widenFactor;
         BigDecimal skewed = mid.multiply(BigDecimal.ONE.add(
                 cfg.skewPct.divide(hundred, PriceMath.MC)), PriceMath.MC);
 
-        int n = Math.max(1, Math.min(cfg.levels, MAX_LEVELS));
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < MAX_LEVELS; i++) {
             BigDecimal off = cfg.stepPct.multiply(new BigDecimal(i + 1), PriceMath.MC)
                     .multiply(widen, PriceMath.MC).divide(hundred, PriceMath.MC);
-            if (bidsOn) {
+            BigDecimal bidSz = sizeAt(cfg.bids, i);
+            BigDecimal askSz = sizeAt(cfg.asks, i);
+            if (bidSz.signum() > 0) {
                 BigDecimal p = skewed.multiply(BigDecimal.ONE.subtract(off), PriceMath.MC)
                         .setScale(PriceMath.DISPLAY_DP, RoundingMode.DOWN);
-                if (p.signum() > 0) out.add(new Slot("B" + (i + 1), false, p, cfg.bidSize));
+                if (p.signum() > 0) out.add(new Slot("B" + (i + 1), false, p, bidSz));
             }
-            if (asksOn) {
+            if (askSz.signum() > 0) {
                 BigDecimal p = skewed.multiply(BigDecimal.ONE.add(off), PriceMath.MC)
                         .setScale(PriceMath.DISPLAY_DP, RoundingMode.UP);
-                out.add(new Slot("A" + (i + 1), true, p, cfg.askSize));
+                out.add(new Slot("A" + (i + 1), true, p, askSz));
             }
         }
         return out;
+    }
+
+    // ---------------------------------------------------------------- commitments
+
+    /** What publishing this ladder locks up, per token side. */
+    public static final class Commitments {
+        public final BigDecimal askMinima;   // Σ ask sizes — locked MINIMA
+        public final BigDecimal bidUsdt;     // Σ bid size × price — locked mxUSDT
+
+        Commitments(BigDecimal askMinima, BigDecimal bidUsdt) {
+            this.askMinima = askMinima;
+            this.bidUsdt = bidUsdt;
+        }
+    }
+
+    public static Commitments commitments(List<Slot> desired) {
+        BigDecimal askM = BigDecimal.ZERO, bidU = BigDecimal.ZERO;
+        if (desired != null) {
+            for (Slot s : desired) {
+                if (s == null) continue;
+                if (s.sell) askM = askM.add(s.sizeMinima);
+                else bidU = bidU.add(PriceMath.up(
+                        s.sizeMinima.multiply(s.price, PriceMath.MC), PriceMath.USDT_DP));
+            }
+        }
+        return new Commitments(askM, bidU);
     }
 
     // ---------------------------------------------------------------- reconciliation
@@ -219,16 +257,46 @@ public final class MakerLadder {
      * ROUNDED prices deliberately — a posted order's reconstructed price carries amount-rounding
      * noise below display precision, and comparing raw values would relock every cycle forever.
      */
+    /** The cycle's action allowance. Creates are additionally capped PER SIDE because they fund
+     *  via wallet `send`s — two bid creates in one cycle fight over the same mxUSDT coins and
+     *  the second fails unfunded until the first's change confirms (observed live). Bids and
+     *  asks fund from different tokens, so one of each never contends; relocks and cancels
+     *  spend only the order coin itself and never contend at all. */
+    public static final class Budget {
+        public final int maxActions;         // 0 = unlimited
+        public final int maxCreatesPerSide;  // per cycle; Integer.MAX_VALUE = uncapped
+
+        public Budget(int maxActions, int maxCreatesPerSide) {
+            this.maxActions = maxActions;
+            this.maxCreatesPerSide = maxCreatesPerSide;
+        }
+    }
+
     public static List<Action> reconcile(List<Slot> desired, Map<String, Order5> liveBySlot,
                                          BigDecimal repricePct, Set<String> partiallyFilled,
                                          int maxActions) {
-        return reconcile(desired, liveBySlot, repricePct, partiallyFilled, null, maxActions);
+        return reconcile(desired, liveBySlot, null, repricePct, partiallyFilled, null,
+                new Budget(maxActions, Integer.MAX_VALUE));
     }
 
     /** As above, with the sizes we originally posted per slot id — enables size-change repairs. */
     public static List<Action> reconcile(List<Slot> desired, Map<String, Order5> liveBySlot,
                                          BigDecimal repricePct, Set<String> partiallyFilled,
                                          Map<String, BigDecimal> postedSizes, int maxActions) {
+        return reconcile(desired, liveBySlot, null, repricePct, partiallyFilled, postedSizes,
+                new Budget(maxActions, Integer.MAX_VALUE));
+    }
+
+    /**
+     * Full form. {@code settlingSlots} are slots with an action already in flight (a create
+     * still mining, a relock whose old coin is still visible, a fresh cancel) — they are
+     * neither created, relocked, nor resized this cycle; touching them would double-spend
+     * the work or duplicate the order.
+     */
+    public static List<Action> reconcile(List<Slot> desired, Map<String, Order5> liveBySlot,
+                                         Set<String> settlingSlots,
+                                         BigDecimal repricePct, Set<String> partiallyFilled,
+                                         Map<String, BigDecimal> postedSizes, Budget budget) {
         // Collected by KIND so the cap below drops the least urgent work first.
         List<Action> relocks = new ArrayList<>();
         List<Action> creates = new ArrayList<>();
@@ -244,10 +312,18 @@ public final class MakerLadder {
             }
         }
 
+        int bidCreates = 0, askCreates = 0;
         for (Slot s : desired) {
+            if (settlingSlots != null && settlingSlots.contains(s.id)) {
+                continue;                    // action already in flight — hands off this cycle
+            }
             Order5 live = liveBySlot.get(s.id);
             if (live == null) {
-                creates.add(new Action(Kind.CREATE, s, null, "level missing"));
+                int used = s.sell ? askCreates : bidCreates;
+                if (used < budget.maxCreatesPerSide) {
+                    creates.add(new Action(Kind.CREATE, s, null, "level missing"));
+                    if (s.sell) askCreates++; else bidCreates++;
+                }
                 continue;
             }
             if (partiallyFilled != null && partiallyFilled.contains(live.coinid)) {
@@ -258,8 +334,14 @@ public final class MakerLadder {
             // amount carries conversion rounding that would read as a phantom size change.
             BigDecimal posted = postedSizes == null ? null : postedSizes.get(s.id);
             if (posted != null && posted.compareTo(s.sizeMinima) != 0) {
-                resizes.add(new Action(Kind.CANCEL, null, live, "size changed"));
-                resizes.add(new Action(Kind.CREATE, s, null, "size changed"));
+                // The repost CREATE funds via a wallet send too — it shares the per-side
+                // contention budget. Over budget → whole pair waits for a later cycle.
+                int used = s.sell ? askCreates : bidCreates;
+                if (used < budget.maxCreatesPerSide) {
+                    resizes.add(new Action(Kind.CANCEL, null, live, "size changed"));
+                    resizes.add(new Action(Kind.CREATE, s, null, "size changed"));
+                    if (s.sell) askCreates++; else bidCreates++;
+                }
                 continue;
             }
             BigDecimal livePrice = live.price();
@@ -294,8 +376,8 @@ public final class MakerLadder {
         actions.addAll(cancels);
         actions.addAll(resizes);
 
-        if (maxActions > 0 && actions.size() > maxActions) {
-            return new ArrayList<>(actions.subList(0, maxActions));
+        if (budget.maxActions > 0 && actions.size() > budget.maxActions) {
+            return new ArrayList<>(actions.subList(0, budget.maxActions));
         }
         return actions;
     }
