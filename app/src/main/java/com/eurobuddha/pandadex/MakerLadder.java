@@ -81,6 +81,36 @@ public final class MakerLadder {
                 ? BigDecimal.ZERO : l.sizeMinima;
     }
 
+    /**
+     * Resize a side to {@code n} rungs, returning the amount each rung should hold.
+     *
+     * Changing the LEVEL COUNT must not rewrite amounts the user typed into rungs — that is
+     * what the per-side size fields are for. So existing amounts pass through untouched, rungs
+     * past {@code n} are cleared, and new rungs inherit the OUTERMOST sized rung (extending the
+     * ladder the way it looks like it should extend), falling back to {@code seedSize} and then
+     * to zero, which simply leaves the rung unquoted rather than inventing a size.
+     *
+     * Pure: this is the rule that silently did nothing when the seed size fields were empty,
+     * so it is worth pinning rather than re-deriving.
+     */
+    public static List<BigDecimal> applyCount(List<Level> side, int n, BigDecimal seedSize) {
+        int want = Math.max(0, Math.min(n, MAX_LEVELS));
+        BigDecimal inherit = BigDecimal.ZERO;
+        for (int i = 0; i < MAX_LEVELS; i++) {          // outermost sized rung wins
+            BigDecimal s = sizeAt(side, i);
+            if (s.signum() > 0) inherit = s;
+        }
+        if (inherit.signum() <= 0 && seedSize != null && seedSize.signum() > 0) inherit = seedSize;
+
+        List<BigDecimal> out = new ArrayList<>();
+        for (int i = 0; i < MAX_LEVELS; i++) {
+            if (i >= want) { out.add(BigDecimal.ZERO); continue; }   // beyond the count — clear
+            BigDecimal existing = sizeAt(side, i);
+            out.add(existing.signum() > 0 ? existing : inherit);     // keep what is there
+        }
+        return out;
+    }
+
     /** Does this side quote anything at all? (Any rung with a positive size.) */
     public static boolean hasSizedRung(List<Level> rungs) {
         for (int i = 0; i < MAX_LEVELS; i++) if (sizeAt(rungs, i).signum() > 0) return true;

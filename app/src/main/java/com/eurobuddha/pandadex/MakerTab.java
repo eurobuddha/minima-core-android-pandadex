@@ -46,8 +46,11 @@ public final class MakerTab extends LinearLayout {
     private boolean built = false;
     /** Programmatic setText during auto-fill must not re-trigger the param watchers. */
     private boolean filling = false;
-    /** Peg turned on before the first price landed — fill the moment it does. */
-    private boolean pegAwaitFill = false;
+    /** An edit made before a usable price arrived, held until one does — WITH the operation it
+     *  is waiting to perform, because a level-count change and a size change are not the same
+     *  thing and running the wrong one rewrites amounts the user typed. */
+    private Runnable pendingApply = null;
+    private String pendingEdit = null;
     /** Cache for the status panel's my-orders lookup, keyed on book identity. */
     private java.util.Map<String, Order5> bookSeen, myById;
 
@@ -296,8 +299,12 @@ public final class MakerTab extends LinearLayout {
         //  - size/levels seed edits REBUILD the rows (that's what the user asked for);
         //  - mid/step/skew edits touch PRICES ONLY — hand-tuned rung sizes must survive.
         // repriceIn isn't watched (the reprice threshold doesn't shape the rows).
+        // ONE FIELD, ONE MEANING. Routing all three through a single rebuild meant the level
+        // count could only work when the per-side SEED size fields were filled — which a user
+        // who types amounts into the rungs legitimately leaves empty — and, when it did work,
+        // it overwrote every hand-typed amount with the uniform seed size.
+        levelsIn.addTextChangedListener(onChange(this::countGen));
         TextWatcher seedW = onChange(this::seedGen);
-        levelsIn.addTextChangedListener(seedW);
         askSizeIn.addTextChangedListener(seedW);
         bidSizeIn.addTextChangedListener(seedW);
         TextWatcher priceW = onChange(this::priceGen);
@@ -325,7 +332,10 @@ public final class MakerTab extends LinearLayout {
                     if (haveSizes) refreshPrices(BigDecimal.valueOf(MarketPrice.mid()));
                     else seedGen();
                 } else {
-                    pegAwaitFill = !haveSizes;
+                    // no price yet: an empty ladder wants seeding once one lands; a ladder that
+                    // already has sizes only wants its prices refreshed, never a reseed
+                    deferUntilPrice(haveSizes ? () -> refreshPrices(livePeggedMid())
+                                              : () -> seedFill(livePeggedMid()));
                     act.toast("Fetching MEXC price…");
                 }
             }
@@ -404,15 +414,92 @@ public final class MakerTab extends LinearLayout {
         return false;
     }
 
-    /** A size/levels seed edit — rebuild the rows (sizes AND prices). */
+    /** A per-side SIZE edit — that field means "every rung this side", so rewrite them. */
     private void seedGen() {
         if (filling) return;
         BigDecimal mid = liveOrManualMid();
-        if (mid == null) {
-            if (pegSw.isChecked()) { pegAwaitFill = true; MarketPrice.refreshAsync(); }
-            return;                                   // the tick seeds once the price lands
-        }
+        if (mid == null) { deferUntilPrice(() -> seedFill(livePeggedMid())); return; }
         seedFill(mid);
+    }
+
+    /** A LEVEL COUNT edit — add or remove rungs, never touch an existing rung's amount. */
+    private void countGen() {
+        if (filling) return;
+        BigDecimal mid = liveOrManualMid();
+        if (mid == null) { deferUntilPrice(() -> applyCount(livePeggedMid())); return; }
+        applyCount(mid);
+    }
+
+    private static BigDecimal livePeggedMid() {
+        double m = MarketPrice.mid();
+        return m > 0 ? BigDecimal.valueOf(m) : null;
+    }
+
+    /**
+     * The edit can't be applied until a usable price arrives — SAY SO and remember what to do.
+     *
+     * Returning quietly is what made the levels field look broken: the fetch limiter allows one
+     * attempt every 30s and a book too thin to quote fails outright, so the edit could sit dead
+     * for half a minute or more with nothing on screen explaining it.
+     */
+    private void deferUntilPrice(Runnable apply) {
+        if (!pegSw.isChecked()) return;               // unpegged just needs a mid typed in
+        pendingApply = apply;
+        pendingEdit = "waiting for a MEXC price to apply that…";
+        MarketPrice.refreshAsync();
+        pegPxTv.setText(pendingEdit);
+    }
+
+    /**
+     * Resize the ladder to the level count, keeping every amount the user typed.
+     * {@link MakerLadder#applyCount} decides the amounts; this only writes the cells.
+     */
+    private void applyCount(BigDecimal mid) {
+        BigDecimal step = Util.dec(stepIn.getText().toString());
+        BigDecimal skew = clampSkew(Util.dec(skewIn.getText().toString()));
+        if (mid == null || mid.signum() <= 0 || step.signum() <= 0) return;
+        int n = levelsClamped();
+        List<BigDecimal> askAmts = MakerLadder.applyCount(readSide(askRows), n,
+                Util.dec(askSizeIn.getText().toString()));
+        List<BigDecimal> bidAmts = MakerLadder.applyCount(readSide(bidRows), n,
+                Util.dec(bidSizeIn.getText().toString()));
+
+        BigDecimal hundred = new BigDecimal(100);
+        BigDecimal quoted = mid.multiply(BigDecimal.ONE.add(skew.divide(hundred, PriceMath.MC)), PriceMath.MC);
+        pendingEdit = null;
+        filling = true;
+        try {
+            if (pegSw.isChecked()) midIn.setText(trim(quoted.setScale(PriceMath.DISPLAY_DP,
+                    java.math.RoundingMode.HALF_UP)));
+            for (int i = 0; i < MakerLadder.MAX_LEVELS; i++) {
+                BigDecimal off = step.multiply(new BigDecimal(i + 1), PriceMath.MC).divide(hundred, PriceMath.MC);
+                writeRung(askRows[i], askAmts.get(i),
+                        quoted.multiply(BigDecimal.ONE.add(off), PriceMath.MC)
+                                .setScale(PriceMath.DISPLAY_DP, java.math.RoundingMode.UP));
+                writeRung(bidRows[i], bidAmts.get(i),
+                        quoted.multiply(BigDecimal.ONE.subtract(off), PriceMath.MC)
+                                .setScale(PriceMath.DISPLAY_DP, java.math.RoundingMode.DOWN));
+            }
+        } finally {
+            filling = false;
+        }
+        updatePreview();
+    }
+
+    private void writeRung(EditText[] row, BigDecimal amount, BigDecimal price) {
+        boolean on = amount != null && amount.signum() > 0;
+        row[0].setText(on ? trim(price) : "");
+        row[1].setText(on ? trim(amount) : "");
+    }
+
+    /** The rung rows as a Level list, so the pure helper can reason about them. */
+    private List<MakerLadder.Level> readSide(EditText[][] rows) {
+        List<MakerLadder.Level> out = new ArrayList<>();
+        for (EditText[] row : rows) {
+            out.add(new MakerLadder.Level(Util.dec(row[0].getText().toString()),
+                    Util.dec(row[1].getText().toString())));
+        }
+        return out;
     }
 
     /** A mid/step/skew edit — reprice the rows, never touch a rung's size. */
@@ -440,7 +527,7 @@ public final class MakerTab extends LinearLayout {
         if (mid == null || mid.signum() <= 0) return;
         BigDecimal hundred = new BigDecimal(100);
         BigDecimal quoted = mid.multiply(BigDecimal.ONE.add(skew.divide(hundred, PriceMath.MC)), PriceMath.MC);
-        pegAwaitFill = false;
+        pendingEdit = null;
         filling = true;
         try {
             if (pegSw.isChecked()) midIn.setText(trim(quoted.setScale(PriceMath.DISPLAY_DP,
@@ -606,13 +693,19 @@ public final class MakerTab extends LinearLayout {
         @Override public void run() {
             // Stops itself while hidden — setVisibility(VISIBLE) restarts it.
             if (!isAttachedToWindow() || getVisibility() != VISIBLE) return;
-            pegPxTv.setText(pegLine());
+            pegPxTv.setText(pendingEdit != null ? pendingEdit : pegLine());
             updateStatus();
             if (pegSw.isChecked()) {
                 MarketPrice.refreshAsync();
                 if (MarketPrice.fresh()) {
-                    if (pegAwaitFill) seedFill(BigDecimal.valueOf(MarketPrice.mid()));
-                    else refreshPrices(BigDecimal.valueOf(MarketPrice.mid()));   // live tracking, sizes untouched
+                    if (pendingApply != null) {
+                        // run the operation the user actually asked for, not a generic refill
+                        Runnable r = pendingApply;
+                        pendingApply = null;
+                        r.run();
+                    } else {
+                        refreshPrices(BigDecimal.valueOf(MarketPrice.mid()));   // sizes untouched
+                    }
                 }
             }
             postDelayed(this, 2000);
