@@ -806,28 +806,35 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         busy = true;
-        Order5 o = list.get(idx);
-        setStage("Cancelling " + (idx + 1) + " of " + list.size() + "…");
-        // an optimistic CANCEL row per order, so the Orders tab shows "CANCELLING — waiting
-        // for a block" instead of an unchanged book for minutes (the 0.2.6 complaint)
-        Pending.Row row = new Pending.Row();
-        row.kind = Pending.CANCEL;
-        row.orderId = o.orderId;
-        row.coinid = o.coinid;
-        row.buy = !o.sell;
-        row.minima = o.minimaAmount();
-        row.price = o.price();
-        row.submitMs = System.currentTimeMillis();
-        row.submitBlock = chainBlock;
-        pending.add(row);
-        repo.tape().noteMyCancel(o.coinid);
-        db.forgetMyOrder(o.coinid);
-        txn.cancel(o, new DexTxn.Result() {
+        // BATCH: several cancels ride in ONE transaction (the covenant's cancel branch is
+        // index-matched), so 12 orders cost 3 rounds of proof-of-work instead of 12.
+        final java.util.List<Order5> chunk = new java.util.ArrayList<>(
+                list.subList(idx, Math.min(idx + SweepPlanner.MAX_ORDERS, list.size())));
+        final int next = idx + chunk.size();
+        setStage("Cancelling " + next + " of " + list.size() + "…");
+        for (Order5 o : chunk) {
+            // an optimistic CANCEL row per order, so the Orders tab shows "CANCELLING —
+            // waiting for a block" instead of an unchanged book for minutes
+            Pending.Row row = new Pending.Row();
+            row.kind = Pending.CANCEL;
+            row.orderId = o.orderId;
+            row.coinid = o.coinid;
+            row.buy = !o.sell;
+            row.minima = o.minimaAmount();
+            row.price = o.price();
+            row.submitMs = System.currentTimeMillis();
+            row.submitBlock = chainBlock;
+            pending.add(row);
+            repo.tape().noteMyCancel(o.coinid);
+            db.forgetMyOrder(o.coinid);
+        }
+        txn.cancelBatch(chunk, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) {
-                cancelSequentially(list, idx + 1, ok + 1, failed, onDone);
+                cancelSequentially(list, next, ok + chunk.size(), failed, onDone);
             }
             @Override public void onFailed(String message) {
-                cancelSequentially(list, idx + 1, ok, failed + 1, onDone);
+                // atomic — the whole chunk failed together
+                cancelSequentially(list, next, ok, failed + chunk.size(), onDone);
             }
         });
     }

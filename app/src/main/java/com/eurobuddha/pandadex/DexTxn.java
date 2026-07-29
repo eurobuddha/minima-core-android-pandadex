@@ -272,6 +272,57 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         postGated(txid, steps, new ArrayList<>(), cb);
     }
 
+    /**
+     * Cancel SEVERAL orders in ONE transaction.
+     *
+     * The covenant's cancel branch is index-matched — input i is satisfied by
+     * {@code VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE)}, i.e. output i must refund
+     * that order's own payout address its full amount. So N order coins can be inputs to one
+     * transaction with N refunds at the same indices, each script satisfying itself
+     * independently. Per-token balance is automatic: every refund is the whole locked amount,
+     * so no funding coins are needed at all (unlike a sweep).
+     *
+     * Same construction {@link #fillSweep} already proves on mainnet — order inputs first,
+     * index-matched outputs — but strictly simpler: no partial, no payment arithmetic, no
+     * counterparty. Withdrawing a 12-rung ladder costs 3 rounds of proof-of-work, not 12.
+     *
+     * ATOMIC: the batch either cancels every order in it or none of them, which is cleaner
+     * than a sequential run failing partway and leaving an arbitrary subset cancelled.
+     */
+    public void cancelBatch(List<Order5> orders, Result cb) {
+        if (orders == null || orders.isEmpty()) { cb.onFailed("Nothing to cancel"); return; }
+        if (orders.size() > SweepPlanner.MAX_ORDERS) {
+            cb.onFailed("Too many orders for one transaction");
+            return;
+        }
+        if (orders.size() == 1) { cancel(orders.get(0), cb); return; }
+
+        String txid = "cancelb_" + System.nanoTime();
+        List<String> steps = new ArrayList<>();
+        steps.add("txncreate id:" + txid);
+        // inputs first, in order — the outputs below must land at the SAME indices
+        for (Order5 o : orders) {
+            if (db != null) db.noteCancelled(o.coinid);   // or the tape books these as fills
+            steps.add("txninput id:" + txid + " coinid:" + o.coinid);
+        }
+        for (Order5 o : orders) {
+            steps.add("txnoutput id:" + txid + " amount:" + o.locked.toPlainString()
+                    + " address:" + o.wantAddr
+                    + ("0x00".equals(o.lockedTok) ? "" : " tokenid:" + o.lockedTok)
+                    + " storestate:false");
+        }
+        // one signature per DISTINCT owner key — normally just ours, but never assume
+        List<String> signed = new ArrayList<>();
+        for (Order5 o : orders) {
+            if (o.ownerPk != null && !o.ownerPk.isEmpty() && !signed.contains(o.ownerPk)) {
+                signed.add(o.ownerPk);
+                steps.add("txnsign id:" + txid + " publickey:" + o.ownerPk);
+            }
+        }
+        steps.add("txnbasics id:" + txid);
+        postGated(txid, steps, new ArrayList<>(), cb);
+    }
+
     /** Atomic in-place re-lock: GTC renew (newWant null) or edit (newWant set). ONE txn —
      *  the coin never leaves the book (the V5 owner branch; proven in Phase B chunk D). */
     public void relock(Order5 o, BigDecimal newWant, Result cb) {

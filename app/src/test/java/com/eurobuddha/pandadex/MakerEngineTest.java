@@ -66,11 +66,25 @@ public class MakerEngineTest {
          *  observe the engine while it is genuinely working. */
         boolean deferCancels = false;
         boolean throwOnCall = false;
+        boolean failCancels = false;
         Result parked;
 
         @Override public void cancel(Order5 o, Result cb) {
             calls.add("CANCEL " + o.coinid);
             if (deferCancels) { parked = cb; return; }
+            cb.onPosted("0xTX");
+        }
+
+        /** One entry per BATCH, listing its coins — so a test can count transactions, which
+         *  is the whole point of batching, as well as which orders each one covered. */
+        @Override public void cancelBatch(java.util.List<Order5> orders, Result cb) {
+            // mirror the real contract: a batch of one is just a cancel
+            if (orders.size() == 1) { cancel(orders.get(0), cb); return; }
+            StringBuilder sb = new StringBuilder("CANCELBATCH");
+            for (Order5 o : orders) sb.append(' ').append(o.coinid);
+            calls.add(sb.toString());
+            if (deferCancels) { parked = cb; return; }
+            if (failCancels) { cb.onFailed("batch rejected"); return; }
             cb.onPosted("0xTX");
         }
     }
@@ -198,7 +212,8 @@ public class MakerEngineTest {
                 order("0xC1", "0xORDER1", "0.051", "100"),
                 order("0xC2", "0xORDER2", "0.049", "100"));
         engine.cancelAllLadder(live, 0, 100, m -> {});
-        assertEquals(2, txn.calls.size());
+        assertEquals("both rungs ride in ONE transaction now", 1, txn.calls.size());
+        assertEquals("CANCELBATCH 0xC1 0xC2", txn.calls.get(0));
         assertTrue(cfg.slots.isEmpty());
         assertFalse(engine.isWorking());
     }
@@ -272,6 +287,46 @@ public class MakerEngineTest {
         Order5 o = order("0xC1", "0xORDER1", "0.051", "100");
         engine.sweepTombstones(bookOf(o), MY_KEYS, 101, m -> {});
         assertTrue("still paced — no duplicate cancel", txn.calls.isEmpty());
+    }
+
+    @Test public void aWholeLadderWithdrawsInBatchesNotOneTxnPerRung() {
+        // 12 rungs used to mean 12 transactions, each grinding its own proof-of-work — the
+        // "cancels take forever" complaint. The covenant's cancel branch is index-matched, so
+        // they ride together: 12 rungs → 3 transactions.
+        List<Order5> live = new ArrayList<>();
+        for (int i = 1; i <= 12; i++) {
+            cfg.rememberSlot("B" + i, "0xORDER" + i, new BigDecimal("100"), 100);
+            live.add(order("0xC" + i, "0xORDER" + i, "0.049", "100"));
+        }
+        engine.cancelAllLadder(live, 0, 100, m -> {});
+
+        assertEquals("12 rungs in batches of 5", 3, txn.calls.size());
+        for (String c : txn.calls) assertTrue("batched, not one-by-one", c.startsWith("CANCELBATCH"));
+        // EVERY order must be condemned, not just the first of each batch — a missed tombstone
+        // is an orphan nothing will ever chase
+        assertEquals(12, cfg.cancelTombstones.size());
+        for (int i = 1; i <= 12; i++) {
+            assertTrue("0xORDER" + i + " condemned", cfg.cancelTombstones.containsKey("0xORDER" + i));
+        }
+        assertTrue(cfg.slots.isEmpty());
+        assertFalse(engine.isWorking());
+    }
+
+    @Test public void aFailedBatchCondemnsEveryOrderInIt() {
+        // the transaction is atomic: if it fails NONE of them cancelled, so all of them must
+        // stay marked for the sweep to retry
+        txn.failCancels = true;
+        List<Order5> live = new ArrayList<>();
+        for (int i = 1; i <= 3; i++) {
+            cfg.rememberSlot("B" + i, "0xORDER" + i, new BigDecimal("100"), 100);
+            live.add(order("0xC" + i, "0xORDER" + i, "0.049", "100"));
+        }
+        engine.cancelAllLadder(live, 0, 100, m -> {});
+        assertEquals(3, cfg.cancelTombstones.size());
+        for (int i = 1; i <= 3; i++) {
+            assertEquals("retried immediately, not paced", 0,
+                    cfg.cancelTombstones.get("0xORDER" + i).lastAttemptBlock);
+        }
     }
 
     @Test public void cancellingEveryOrderByHandDoesNotRebuildTheLadder() {

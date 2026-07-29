@@ -421,31 +421,39 @@ public final class MakerEngine {
             return;
         }
         working = true;
-        Order5 o = live.get(idx);
-        cfg.forgetSlotByOrderId(o.orderId);
+        // BATCH: the covenant's cancel branch is index-matched, so several rungs go in one
+        // transaction — one round of proof-of-work instead of one per rung. A 12-rung ladder
+        // withdraws in 3 transactions rather than 12.
+        final List<Order5> chunk = new ArrayList<>(
+                live.subList(idx, Math.min(idx + SweepPlanner.MAX_ORDERS, live.size())));
+        final int next = idx + chunk.size();
+        for (Order5 c : chunk) cfg.forgetSlotByOrderId(c.orderId);
         final boolean[] advanced = {false};
         DexTxn.Result once = new DexTxn.Result() {
             @Override public void onPosted(String t) {
                 if (advanced[0]) return; advanced[0] = true;
-                cfg.tombstone(o.orderId, chainBlock, chainBlock);   // sent — pace the next try
-                if (l != null) l.onCancelSent(o);
-                cancelAllLadder(live, idx + 1, chainBlock, l);
+                for (Order5 c : chunk) {
+                    cfg.tombstone(c.orderId, chainBlock, chainBlock);   // sent — pace the retry
+                    if (l != null) l.onCancelSent(c);
+                }
+                cancelAllLadder(live, next, chainBlock, l);
             }
             @Override public void onFailed(String m) {
                 if (advanced[0]) return; advanced[0] = true;
-                // condemn it anyway, with no attempt recorded — the sweep retries immediately
-                cfg.tombstone(o.orderId, chainBlock, 0);
-                cancelAllLadder(live, idx + 1, chainBlock, l);
+                // the batch is atomic — NONE of these cancelled. Condemn them all with no
+                // attempt recorded so the tombstone sweep retries them immediately.
+                for (Order5 c : chunk) cfg.tombstone(c.orderId, chainBlock, 0);
+                cancelAllLadder(live, next, chainBlock, l);
             }
         };
         try {
-            txn.cancel(o, once);
+            txn.cancelBatch(chunk, once);
         } catch (Throwable t) {
             // a throw must not strand the withdraw half-done with `working` stuck true
             if (!advanced[0]) {
                 advanced[0] = true;
-                cfg.tombstone(o.orderId, chainBlock, 0);
-                cancelAllLadder(live, idx + 1, chainBlock, l);
+                for (Order5 c : chunk) cfg.tombstone(c.orderId, chainBlock, 0);
+                cancelAllLadder(live, next, chainBlock, l);
             }
         }
     }
