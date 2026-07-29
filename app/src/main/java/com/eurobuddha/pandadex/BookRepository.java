@@ -112,15 +112,20 @@ public final class BookRepository {
             if (!truncated) {
                 if (orders.isEmpty() && !cached.isEmpty()) emptyScans++; else emptyScans = 0;
             }
-            boolean suspectEmpty = orders.isEmpty() && !cached.isEmpty()
-                    && emptyScans < EMPTY_CONFIRM;
-            if (!truncated && !suspectEmpty) {
+            boolean believable = believable(truncated, orders.isEmpty(), cached.isEmpty(), emptyScans);
+            if (believable) {
                 cached = orders;
                 haveLive = true;
                 if (sink != null) tape.ingest(orders, false, chainBlock, sink);
-                // never overwrite a good snapshot with nothing: an empty book is exactly the
-                // state a cold start cannot tell apart from "never scanned"
-                if (!orders.isEmpty()) persist(orders, rawJsons);
+                // Persist WHATEVER this scan says, empty included. Refusing to save an empty
+                // book left the snapshot holding the last non-empty one forever, so every cold
+                // start after cancelling everything repainted dead orders until the first live
+                // scan corrected it — ghosts that invite the user to act on spent coins.
+                // The protection against a BOGUS empty is the suspectEmpty gate above
+                // (EMPTY_CONFIRM believable empty scans, truncated ones not counted); by the
+                // time we are here the empty book has already earned belief. Worst case is a
+                // blank cold-start paint that self-heals on the next scan.
+                persist(orders, rawJsons);
             } else if (!truncated) {
                 // still feed the tape so its own sanity gate observes and re-seeds
                 if (sink != null) tape.ingest(orders, false, chainBlock, sink);
@@ -132,6 +137,23 @@ public final class BookRepository {
                 refresh();
             }
         });
+    }
+
+    /**
+     * Is this scan worth believing — and therefore worth writing through to the cache AND the
+     * persisted snapshot? Pure, because this one rule has now been wrong twice: once counting
+     * transport failures toward the empty-book budget, and once refusing to persist a
+     * confirmed-empty book (which left ghost orders on every cold start).
+     *
+     * A truncated scan is never believed. An empty scan is believed only after
+     * {@link #EMPTY_CONFIRM} consecutive believable empties — unless the cache is already
+     * empty, in which case there is nothing to contradict.
+     */
+    static boolean believable(boolean truncated, boolean ordersEmpty, boolean cachedEmpty,
+                              int emptyScans) {
+        if (truncated) return false;
+        boolean suspectEmpty = ordersEmpty && !cachedEmpty && emptyScans < EMPTY_CONFIRM;
+        return !suspectEmpty;
     }
 
     private void persist(Map<String, Order5> orders, List<String> rawJsons) {

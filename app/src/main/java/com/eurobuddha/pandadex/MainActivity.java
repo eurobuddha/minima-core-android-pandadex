@@ -285,6 +285,27 @@ public class MainActivity extends AppCompatActivity {
 
     // ------------------------------------------------------------------ chrome
 
+    /**
+     * Flip the palette and rebuild.
+     *
+     * recreate() rather than a restyle pass: every view bakes its colours at construction and
+     * the tabs are deliberately built once (rebuilding them under the user eats whatever they
+     * are typing), so there is no full-restyle path to call. The Activity already survives a
+     * rebuild — the selected tab is in onSaveInstanceState and the maker reloads from prefs.
+     *
+     * NOT while a transaction is in flight: recreate() destroys the NodeApi, and a create whose
+     * onPosted callback is lost leaves a real on-chain order with no slot record — an orphan
+     * nothing can find. Same reasoning as the withdraw-while-working guard.
+     */
+    private void toggleTheme() {
+        if (busy || (maker != null && maker.isWorking())) {
+            toast("Finish the current transaction first — then switch");
+            return;
+        }
+        Design.toggle(this);
+        recreate();
+    }
+
     private android.view.View buildChrome() {
         int pad = Design.dp(this, 12);
         LinearLayout root = new LinearLayout(this);
@@ -310,6 +331,18 @@ public class MainActivity extends AppCompatActivity {
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         vp.rightMargin = Design.dp(this, 6);
         header.addView(verPill, vp);
+
+        // Light/dark switch. Both palettes were built long ago — every colour resolves through
+        // Design.pick() and there is even a matching light dialog theme — but nothing ever
+        // called Design.toggle, so the light mode was unreachable.
+        TextView themePill = Design.pill(this, Design.isDark() ? "☀" : "☾",
+                Design.SURFACE2(), Design.DIM());
+        themePill.setOnClickListener(v -> toggleTheme());
+        Design.pressable(themePill);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        tp.rightMargin = Design.dp(this, 6);
+        header.addView(themePill, tp);
 
         pairPill = Design.pill(this, "PAIRING…", Design.SURFACE2(), Design.DIM());
         header.addView(pairPill);
