@@ -59,6 +59,9 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean busy = false;          // a spend is in flight — lock the CTA
     private Runnable restQueue;                     // limit balance to place once a sweep lands
     private java.util.List<String> restQueueCoins;  // the swept coins we're waiting to vanish
+    private long restQueueBlock = 0;                // when we started waiting
+    /** A sweep that hasn't consumed its coins by now is never going to — see reconcileSweep. */
+    private static final int SWEEP_DEADLINE_BLOCKS = 6;
     /** Order coins this device is currently taking — shown as FILLING on the ladder. */
     private final java.util.Set<String> filling = new java.util.HashSet<>();
     private java.util.List<String> awaitingFill;    // coins whose disappearance = our fill landed
@@ -633,6 +636,7 @@ public class MainActivity extends AppCompatActivity {
                                 };
                                 restQueueCoins = new java.util.ArrayList<>();
                                 for (SweepPlanner.Take t : plan.takes) restQueueCoins.add(t.order.coinid);
+                                restQueueBlock = chainBlock;
                             }
                         }
                         @Override public void onFailed(String message) {
@@ -683,11 +687,29 @@ public class MainActivity extends AppCompatActivity {
     private void reconcileSweep(Map<String, Order5> book) {
         if (restQueueCoins == null) return;
         for (String coinid : restQueueCoins) {
-            if (book.containsKey(coinid)) return;         // sweep hasn't landed yet
+            if (book.containsKey(coinid)) {
+                // A consensus-rejected sweep posts without error and simply never mines, so
+                // "wait for the coins to vanish" can wait forever — and the resting balance
+                // the user was PROMISED would be placed just never is, silently. Give up out
+                // loud once the coins have clearly outlived the trade.
+                if (restQueueBlock > 0 && chainBlock - restQueueBlock > SWEEP_DEADLINE_BLOCKS) {
+                    restQueue = null;
+                    restQueueCoins = null;
+                    restQueueBlock = 0;
+                    filling.clear();
+                    awaitingFill = null;
+                    setStage("That trade never confirmed — your resting limit order was NOT "
+                            + "placed. Nothing was spent; try again.");
+                    toast("Trade didn't confirm — resting order not placed");
+                    repaint();
+                }
+                return;                                   // sweep hasn't landed yet
+            }
         }
         Runnable q = restQueue;
         restQueue = null;
         restQueueCoins = null;
+        restQueueBlock = 0;
         if (q != null) q.run();
     }
 

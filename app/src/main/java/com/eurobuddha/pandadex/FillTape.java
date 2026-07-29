@@ -128,8 +128,12 @@ public final class FillTape {
         // where genuine trading empties it one or two orders at a time, which is how the last
         // order in a thin market still gets recorded.
         if (bookEmptied && vanished > MAX_VANISH_PER_SCAN) {
-            prev = mergePrev(book, prev);
-            prevAtMs = now;
+            // Keep the LAST BELIEVABLE observation, don't fold the empty one in. Merging would
+            // leave prev holding only the few coins already mid-grace, so once the node
+            // recovered there would be nothing left to diff against and any order that really
+            // did trade during the outage would be lost — the other half of this file's
+            // contract. Holding prev means the recovered book adjudicates every coin at once.
+            prevAtMs = now;                // not stale — we are deliberately waiting
             return;
         }
 

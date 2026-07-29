@@ -113,6 +113,21 @@ public class TapeEvidenceTest {
         assertTrue(fills.isEmpty());
     }
 
+    @Test public void aFillDuringAnOutageIsStillFoundWhenTheNodeReturns() {
+        // holding the last believable book (rather than folding the empty one in) is what
+        // lets the recovered scan adjudicate: c really did trade while the node was blind
+        Order5 a = sell("0xC1", "0xA1", "100", "5");
+        Order5 b = sell("0xC2", "0xA2", "100", "5");
+        Order5 c = sell("0xC3", "0xA3", "100", "5");
+        Order5 d = sell("0xC4", "0xA4", "100", "5");
+        tape.ingest(book(a, b, c, d), false, 100, sink);
+        for (int blk = 101; blk <= 110; blk++) tape.ingest(book(), false, blk, sink);
+        assertTrue("nothing minted while blind", fills.isEmpty());
+        for (int blk = 111; blk <= 118; blk++) tape.ingest(book(a, b, d), false, blk, sink);
+        assertEquals("the one that really went is recorded", 1, fills.size());
+        assertEquals("0xC3", fills.get(0)[0]);
+    }
+
     @Test public void noSingleScanCanAssertAWaveOfFills() {
         // however ripe the counters, one ingest may only ever assert MAX_VANISH_PER_SCAN
         Order5 keep = sell("0xK1", "0xB1", "10", "0.5");
