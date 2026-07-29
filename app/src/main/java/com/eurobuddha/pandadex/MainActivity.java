@@ -865,7 +865,10 @@ public class MainActivity extends AppCompatActivity {
                         + "transaction your phone does proof-of-work for, and each one's change "
                         + "has to confirm before the next on that side can be funded — so a full "
                         + "ladder takes a few minutes to build and a rung may retry before it "
-                        + "sticks. The Maker tab shows each rung's progress.")
+                        + "sticks. The Maker tab shows each rung's progress.\n\n"
+                        + "With the app CLOSED the ladder is still maintained, but only every "
+                        + "few minutes — so it builds slower and a stale-feed withdrawal can "
+                        + "lag by that much. Keep the app open while it builds.")
                 .setPositiveButton("Publish", (d, w) -> {
                     makerCfg.armed = true;
                     makerCfg.lastActedMid = null;      // act on the next cycle

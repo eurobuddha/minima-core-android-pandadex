@@ -139,6 +139,11 @@ public class DexKeepAliveService extends Service {
      * would otherwise be stale enough to re-post rungs it already placed.
      */
     private void driveMaker(java.util.Map<String, Order5> orders) {
+        // RE-CHECK, don't trust pass()'s gate: identity → block → book is three async node
+        // round-trips, so that check is seconds stale and the user may have opened the app in
+        // the meantime. Two engines have separate `working` flags and separate in-memory slot
+        // maps, so both would read the same rung as missing and both would post it.
+        if (MainActivity.FOREGROUND) return;
         makerCfg.reload();
         MakerEngine.Listener l = message -> { /* nobody is watching — the Maker tab replays it */ };
         maker.sweepTombstones(orders, keySet.keys(), chainBlock, l);

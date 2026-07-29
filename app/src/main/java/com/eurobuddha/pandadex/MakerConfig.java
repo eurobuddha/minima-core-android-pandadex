@@ -178,7 +178,9 @@ public final class MakerConfig {
         Tomb existing = cancelTombstones.get(orderId);
         if (existing == null) {
             cancelTombstones.put(orderId, new Tomb(createdBlock, lastAttemptBlock));
-        } else {
+        } else if (lastAttemptBlock > existing.lastAttemptBlock) {
+            // only ever ADVANCES: re-condemning with "not tried yet" (0) must not rewind the
+            // pacing clock, or the sweep re-sends a cancel that is still mining
             existing.lastAttemptBlock = lastAttemptBlock;
         }
         save();

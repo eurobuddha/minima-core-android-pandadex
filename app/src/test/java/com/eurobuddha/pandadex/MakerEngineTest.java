@@ -262,6 +262,18 @@ public class MakerEngineTest {
                 cfg.cancelTombstones.get("0xORDER1").createdBlock);
     }
 
+    @Test public void reCondemningAnOrderDoesNotRewindItsCancelPacing() {
+        // withdrawAll re-condemns with "not tried yet"; that must not undo a cancel we just
+        // sent, or the sweep re-posts proof-of-work against an order already mining its cancel
+        cfg.tombstone("0xORDER1", 100, 100);
+        cfg.tombstone("0xORDER1", 100, 0);
+        assertEquals("the attempt clock only advances", 100,
+                cfg.cancelTombstones.get("0xORDER1").lastAttemptBlock);
+        Order5 o = order("0xC1", "0xORDER1", "0.051", "100");
+        engine.sweepTombstones(bookOf(o), MY_KEYS, 101, m -> {});
+        assertTrue("still paced — no duplicate cancel", txn.calls.isEmpty());
+    }
+
     @Test public void theStaleFeedWithdrawAlsoChasesUnconfirmedRungs() {
         // the automatic retreat runs unattended — cancelling only what it can SEE and then
         // clearing the slot map would orphan whatever was still mining

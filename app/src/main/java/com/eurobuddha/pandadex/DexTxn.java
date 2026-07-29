@@ -355,6 +355,9 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                         }
                     }
                     @Override public void onError(String message) {
+                        // every txn error path deletes the pending txn — safe even if the post
+                        // did land, since posting has already happened by this point
+                        node.cmd("txndelete id:" + txid, null);
                         inflight.keySet().removeAll(fundIds);
                         cb.onFailed(message);
                     }
