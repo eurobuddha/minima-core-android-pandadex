@@ -106,7 +106,7 @@ public final class OrdersTab extends LinearLayout {
         }
 
         int mineCount = 0;
-        for (Order5 o : book.values()) if (o.isMine(act.keys())) mineCount++;
+        for (Order5 o : book.values()) if (o.isMine(act.keys(), act.addrs())) mineCount++;
         if (mineCount > 1) {
             TextView cancelAll = line("✕  Cancel all " + mineCount + " orders", Design.RED(), 11.5f);
             cancelAll.setGravity(Gravity.CENTER);
@@ -119,7 +119,7 @@ public final class OrdersTab extends LinearLayout {
             body.addView(cancelAll, cl);
         }
         for (Order5 o : book.values()) {
-            if (!o.isMine(act.keys())) continue;
+            if (!o.isMine(act.keys(), act.addrs())) continue;
             any = true;
             boolean isCancelling = cancelling.contains(o.coinid);
             LinearLayout card = new LinearLayout(getContext());

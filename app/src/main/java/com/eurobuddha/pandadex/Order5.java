@@ -100,6 +100,17 @@ public final class Order5 {
         return myKeys != null && myKeys.contains(ownerPk);
     }
 
+    /**
+     * Ownership for anything that SPENDS or ATTRIBUTES: spend authority (port 0) plus payout
+     * (port 1). Port 0 is public, so the key alone proves only that the coin names me — a
+     * stranger can author one. See {@link KeySet#owns}. Empty address set ⇒ falls back to the
+     * key check, because a false negative would be worse than the attack it prevents.
+     */
+    public boolean isMine(Set<String> myKeys, Set<String> myAddrs) {
+        if (!isMine(myKeys)) return false;
+        return myAddrs == null || myAddrs.isEmpty() || myAddrs.contains(wantAddr);
+    }
+
     /** True when the node also considers this coin relevant — corroboration for diagnostics. */
     public boolean nodeRelevant() { return relevant; }
 

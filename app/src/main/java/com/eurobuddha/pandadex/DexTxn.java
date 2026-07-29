@@ -255,6 +255,11 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
     /** Cancel: owner-signed refund of the whole coin to the maker wallet (token-aware). */
     public void cancel(Order5 o, Result cb) {
+        // WE are spending this coin. Record it HERE, not in the callers: the fill tape reads a
+        // vanished coin as a trade, and a caller that forgets (the background maker's no-op
+        // listener did) writes a fill that never happened into the user's own trade history
+        // and into the tape that feeds the ticker, candles and P&L.
+        if (db != null) db.noteCancelled(o.coinid);
         String txid = "cancel_" + System.nanoTime();
         List<String> steps = new ArrayList<>();
         steps.add("txncreate id:" + txid);

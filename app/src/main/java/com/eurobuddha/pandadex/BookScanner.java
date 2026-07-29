@@ -30,18 +30,40 @@ public final class BookScanner {
 
     private BookScanner() {}
 
+    /** Narrowest window worth asking for before admitting defeat. `depth` bounds how far BACK
+     *  the walk goes, not how many coins come back, and the reply must fit the 256KB IPC
+     *  ceiling — at roughly 800 bytes a row that is ~300 orders. */
+    private static final int MIN_SLICE_BLOCKS = 12;
+
     public static void scan(NodeApi node, Cb cb) {
         final Map<String, Order5> found = new LinkedHashMap<>();
         final java.util.List<String> raw = new java.util.ArrayList<>();
         final boolean[] truncated = {false};
+        // ADAPTIVE: one query covers the whole range while the book fits a single reply, which
+        // is the normal case — slicing unconditionally would issue five queries every poll and
+        // make the node re-walk the chain for each. We only pay that cost once the book has
+        // actually outgrown the IPC ceiling, which previously froze the book permanently.
+        slice(node, found, truncated, raw, 0, DexContract.SCAN_DEPTH, cb);
+    }
 
-        node.cmd("coins simplestate:true order:desc depth:" + DexContract.SCAN_DEPTH
-                + " address:" + DexContract.ADDR_V5, new NodeApi.Cb() {
+    /**
+     * Walk SCAN_DEPTH in windows of [coinage, coinage+width]. `depth:D coinage:C` selects the
+     * block range between them, so consecutive windows tile the whole range.
+     */
+    private static void slice(NodeApi node, Map<String, Order5> found, boolean[] truncated,
+                              List<String> raw, int fromAge, int width, Cb cb) {
+        if (fromAge >= DexContract.SCAN_DEPTH) {          // whole range covered
+            relevant(node, found, truncated, raw, cb);
+            return;
+        }
+        int depth = Math.min(fromAge + width, DexContract.SCAN_DEPTH);
+        node.cmd("coins simplestate:true order:desc address:" + DexContract.ADDR_V5
+                + " coinage:" + fromAge + " depth:" + depth, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 Object resp = json.opt("response");
                 if (!(resp instanceof JSONArray)) {
                     truncated[0] = true;
-                    relevant(node, found, truncated, raw, cb);
+                    slice(node, found, truncated, raw, depth, width, cb);
                     return;
                 }
                 JSONArray arr = (JSONArray) resp;
@@ -60,18 +82,27 @@ public final class BookScanner {
                         raw.add(c.toString());
                     }
                 }
-                relevant(node, found, truncated, raw, cb);
+                slice(node, found, truncated, raw, depth, width, cb);
             }
             @Override public void onError(String message) {
-                truncated[0] = true;
-                relevant(node, found, truncated, raw, cb);
+                // An oversized reply is killed by the IPC ceiling and surfaces here. Halving
+                // the window is the difference between a book that recovers and one that
+                // freezes on its last good cache forever once it outgrows a single reply.
+                if (width > MIN_SLICE_BLOCKS) {
+                    slice(node, found, truncated, raw, fromAge, Math.max(MIN_SLICE_BLOCKS, width / 2), cb);
+                    return;
+                }
+                truncated[0] = true;                     // even the narrowest window failed
+                slice(node, found, truncated, raw, depth, width, cb);
             }
         });
     }
 
     private static void relevant(NodeApi node, Map<String, Order5> found, boolean[] truncated,
                                  List<String> raw, Cb cb) {
-        node.cmd("coins relevant:true address:" + DexContract.ADDR_V5, new NodeApi.Cb() {
+        // simplestate:true — only `coinid` is read here, and the verbose state array makes this
+        // reply as large as the book scan itself for no benefit (IPC ceiling, 256KB)
+        node.cmd("coins relevant:true simplestate:true address:" + DexContract.ADDR_V5, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 Object resp = json.opt("response");
                 if (resp instanceof JSONArray) {

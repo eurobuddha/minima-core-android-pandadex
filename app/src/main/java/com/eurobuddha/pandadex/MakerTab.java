@@ -626,7 +626,7 @@ public final class MakerTab extends LinearLayout {
         java.util.Map<String, Order5> book = act.book();
         if (book == bookSeen && myById != null) return myById;
         java.util.Map<String, Order5> mine = new java.util.HashMap<>();
-        for (Order5 o : book.values()) if (o.isMine(act.keys())) mine.put(o.orderId, o);
+        for (Order5 o : book.values()) if (o.isMine(act.keys(), act.addrs())) mine.put(o.orderId, o);
         bookSeen = book;
         myById = mine;
         return mine;

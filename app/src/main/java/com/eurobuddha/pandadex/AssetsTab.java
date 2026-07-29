@@ -58,7 +58,7 @@ public final class AssetsTab extends LinearLayout {
         // locked in my resting orders
         BigDecimal lockedMinima = BigDecimal.ZERO, lockedUsdt = BigDecimal.ZERO;
         for (Order5 o : act.book().values()) {
-            if (!o.isMine(act.keys())) continue;
+            if (!o.isMine(act.keys(), act.addrs())) continue;
             if (o.sell) lockedMinima = lockedMinima.add(o.locked);
             else lockedUsdt = lockedUsdt.add(o.locked);
         }

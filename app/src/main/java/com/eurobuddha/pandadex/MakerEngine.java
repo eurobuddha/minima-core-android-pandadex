@@ -186,6 +186,7 @@ public final class MakerEngine {
         // This MUST compare against the size we posted: an order cannot tell you it shrank,
         // only what it holds now.
         Set<String> partial = new HashSet<>();
+        Set<String> renew = new HashSet<>();
         Map<String, BigDecimal> postedSizes = new HashMap<>();
         for (Map.Entry<String, Order5> e : liveBySlot.entrySet()) {
             BigDecimal posted = cfg.postedSizeFor(e.getKey());
@@ -193,6 +194,8 @@ public final class MakerEngine {
                 postedSizes.put(e.getKey(), posted);
                 if (e.getValue().minimaAmount().compareTo(posted) < 0) partial.add(e.getValue().coinid);
             }
+            // the maker renews its OWN rungs — DexProcessor now skips them, so nothing else will
+            if (e.getValue().renewDue(chainBlock)) renew.add(e.getKey());
         }
 
         // ---- the reprice gate guards COMPLETE ladders only. A half-posted, failed or
@@ -211,7 +214,7 @@ public final class MakerEngine {
         // reconcile's exact mode (any difference at display precision relocks).
         BigDecimal threshold = cfg.pegged ? cfg.repricePct : BigDecimal.ZERO;
         List<MakerLadder.Action> actions = MakerLadder.reconcile(desired, liveBySlot, settling,
-                threshold, partial, postedSizes,
+                renew, threshold, partial, postedSizes,
                 new MakerLadder.Budget(MAX_ACTIONS_PER_CYCLE, MAX_CREATES_PER_SIDE));
         if (actions.isEmpty()) return;
 
@@ -452,6 +455,14 @@ public final class MakerEngine {
         } catch (Throwable t) {
             if (!advanced[0]) { advanced[0] = true; working = false; drainIdle(); }
         }
+    }
+
+    /** The orderIds this engine owns — the generic renewer must leave them alone. */
+    public Set<String> ownedOrderIds() {
+        Set<String> ids = new HashSet<>();
+        for (MakerConfig.SlotRec r : cfg.slots.values()) ids.add(r.orderId);
+        ids.addAll(cfg.cancelTombstones.keySet());   // condemned: never renew what we're killing
+        return ids;
     }
 
     public List<Order5> liveLadderOrders(Map<String, Order5> book, Set<String> myKeys) {

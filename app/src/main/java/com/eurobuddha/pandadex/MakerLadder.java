@@ -297,6 +297,21 @@ public final class MakerLadder {
                                          Set<String> settlingSlots,
                                          BigDecimal repricePct, Set<String> partiallyFilled,
                                          Map<String, BigDecimal> postedSizes, Budget budget) {
+        return reconcile(desired, liveBySlot, settlingSlots, null, repricePct, partiallyFilled,
+                postedSizes, budget);
+    }
+
+    /**
+     * @param renewSlots slots whose live order is approaching expiry. The maker RENEWS ITS OWN
+     *                   rungs — a relock resets coinage and fixes the price in one transaction —
+     *                   because letting the generic renewer touch them means two owners
+     *                   relocking one coin: the loser's proof-of-work is wasted, and if the
+     *                   renewal wins it silently reinstates the old price.
+     */
+    public static List<Action> reconcile(List<Slot> desired, Map<String, Order5> liveBySlot,
+                                         Set<String> settlingSlots, Set<String> renewSlots,
+                                         BigDecimal repricePct, Set<String> partiallyFilled,
+                                         Map<String, BigDecimal> postedSizes, Budget budget) {
         // Collected by KIND so the cap below drops the least urgent work first.
         List<Action> relocks = new ArrayList<>();
         List<Action> creates = new ArrayList<>();
@@ -362,6 +377,12 @@ public final class MakerLadder {
                         .divide(livePrice, PriceMath.MC).multiply(new BigDecimal(100));
                 move = movePct.compareTo(repricePct) >= 0;
                 reason = "moved " + movePct.setScale(3, RoundingMode.HALF_UP) + "%";
+            }
+            // a rung nearing expiry is relocked even at the right price — same transaction
+            // renews the coinage, and it is OURS to renew now
+            if (!move && renewSlots != null && renewSlots.contains(s.id)) {
+                move = true;
+                reason = "renewing";
             }
             if (move) relocks.add(new Action(Kind.RELOCK, s, live, reason));
         }

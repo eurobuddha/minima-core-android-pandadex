@@ -54,6 +54,10 @@ public final class DexDb extends SQLiteOpenHelper {
      * which costs the user nothing they earned. Do not add another DELETE here — stored
      * history is the user's, and there is no way to get it back once deleted.
      */
+    /** Sideloading an older APK must not brick the app: the default implementation throws,
+     *  and the schema is additive, so an older build simply ignores the newer tables. */
+    @Override public void onDowngrade(SQLiteDatabase db, int oldV, int newV) { }
+
     @Override public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
         if (oldV < 2) {
             db.execSQL("CREATE TABLE IF NOT EXISTS cancelled (coinid TEXT PRIMARY KEY, timems INTEGER)");
@@ -90,10 +94,19 @@ public final class DexDb extends SQLiteOpenHelper {
         try (Cursor c = getReadableDatabase().rawQuery(
                 "SELECT 1 FROM cancelled WHERE coinid=?", new String[]{coinid})) {
             boolean hit = c.moveToFirst();
-            if (hit) getWritableDatabase().execSQL(
-                    "DELETE FROM cancelled WHERE timems < " + (System.currentTimeMillis() - 86_400_000L));
-            return hit;
+            prunedCancelled();   // unconditionally: pruning only on a HIT let the table grow
+            return hit;          // without bound for a user who never cancels the same coin twice
         }
+    }
+
+    private long lastPruneMs = 0;
+
+    private void prunedCancelled() {
+        long now = System.currentTimeMillis();
+        if (now - lastPruneMs < 60 * 60_000L) return;   // hourly is plenty for a daily cutoff
+        lastPruneMs = now;
+        getWritableDatabase().execSQL(
+                "DELETE FROM cancelled WHERE timems < " + (now - 86_400_000L));
     }
 
     // ---- my orders (survive the node's visibility horizon) ----

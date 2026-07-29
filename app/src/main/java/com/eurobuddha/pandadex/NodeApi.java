@@ -145,16 +145,25 @@ public class NodeApi {
     }
 
     public void cmd(String command, long timeoutMs, Cb cb) {
-        if (mReleased) return;
+        if (mReleased) {
+            // ALWAYS dispatch: a caller that never hears back can wedge forever — BookRepository
+            // sets `scanning = true` before calling and only clears it in the callback, so a
+            // silent return makes every later refresh() a no-op.
+            if (cb != null) cb.onError("Node API released");
+            return;
+        }
         final boolean isWrite = timeoutFor(command) == WRITE_TIMEOUT_MS;
         if (isWrite) mPendingWrites++;
         final boolean[] done = {false};
         final Runnable[] ref = new Runnable[1];
         final Runnable timeout = () -> {
             mPending.remove(ref[0]);
-            if (done[0] || dead()) return;
+            if (done[0]) return;
             done[0] = true;
+            // decrement BEFORE the dead() bail-out: leaking this counter permanently pins it
+            // above zero, which disables both reRegister() and the unpair detector
             if (isWrite) mPendingWrites--;
+            if (dead()) return;
             // The "paired-then-node-died" detector: a run of dead-air commands means the node app is gone
             // (rebooted phone, force-stop, crash). Flip to unpaired so the hosts start re-registering.
             // NOT while a write is pending — the node is likely just grinding that write's PoW.

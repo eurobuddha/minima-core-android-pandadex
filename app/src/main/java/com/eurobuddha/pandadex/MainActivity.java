@@ -137,6 +137,12 @@ public class MainActivity extends AppCompatActivity {
                     setStage(Pending.CANCEL.equals(r.kind) ? "Order cancelled — funds back in your wallet"
                                                            : "New price is live on the book");
                 }
+                @Override public void onGaveUp(Pending.Row r) {
+                    setStage(Pending.PLACE.equals(r.kind)
+                            ? "Never saw that order rest on the book — it may have been taken "
+                              + "immediately. Check Orders and your balance."
+                            : "Still no confirmation for that request — check Orders.");
+                }
             });
             reconcileSweep(orders);
             reconcileTakerFill(orders);
@@ -152,14 +158,14 @@ public class MainActivity extends AppCompatActivity {
                 maker.onBook(orders, keySet.keys(), chainBlock, makerListener);
             }
             filling.retainAll(orders.keySet());   // never let a marker stick
-            // remember my own live orders so they can still be found after they age out of
-            // the node's searchable window (the recovery path in ORDERS)
-            for (Order5 o : orders.values()) {
-                if (o.isMine(keySet.keys())) db.rememberMyOrder(o.coinid, o.orderId, "", o.created);
-            }
+            // NOTE: the `myorder` table has no reader — the ORDERS recovery path it was meant
+            // to feed was never built, and it stores an empty `json` so it could not serve one
+            // anyway. Writing it on every book callback was a main-thread SQLite insert per
+            // order per poll for nothing. Left OFF deliberately; wire the reader first.
             // the foreground Activity owns renewals while it's up (the service stands down)
             if (paired && keySet.ready() && chainBlock > 0) {
-                processor.process(orders, keySet.keys(), chainBlock, new DexProcessor.Listener() {
+                processor.process(orders, keySet.keys(), keySet.addrs(),
+                        maker.ownedOrderIds(), chainBlock, new DexProcessor.Listener() {
                     @Override public void onRenewed(Order5 o) {}
                     @Override public void onRenewFailed(Order5 o, String why) {
                         toast("Renewal failed for order @ " + PriceMath.fmtPrice(o.price()) + " — will retry");
@@ -696,7 +702,7 @@ public class MainActivity extends AppCompatActivity {
     public void cancelAll(Runnable onDone) {
         if (!ready()) return;
         java.util.List<Order5> mine = new java.util.ArrayList<>();
-        for (Order5 o : book().values()) if (o.isMine(keySet.keys())) mine.add(o);
+        for (Order5 o : book().values()) if (o.isMine(keySet.keys(), keySet.addrs())) mine.add(o);
         if (mine.isEmpty()) { toast("No open orders"); if (onDone != null) onDone.run(); return; }
 
         BigDecimal totalMinima = BigDecimal.ZERO, totalUsdt = BigDecimal.ZERO;
@@ -965,7 +971,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void onFillObserved(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
                                 boolean takerBuy, boolean partial) {
-        boolean mine = order.isMine(keys());
+        boolean mine = order.isMine(keys(), addrs());
         boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                 takerBuy, partial, mine);
         if (isNew && mine) {
@@ -982,6 +988,8 @@ public class MainActivity extends AppCompatActivity {
 
     public DexStats db() { return stats; }
     public Set<String> keys() { return keySet.keys(); }
+    /** My wallet addresses — the second ownership factor; see {@link KeySet#owns}. */
+    public Set<String> addrs() { return keySet.addrs(); }
     public Map<String, Order5> book() { return repo == null ? new java.util.LinkedHashMap<>() : repo.book(); }
     public long chainBlock() { return chainBlock; }
     public java.util.List<Pending.Row> pendingRows() { return pending.rows(); }

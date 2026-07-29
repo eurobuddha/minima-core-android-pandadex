@@ -104,14 +104,23 @@ public final class BookRepository {
             // does) the cache froze permanently. The stale orders stayed on screen forever and
             // cancel rows could never clear, because they clear when the coin leaves the book.
             // Demand repeated confirmation, then believe it.
-            if (orders.isEmpty() && !cached.isEmpty()) emptyScans++; else emptyScans = 0;
+            // Count ONLY believable scans. A transport failure (timeout while the node grinds
+            // PoW, ERR_TOO_LONG, ERR_NOT_ENABLED) also arrives as an empty map — counting
+            // those let three failures spend the entire confirmation budget, so the next
+            // genuine-looking empty reply was accepted with no confirmation at all, wiping
+            // the cache AND the persisted snapshot.
+            if (!truncated) {
+                if (orders.isEmpty() && !cached.isEmpty()) emptyScans++; else emptyScans = 0;
+            }
             boolean suspectEmpty = orders.isEmpty() && !cached.isEmpty()
                     && emptyScans < EMPTY_CONFIRM;
             if (!truncated && !suspectEmpty) {
                 cached = orders;
                 haveLive = true;
                 if (sink != null) tape.ingest(orders, false, chainBlock, sink);
-                persist(orders, rawJsons);
+                // never overwrite a good snapshot with nothing: an empty book is exactly the
+                // state a cold start cannot tell apart from "never scanned"
+                if (!orders.isEmpty()) persist(orders, rawJsons);
             } else if (!truncated) {
                 // still feed the tape so its own sanity gate observes and re-seeds
                 if (sink != null) tape.ingest(orders, false, chainBlock, sink);
@@ -127,7 +136,9 @@ public final class BookRepository {
 
     private void persist(Map<String, Order5> orders, List<String> rawJsons) {
         List<String> ids = new ArrayList<>(orders.keySet());
-        // rawJsons is parallel to insertion order of orders
+        // The two lists are parallel only because BookScanner appends to both in lockstep over
+        // a LinkedHashMap. On any mismatch we skip rather than persist a mis-paired snapshot —
+        // a scrambled cache would attribute one order's JSON to another's coinid.
         if (rawJsons.size() == ids.size()) db.saveBook(rawJsons, ids);
     }
 }

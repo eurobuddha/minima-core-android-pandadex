@@ -114,6 +114,9 @@ public final class Pending {
         void onLive(Row r);
         /** A cancel or reprice took effect. */
         void onSettled(Row r);
+        /** Never observed within GIVEUP_MS — the row is dropped. Not necessarily a failure:
+         *  an order taken in the block it appeared is never seen resting. Say something. */
+        default void onGaveUp(Row r) {}
     }
 
     /**
@@ -146,7 +149,15 @@ public final class Pending {
                 if (l != null) l.onSettled(r);
                 done = true;
             }
-            if (done || System.currentTimeMillis() - r.submitMs > GIVEUP_MS) {
+            if (!done && System.currentTimeMillis() - r.submitMs > GIVEUP_MS) {
+                // Say so. Vanishing silently after 20 minutes leaves the user with no idea
+                // whether the order is live, lost, or was filled the moment it appeared (a
+                // PLACE taken in the next block is never seen resting, so nothing else
+                // reports it either).
+                if (l != null) l.onGaveUp(r);
+                done = true;
+            }
+            if (done) {
                 it.remove();
                 changed = true;
             }

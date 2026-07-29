@@ -61,10 +61,12 @@ public class DexKeepAliveService extends Service {
         makerCfg = new MakerConfig(getApplicationContext());
         maker = new MakerEngine(makerCfg, txn);
         keySet = new KeySet(getApplicationContext(), null);
+        // The staleness ceiling must clear OUR polling gap, or every pass re-seeds and this
+        // service can never record a fill (nor fire the "order filled" notification).
         tape = new FillTape(new FillTape.CancelLog() {
             @Override public void note(String coinid) { db.noteCancelled(coinid); }
             @Override public boolean consume(String coinid) { return db.wasCancelled(coinid); }
-        });
+        }, PASS_GAP_MS * 2 + 60_000);
         HeartbeatReceiver.schedule(this);
         started = true;
     }
@@ -115,7 +117,9 @@ public class DexKeepAliveService extends Service {
             if (truncated) return;                     // never act on a failed scan
             tape.ingest(orders, false, chainBlock, this::onFill);
             if (!keySet.ready()) return;               // never renew on a blind key set
-            processor.process(orders, keySet.keys(), chainBlock, new DexProcessor.Listener() {
+            makerCfg.reload();   // the maker's rungs are its own to renew — see driveMaker
+            processor.process(orders, keySet.keys(), keySet.addrs(),
+                    maker.ownedOrderIds(), chainBlock, new DexProcessor.Listener() {
                 @Override public void onRenewed(Order5 o) { /* silent — routine upkeep */ }
                 @Override public void onRenewFailed(Order5 o, String why) {
                     Notifier.alert(getApplicationContext(), "Couldn't renew an order",
@@ -152,7 +156,7 @@ public class DexKeepAliveService extends Service {
 
     private void onFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
                         boolean takerBuy, boolean partial) {
-        boolean mine = order.isMine(keySet.keys());
+        boolean mine = order.isMine(keySet.keys(), keySet.addrs());
         boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                 takerBuy, partial, mine);
         if (isNew && mine) {

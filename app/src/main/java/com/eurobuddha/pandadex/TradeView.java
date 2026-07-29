@@ -540,7 +540,7 @@ public final class TradeView extends LinearLayout {
             if (o.expired(chainBlock)) continue;
             BigDecimal g = levelPrice(o, tick);
             (o.sell ? asks : bids).merge(g, o.minimaAmount(), BigDecimal::add);
-            if (o.isMine(act.keys())) mineAt.merge(g, true, (x, y) -> true);
+            if (o.isMine(act.keys(), act.addrs())) mineAt.merge(g, true, (x, y) -> true);
             if (act.filling().contains(o.coinid)) fillingAt.merge(g, true, (x, y) -> true);
             exactAt.merge(g, o.price(), (x, y) -> o.sell ? x.min(y) : x.max(y));
         }
@@ -623,7 +623,7 @@ public final class TradeView extends LinearLayout {
         }
         boolean any = !pending.isEmpty();
         for (Order5 o : book.values()) {
-            if (!o.isMine(act.keys())) continue;
+            if (!o.isMine(act.keys(), act.addrs())) continue;
             any = true;
             LinearLayout row = orderRowShell();
             String label = (o.sell ? "SELL " : "BUY ") + PriceMath.fmt(o.minimaAmount())

@@ -3,6 +3,7 @@ package com.eurobuddha.pandadex;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -47,14 +48,24 @@ public final class FillTape {
      *  service stands down entirely while the Activity is up, so its previous book can be
      *  half an hour stale — diffing across that gap invents fills for everything that
      *  legitimately traded, expired or was renewed meanwhile. Re-seed instead. */
-    private static final long STALE_PREV_MS = 4 * 60_000;
+    public static final long STALE_PREV_MS = 4 * 60_000;
     private long prevAtMs = 0;
 
     private Map<String, Order5> prev = null;            // coinid -> order (last good scan)
     private final Map<String, Integer> missing = new java.util.HashMap<>();
     private final CancelLog cancels;
+    /** How old the previous observation may be and still be diffable. MUST exceed the owner's
+     *  polling gap: the background service polls every PASS_GAP_MS, so a 4-minute ceiling made
+     *  its every pass "stale", which re-seeded and returned — its fill detection, and the
+     *  "your order filled" notification with it, could never once fire. */
+    private final long staleMs;
 
-    public FillTape(CancelLog cancels) { this.cancels = cancels; }
+    public FillTape(CancelLog cancels) { this(cancels, STALE_PREV_MS); }
+
+    public FillTape(CancelLog cancels, long staleMs) {
+        this.cancels = cancels;
+        this.staleMs = staleMs;
+    }
 
     /** A cancel/relock this DEVICE initiated, shared across the Activity and the background
      *  service (they hold separate FillTape instances but must agree on what was cancelled —
@@ -71,7 +82,7 @@ public final class FillTape {
         if (truncated) return;                           // never diff a failed scan
         if (chainBlock <= 0) return;                     // no chain height = age guards are blind
         long now = System.currentTimeMillis();
-        boolean stale = prevAtMs > 0 && now - prevAtMs > STALE_PREV_MS;
+        boolean stale = prevAtMs > 0 && now - prevAtMs > staleMs;
         if (prev == null || stale) {                     // first sighting / stale gap: seed silently
             prev = new java.util.HashMap<>(book);
             prevAtMs = now;
@@ -103,19 +114,59 @@ public final class FillTape {
         // confirmed and recorded.
         int needed = (bookEmptied || massVanish) ? MISS_GRACE_SUSPECT : MISS_GRACE;
 
+        // A MASS disappearance is never evidence of trading, however many times it repeats.
+        // A resyncing node answers `coins` with status:true and an empty array (it has no tip
+        // yet), which parses perfectly — `truncated` is false and the age/expiry guards don't
+        // fire — so raising the grace count alone only delays the damage: a couple of minutes
+        // of resync at a 30s poll and EVERY resting order is minted as a full fill,
+        // permanently, into the one source of price truth this app has.
+        //
+        // The discriminator is whether the scan returned ANY evidence. A book that still holds
+        // orders proves the node answered properly, so orders missing FROM it really did go
+        // (that case is recorded, just held to a higher confirmation bar). A book that came
+        // back completely empty proves nothing at all — and a resync empties it wholesale,
+        // where genuine trading empties it one or two orders at a time, which is how the last
+        // order in a thin market still gets recorded.
+        if (bookEmptied && vanished > MAX_VANISH_PER_SCAN) {
+            prev = mergePrev(book, prev);
+            prevAtMs = now;
+            return;
+        }
+
         // Index the new book by order IDENTITY, not orderId alone: orderId is maker-chosen
         // and an attacker can copy a victim's, which would let a stranger's coin masquerade
         // as the successor of the victim's order (mislabelling a real fill as a renewal, or
         // attributing someone else's partial to the victim at the wrong price/size).
-        Map<String, Order5> byIdentity = new java.util.HashMap<>();
-        for (Order5 o : book.values()) byIdentity.put(identity(o), o);
+        // AMBIGUOUS identities are unusable, not "last one wins": every component of the
+        // identity is readable off the victim's own resting order, so a stranger can mint a
+        // coin carrying all four. Silently preferring whichever the map iterated last let that
+        // copy decide whether a real fill was recorded (same locked = "renewal", so the fill
+        // vanishes) or fabricated (smaller locked = a partial at a size the stranger chose).
+        Map<String, List<Order5>> byIdentity = new java.util.HashMap<>();
+        for (Order5 o : book.values()) {
+            byIdentity.computeIfAbsent(identity(o), k -> new java.util.ArrayList<>()).add(o);
+        }
 
+        int emitted = 0;
         for (Map.Entry<String, Order5> e : prev.entrySet()) {
             String coinid = e.getKey();
             Order5 old = e.getValue();
             if (book.containsKey(coinid)) continue;      // still resting
 
-            Order5 successor = byIdentity.get(identity(old));
+            List<Order5> candidates = byIdentity.get(identity(old));
+            // more than one coin claiming to be this order's successor proves nothing about
+            // either — fall through to the miss-grace path rather than believing one
+            Order5 successor = (candidates != null && candidates.size() == 1)
+                    ? candidates.get(0) : null;
+            // A successor is the OUTPUT of spending the old coin, so it cannot be a coin that
+            // was already resting last scan. Without this, a stranger who copies the identity
+            // and simply sits on the book is treated as the remainder of the victim's order —
+            // fabricating a partial at a size the stranger chose, or masking a real fill as a
+            // renewal. The ambiguity check above only catches the case where both are visible.
+            if (successor != null
+                    && (prev.containsKey(successor.coinid) || successor.created < old.created)) {
+                successor = null;
+            }
             if (successor != null && successor.coinid.equals(coinid)) continue;
 
             if (successor != null) {
@@ -140,21 +191,35 @@ public final class FillTape {
             // fires "order filled" alerts for orders that simply aged out.
             if (old.age(chainBlock) >= VANISH_AGE) continue;
 
+            // HARD CAP, independent of the grace counters: a genuine block takes a couple of
+            // orders, so a wave of "fills" is a bad read however many times it repeats. The
+            // grace count only decides how long we wait — this decides how much a single
+            // ingest may ever assert. Coins over the cap keep their counters and are
+            // re-examined next scan, so a real wave is still recorded, just spread out.
+            if (emitted >= MAX_VANISH_PER_SCAN) {
+                missing.put(coinid, needed);        // stay ripe for the next scan
+                continue;
+            }
+            emitted++;
             // FULL fill (or a foreign cancel — indistinguishable; counted as fill)
             sink.onFill(coinid, old, old.minimaAmount(), old.price(), old.sell, false);
         }
 
         // counters exist only while a coin is absent — a reappeared coin's counter dies here
         missing.keySet().removeAll(book.keySet());
-        // next prev = the new book PLUS pending-missing coins (they must stay diffable until
-        // their grace matures — otherwise the counter orphans and the fill is never emitted)
+        prev = mergePrev(book, prev);
+        prevAtMs = now;
+    }
+
+    /** next prev = the new book PLUS pending-missing coins (they must stay diffable until
+     *  their grace matures — otherwise the counter orphans and the fill is never emitted). */
+    private Map<String, Order5> mergePrev(Map<String, Order5> book, Map<String, Order5> old) {
         Map<String, Order5> next = new java.util.HashMap<>(book);
         for (String id : missing.keySet()) {
-            Order5 gone = prev.get(id);
+            Order5 gone = old.get(id);
             if (gone != null) next.put(id, gone);
         }
-        prev = next;
-        prevAtMs = now;
+        return next;
     }
 
     /** Order identity for successor matching: the maker-chosen id is not trustworthy alone,

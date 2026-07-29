@@ -67,6 +67,18 @@ public final class DexProcessor {
     /** One pass over the live book. Re-reads persisted state first so the foreground and
      *  background instances coordinate through it (Limit v0.2.5 lesson). */
     public void process(Map<String, Order5> book, Set<String> myKeys, long chainBlock, Listener l) {
+        process(book, myKeys, null, null, chainBlock, l);
+    }
+
+    /**
+     * @param myAddrs   my wallet addresses — ownership needs the payout port too, or a stranger
+     *                  can plant an order carrying my pubkey and have me renew it forever with
+     *                  my own proof-of-work (starving my real orders, which then expire)
+     * @param skipIds   orderIds owned by another actor (the market maker relocks its own rungs;
+     *                  two owners relocking one coin double-spend it and waste the work)
+     */
+    public void process(Map<String, Order5> book, Set<String> myKeys, Set<String> myAddrs,
+                        Set<String> skipIds, long chainBlock, Listener l) {
         if (chainBlock <= 0 || book == null) return;
         load();
 
@@ -79,7 +91,8 @@ public final class DexProcessor {
 
         int renewed = 0, swept = 0;
         for (Order5 o : book.values()) {
-            if (!o.isMine(myKeys)) continue;
+            if (!o.isMine(myKeys, myAddrs)) continue;
+            if (skipIds != null && skipIds.contains(o.orderId)) continue;   // the maker's rung
 
             if (o.gtc && o.renewDue(chainBlock) && !o.expired(chainBlock)) {
                 if (inflight.containsKey(o.coinid)) continue;

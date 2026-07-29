@@ -95,6 +95,49 @@ public class TapeEvidenceTest {
         assertTrue(fills.isEmpty());
     }
 
+    @Test public void aResyncingNodeNeverBooksTheWholeBookAsTrades() {
+        // A node with no tip answers `coins` with status:true and an EMPTY array. That parses
+        // perfectly — truncated is false, the age and expiry guards don't fire — so before
+        // this guard a couple of minutes of resync minted every resting order as a full fill,
+        // permanently, into the app's only source of price truth.
+        Order5 a = sell("0xC1", "0xA1", "100", "5");
+        Order5 b = sell("0xC2", "0xA2", "100", "5");
+        Order5 c = sell("0xC3", "0xA3", "100", "5");
+        Order5 d = sell("0xC4", "0xA4", "100", "5");
+        tape.ingest(book(a, b, c, d), false, 100, sink);
+        for (int blk = 101; blk <= 130; blk++) tape.ingest(book(), false, blk, sink);
+        assertTrue("an empty book is not evidence of anything", fills.isEmpty());
+
+        // ...and when the node comes back, the orders are simply still there
+        tape.ingest(book(a, b, c, d), false, 131, sink);
+        assertTrue(fills.isEmpty());
+    }
+
+    @Test public void noSingleScanCanAssertAWaveOfFills() {
+        // however ripe the counters, one ingest may only ever assert MAX_VANISH_PER_SCAN
+        Order5 keep = sell("0xK1", "0xB1", "10", "0.5");
+        Order5 a = sell("0xC1", "0xA1", "100", "5");
+        Order5 b = sell("0xC2", "0xA2", "100", "5");
+        Order5 c = sell("0xC3", "0xA3", "100", "5");
+        tape.ingest(book(keep, a, b, c), false, 100, sink);
+        for (int blk = 101; blk <= 104; blk++) tape.ingest(book(keep), false, blk, sink);
+        assertTrue("at most two per ingest", fills.size() <= 2);
+        for (int blk = 105; blk <= 110; blk++) tape.ingest(book(keep), false, blk, sink);
+        assertEquals("but nothing real is lost — the rest follow", 3, fills.size());
+    }
+
+    @Test public void aStrangerCopyingMyOrderIdentityCannotRewriteMyFill() {
+        // every component of the identity is public on the book, so a stranger can mint a coin
+        // carrying all four. Ambiguity must disqualify the match, not pick a winner.
+        Order5 mine = sell("0xC1", "0xA1", "100", "5");
+        Order5 impostor = sell("0xFAKE", "0xA1", "40", "2");   // same orderId, smaller locked
+        tape.ingest(book(mine, impostor), false, 100, sink);
+        for (int blk = 101; blk <= 108; blk++) tape.ingest(book(impostor), false, blk, sink);
+        for (Object[] f : fills) {
+            assertTrue("no fabricated PARTIAL at the stranger's size", !((Boolean) f[3]));
+        }
+    }
+
     @Test public void aPersistentMassVanishIsEventuallyRecorded() {
         Order5 a = sell("0xC1", "0xA1", "100", "5");
         Order5 b = sell("0xC2", "0xA2", "100", "5");
