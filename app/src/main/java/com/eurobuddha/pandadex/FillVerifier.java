@@ -26,6 +26,10 @@ import java.math.BigDecimal;
  */
 public final class FillVerifier {
 
+    /** A compact evidence window keeps the native IPC reply far below its 256 KB cap while
+     *  covering the foreground and five-minute watcher scan gaps. */
+    static final int EVIDENCE_BLOCKS = 12;
+
     /** What the chain says happened to a vanished order coin. */
     public enum Verdict { CANCELLED, FILLED, UNKNOWN }
 
@@ -37,15 +41,16 @@ public final class FillVerifier {
 
     /**
      * @param o         the order as we last saw it resting
-     * @param seenBlock chain height when it disappeared — evidence older than the order itself
-     *                  is unrelated and must not decide the verdict
+     * @param seenBlock chain height when it disappeared. Only a recent output can be evidence;
+     *                  an older matching wallet coin is unrelated.
      */
     public void verify(Order5 o, long seenBlock, Cb cb) {
         if (o == null || o.wantAddr == null || o.wantAddr.isEmpty()) {
             cb.onVerdict(Verdict.UNKNOWN);
             return;
         }
-        node.cmd("coins simplestate:true address:" + o.wantAddr, new NodeApi.Cb() {
+        node.cmd("coins simplestate:true address:" + o.wantAddr
+                + " coinage:0 depth:" + EVIDENCE_BLOCKS, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 cb.onVerdict(adjudicate(json, o, seenBlock));
             }
@@ -64,10 +69,11 @@ public final class FillVerifier {
         for (int i = 0; i < arr.length(); i++) {
             JSONObject c = arr.optJSONObject(i);
             if (c == null) continue;
-            // The order coin itself predates its own disappearance, as does anything already
-            // sitting at this address beforehand. Only coins created no earlier than the order
-            // can be the product of spending it.
-            if (c.optLong("created", 0) < o.created) continue;
+            // A matching coin that predates the disappearance window is merely another wallet
+            // UTXO. The previous order-created cutoff let any later, unrelated same-value
+            // deposit suppress a genuine fill.
+            long earliest = Math.max(o.created, seenBlock - EVIDENCE_BLOCKS);
+            if (c.optLong("created", 0) < earliest) continue;
             String tok = c.optString("tokenid", "0x00");
             BigDecimal amt = Util.dec(c.optString("tokenamount",
                     c.optString("amount", "0")));

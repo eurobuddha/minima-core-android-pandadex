@@ -99,6 +99,15 @@ public class FillVerifierTest {
                 FillVerifier.adjudicate(reply, o, 105));
     }
 
+    @Test public void aMatchingCoinBeforeTheDisappearanceWindowCannotMaskAFill() {
+        // Same amount and token, but it arrived long before this order vanished. The old
+        // order-created cutoff called this a cancel and lost the genuine fill.
+        Order5 o = sellOrder();
+        JSONObject reply = coins(coin("300", "0x00", 105));
+        assertEquals(FillVerifier.Verdict.UNKNOWN,
+                FillVerifier.adjudicate(reply, o, 120));
+    }
+
     @Test public void paymentWinsWhenBothAreSomehowPresent() {
         // a maker who happens to hold a matching plain coin must not mask a real fill
         Order5 o = sellOrder();

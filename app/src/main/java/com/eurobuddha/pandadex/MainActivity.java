@@ -610,6 +610,9 @@ public class MainActivity extends AppCompatActivity {
         String orderId = txn.createOrder(buy, minima, price, gtc, minRem, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) {
                 busy = false;
+                row.submitMs = System.currentTimeMillis();
+                row.submitBlock = chainBlock;
+                pending.add(row);
                 toast("Order posted");
                 repo.refresh();
                 repaint();
@@ -620,13 +623,10 @@ public class MainActivity extends AppCompatActivity {
                 repaint();
             }
         });
-        // Only show the optimistic row once the send was actually accepted for posting, and
-        // carry the REAL order id so Pending.resolve can match it against the live book —
-        // an empty id can never match, leaving a good order stuck on "PLACING…" and then
-        // falsely warning "NOT CONFIRMED — check funds".
+        // Carry the REAL order id into the asynchronous acceptance callback. A local id only
+        // means the request is well-formed; it does not mean the node accepted the send.
         if (orderId == null) { busy = false; repaint(); return; }
         row.orderId = orderId;
-        pending.add(row);
         repaint();
     }
 
@@ -723,8 +723,10 @@ public class MainActivity extends AppCompatActivity {
         setStage("✓ " + msg + " — proceeds are confirming, see ASSETS");
         Notifier.alert(this, "Trade complete", msg + ". Funds are confirming and will show as "
                 + "available shortly.");
-        for (String coinid : done) {
-            db.addMyTrade(coinid, System.currentTimeMillis(), chainBlock, awaitingPrice,
+        // A sweep is ONE taker trade. Key it by its first consumed order coin for exactly-once
+        // storage; writing the aggregate once per leg multiplied personal volume and P&L.
+        if (!done.isEmpty()) {
+            db.addMyTrade(done.get(0), System.currentTimeMillis(), chainBlock, awaitingPrice,
                     awaitingMinima, awaitingBuy, false, "");
         }
         stats.invalidate();
@@ -845,24 +847,12 @@ public class MainActivity extends AppCompatActivity {
                 list.subList(idx, Math.min(idx + SweepPlanner.MAX_ORDERS, list.size())));
         final int next = idx + chunk.size();
         setStage("Cancelling " + next + " of " + list.size() + "…");
-        for (Order5 o : chunk) {
-            // an optimistic CANCEL row per order, so the Orders tab shows "CANCELLING —
-            // waiting for a block" instead of an unchanged book for minutes
-            Pending.Row row = new Pending.Row();
-            row.kind = Pending.CANCEL;
-            row.orderId = o.orderId;
-            row.coinid = o.coinid;
-            row.buy = !o.sell;
-            row.minima = o.minimaAmount();
-            row.price = o.price();
-            row.submitMs = System.currentTimeMillis();
-            row.submitBlock = chainBlock;
-            pending.add(row);
-            repo.tape().noteMyCancel(o.coinid);
-            db.forgetMyOrder(o.coinid);
-        }
         txn.cancelBatch(chunk, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) {
+                for (Order5 o : chunk) {
+                    pending.add(cancelPending(o));
+                    db.forgetMyOrder(o.coinid);
+                }
                 cancelSequentially(list, next, ok + chunk.size(), failed, onDone);
             }
             @Override public void onFailed(String message) {
@@ -870,6 +860,21 @@ public class MainActivity extends AppCompatActivity {
                 cancelSequentially(list, next, ok, failed + chunk.size(), onDone);
             }
         });
+    }
+
+    /** A pending cancel starts only after the node has accepted the transaction for posting.
+     *  Before that point it is not an on-chain action and must not outlive a failure callback. */
+    private Pending.Row cancelPending(Order5 o) {
+        Pending.Row row = new Pending.Row();
+        row.kind = Pending.CANCEL;
+        row.orderId = o.orderId;
+        row.coinid = o.coinid;
+        row.buy = !o.sell;
+        row.minima = o.minimaAmount();
+        row.price = o.price();
+        row.submitMs = System.currentTimeMillis();
+        row.submitBlock = chainBlock;
+        return row;
     }
 
     /** Maker events → the stage line AND optimistic Pending rows, so every rung's journey
@@ -902,7 +907,6 @@ public class MainActivity extends AppCompatActivity {
             row.submitMs = System.currentTimeMillis();
             row.submitBlock = chainBlock;
             pending.add(row);
-            repo.tape().noteMyCancel(o.coinid);   // persisted — the bg service's tape reads it too
             db.forgetMyOrder(o.coinid);
             repaint();
         }
@@ -1067,23 +1071,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void cancelOrder(Order5 o) {
-        Pending.Row row = new Pending.Row();
-        row.kind = Pending.CANCEL;
-        row.orderId = o.orderId;
-        row.coinid = o.coinid;
-        row.buy = !o.sell;
-        row.minima = o.minimaAmount();
-        row.price = o.price();
-        row.submitMs = System.currentTimeMillis();
-        row.submitBlock = chainBlock;
-        pending.add(row);
-        repo.tape().noteMyCancel(o.coinid);   // persisted — the bg service's tape reads it too
-        db.forgetMyOrder(o.coinid);
-        repaint();
         txn.cancel(o, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) {
+                pending.add(cancelPending(o));
+                db.forgetMyOrder(o.coinid);
                 toast("Cancel sent — the order leaves the book when a block confirms it");
                 repo.refresh();
+                repaint();
             }
             @Override public void onFailed(String message) { toast("Cancel failed: " + message); }
         });
@@ -1115,10 +1109,13 @@ public class MainActivity extends AppCompatActivity {
                     row.price = np;
                     row.submitMs = System.currentTimeMillis();
                     row.submitBlock = chainBlock;
-                    pending.add(row);
-                    repaint();
                     txn.relock(o, newWant, new DexTxn.Result() {
-                        @Override public void onPosted(String txpowid) { toast("Reprice posted"); repo.refresh(); }
+                        @Override public void onPosted(String txpowid) {
+                            pending.add(row);
+                            toast("Reprice posted");
+                            repo.refresh();
+                            repaint();
+                        }
                         @Override public void onFailed(String message) { toast("Reprice failed: " + message); }
                     });
                 })

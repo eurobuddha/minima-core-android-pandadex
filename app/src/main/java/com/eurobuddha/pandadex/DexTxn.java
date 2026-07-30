@@ -255,11 +255,10 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
     /** Cancel: owner-signed refund of the whole coin to the maker wallet (token-aware). */
     public void cancel(Order5 o, Result cb) {
-        // WE are spending this coin. Record it HERE, not in the callers: the fill tape reads a
-        // vanished coin as a trade, and a caller that forgets (the background maker's no-op
-        // listener did) writes a fill that never happened into the user's own trade history
-        // and into the tape that feeds the ticker, candles and P&L.
-        if (db != null) db.noteCancelled(o.coinid);
+        // Do NOT mark this as cancelled yet. `txnpost` only means the node accepted it to the
+        // mempool; if it loses a double-spend race to a real fill, a premature marker would
+        // permanently suppress that fill from the tape. The verifier records a cancellation
+        // only after the refund is actually visible on-chain.
         String txid = "cancel_" + System.nanoTime();
         List<String> steps = new ArrayList<>();
         steps.add("txncreate id:" + txid);
@@ -302,7 +301,6 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         steps.add("txncreate id:" + txid);
         // inputs first, in order — the outputs below must land at the SAME indices
         for (Order5 o : orders) {
-            if (db != null) db.noteCancelled(o.coinid);   // or the tape books these as fills
             steps.add("txninput id:" + txid + " coinid:" + o.coinid);
         }
         for (Order5 o : orders) {
@@ -326,10 +324,9 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     /** Atomic in-place re-lock: GTC renew (newWant null) or edit (newWant set). ONE txn —
      *  the coin never leaves the book (the V5 owner branch; proven in Phase B chunk D). */
     public void relock(Order5 o, BigDecimal newWant, Result cb) {
-        // WE are spending this coin (renew or reprice). Record it before posting: otherwise
-        // the fill tape sees the old coin vanish and — if the replacement isn't in the same
-        // scan — books a phantom trade at the order's own price and full size.
-        if (db != null) db.noteCancelled(o.coinid);
+        // A successful re-lock is recognised from its successor coin by FillTape. Do not add a
+        // cancellation marker here: a transaction accepted to the mempool may still lose to a
+        // taker fill, which must remain recordable.
         BigDecimal want = newWant == null ? o.wantAmt : newWant;
         String txid = "relock_" + System.nanoTime();
         List<String> steps = new ArrayList<>();
