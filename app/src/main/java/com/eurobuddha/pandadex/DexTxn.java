@@ -37,8 +37,13 @@ public class DexTxn {   // non-final so tests can stub the three order actions
      * EXPIRE: a silently-rejected transaction (consensus drops it without an error) would
      * otherwise pin its coins forever and the user would see "insufficient funds" on a funded
      * wallet until the process restarted. Value = the block the reservation was made at.
+     *
+     * STATIC on purpose: MainActivity and DexKeepAliveService each build their own DexTxn, so an
+     * instance map left the two engines free to reserve — and therefore spend and sign — the very same
+     * coins. The only thing separating them was a MainActivity.FOREGROUND boolean read once at the top
+     * of a pipeline that then runs for minutes.
      */
-    private final Map<String, Long> inflight = new ConcurrentHashMap<>();
+    private static final Map<String, Long> inflight = new ConcurrentHashMap<>();
     private static final long RESERVE_BLOCKS = 6;
     private volatile long chainBlock = 0;
 
@@ -114,16 +119,19 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 + "\"8\":\"" + minRem.toPlainString() + "\"}";
         String cmd = "send amount:" + lock.toPlainString() + " address:" + DexContract.ADDR_V5
                 + (buy ? " tokenid:" + DexContract.USDT_ID : "") + " state:" + state;
-        node.cmd(cmd, new NodeApi.Cb() {
+        // Behind the gate too: `send` signs internally, so it burns a key leaf exactly like a txnsign
+        // chain does and must not overlap with one.
+        SignGate.submit(gate -> node.cmd(cmd, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
+                gate.free();
                 if (json.optBoolean("status", false) || json.optBoolean("pending", false)) {
                     cb.onPosted(Util.extractTxpowid(json, orderId));
                 } else {
                     cb.onFailed(json.optString("error", "send failed"));
                 }
             }
-            @Override public void onError(String message) { cb.onFailed(message); }
-        });
+            @Override public void onError(String message) { gate.free(); cb.onFailed(message); }
+        }));
         // The caller needs this to match its optimistic row against the live book — without
         // it the row can never resolve and eventually cries "NOT CONFIRMED" on a good order.
         return orderId;
@@ -525,32 +533,44 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
     // ------------------------------------------------------------------ plumbing
 
-    /** txncheck gate → txnpost → txndelete. Reserves funding coins for the txn's lifetime. */
+    /**
+     * txncheck gate → txnpost → txndelete. Reserves funding coins for the txn's lifetime.
+     *
+     * Runs behind {@link SignGate}: this app must never have two signing chains in flight at once.
+     * Signing one key concurrently makes the node issue the SAME one-time leaf for two different
+     * transactions, which leaks that leaf's private key — confirmed on a live node, 7 of 64 keys.
+     */
     private void postGated(String txid, List<String> steps, List<String> fundIds, Result cb) {
-        for (String id : fundIds) inflight.put(id, chainBlock);
-        CmdChain.run(node, new ArrayList<>(steps), "txndelete id:" + txid, new CmdChain.Done() {
-            @Override public void ok(JSONObject last) {
-                node.cmd("txnexport id:" + txid, new NodeApi.Cb() {
-                    @Override public void onResult(JSONObject exported) {
-                        if (txnBytes(exported) > 60 * 1024) {
+        SignGate.submit(gate -> {
+            final Result gated = new Result() {
+                @Override public void onPosted(String txpowid) { gate.free(); cb.onPosted(txpowid); }
+                @Override public void onFailed(String message) { gate.free(); cb.onFailed(message); }
+            };
+            for (String id : fundIds) inflight.put(id, chainBlock);
+            CmdChain.run(node, new ArrayList<>(steps), "txndelete id:" + txid, new CmdChain.Done() {
+                @Override public void ok(JSONObject last) {
+                    node.cmd("txnexport id:" + txid, new NodeApi.Cb() {
+                        @Override public void onResult(JSONObject exported) {
+                            if (txnBytes(exported) > 60 * 1024) {
+                                inflight.keySet().removeAll(fundIds);
+                                node.cmd("txndelete id:" + txid, null);
+                                gated.onFailed("Transaction is too large — reduce pools/orders or consolidate wallet coins");
+                                return;
+                            }
+                            checkAndPost(txid, fundIds, gated);
+                        }
+                        @Override public void onError(String message) {
                             inflight.keySet().removeAll(fundIds);
                             node.cmd("txndelete id:" + txid, null);
-                            cb.onFailed("Transaction is too large — reduce pools/orders or consolidate wallet coins");
-                            return;
+                            gated.onFailed(message);
                         }
-                        checkAndPost(txid, fundIds, cb);
-                    }
-                    @Override public void onError(String message) {
-                        inflight.keySet().removeAll(fundIds);
-                        node.cmd("txndelete id:" + txid, null);
-                        cb.onFailed(message);
-                    }
-                });
-            }
-            @Override public void fail(String message) {
-                inflight.keySet().removeAll(fundIds);
-                cb.onFailed(message);
-            }
+                    });
+                }
+                @Override public void fail(String message) {
+                    inflight.keySet().removeAll(fundIds);
+                    gated.onFailed(message);
+                }
+            });
         });
     }
 
