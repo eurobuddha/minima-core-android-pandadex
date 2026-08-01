@@ -364,3 +364,223 @@ skipped 0.1.3, so no purge ran.** That correction was right and led to the real 
   was never visible. Now a real label, the unit, and an explanation.
 
 No covenant change — the book address is unmoved. 70 JVM tests green.
+
+
+# v0.3.0 composite PandaPools liquidity — private-chain proof (2026-07-31)
+
+PandaDEX now includes a PandaPools-compatible pure-Java core and a best-price composite route
+across the V5 order book and PandaPools reserve pairs. This does not change either frozen
+covenant: the transaction consumes pool reserve pairs and order coins together, then recreates
+the correct reserve/order outputs at the covenant-pinned indices.
+
+Implementation surfaces added:
+
+- PandaPools core vendored into PandaDEX: `Pool`, `PoolCovenant`, `VirtualCurve`, `PoolRouter`.
+- Bounded discovery/cache: `PoolBook` and `PoolLiquidityRepository`, scanning the
+  `PANDAPOOLS` sentinel with `depth:1500`, re-deriving every pool script with `runscript`,
+  requiring `parseok`, deriving the address locally, and retaining only funded MINIMA/mxUSDT
+  reserve pairs.
+- Display depth: `SyntheticDepth`, sampled as labelled `POOL` liquidity alongside book depth.
+- Routing: `CompositeRouter.Plan`, deterministic 128-slice best-price blending, marginal limit
+  enforcement, max five order coins, V5 expiry/min-remainder constraints, pool/order capacity
+  budget `2 * poolCount + orderCount <= 12`, and unfilled balance returned for the normal
+  resting-limit path.
+- Atomic transaction builder: `DexTxn.fillComposite`, with pool input pairs first, full order
+  inputs next, the optional final partial order followed immediately by its remainder, wallet
+  funding last, pool scripts registered `trackall:false`, owner/pool addresses excluded from
+  funding, `txnbasics` and `txncheck` gating, and a 60 KiB `txnexport` size guard before post.
+- Lifecycle/UI: combined execution preview, source breakdown, source-coin confirmation before
+  personal-history recording or queued rest placement, and public tape/candles still based on
+  real order fills rather than synthetic pool rows.
+
+Private-chain proof harness: `contract/composite.py`, reusing the PandaDEX V5 harness plus the
+PandaPools 0.5% covenant/quote model. The proof runs on the isolated solo node, not the live
+16005 node.
+
+Lifecycle proofs that landed:
+
+| case | evidence |
+|---|---|
+| pool-only buy | pool reserve pair consumed first; recreated reserves match the exact Decimal quote; taker receives MINIMA |
+| mixed buy | pool pair first, sell order partial last, maker token payment index-shifted by pool outputs, order remainder recreated |
+| mixed sell | pool pair first, buy order partial last, maker MINIMA payment index-shifted by pool outputs, order remainder recreated |
+
+Adversarial cases rejected or failed before moving watched coins:
+
+| case | evidence |
+|---|---|
+| wrong pool parity | `txncheck` gate false |
+| shifted order output | `txncheck` gate false |
+| maker underpayment | `txncheck` gate false |
+| invalid partial remainder state | `txncheck` gate false |
+| stale pool race | the reserve had moved, composite input failed, watched order stayed live |
+| stale order race | the order had moved, composite input failed, watched reserves stayed live |
+
+Current local verification:
+
+- `python3 contract/composite.py valid` — `Composite liquidity private-chain proofs: PASSED`.
+- `python3 contract/composite.py adversary` — `Composite liquidity private-chain proofs: PASSED`.
+- `python3 -m py_compile contract/composite.py`.
+- `python3 -m py_compile contract/composite_live_preflight.py`.
+- `./gradlew test` — JVM suite green with composite router, pool core/discovery/cache, synthetic
+  depth, transaction-layout, funding-exclusion, and funding-input-cap tests.
+- `./gradlew assembleRelease` — release APK builds.
+- `git diff --check`.
+
+Remaining release gate: a live dust interoperability test, documented in
+`contract/COMPOSITE_LIVE_INTEROP.md`. The read-only helper
+`contract/composite_live_preflight.py` can capture bounded sentinel discovery evidence from
+the live node, but it does not post or complete the dust gate. Completion requires PandaDEX to
+discover a pool created by PandaPools, execute a pool-only mainnet dust trade, execute a mixed
+order+pool mainnet dust trade, and confirm in PandaPools that the recreated reserves are
+visible at the same pool address. Until that real-funds test is performed, composite liquidity
+is privately proven but not live-interoperability complete.
+
+Read-only live preflight attempt on 2026-07-31:
+
+- `python3 contract/composite_live_preflight.py` reached `http://127.0.0.1:16005/`.
+- The node rejected `block` with `NO Blocks yet..`, so bounded sentinel discovery could not
+  be collected.
+- No transaction construction, signing, posting, `send`, `newscript`, or `coinnotify` command
+  was run.
+
+Router regression found during local coverage expansion:
+
+- The first sliced composite order router could accumulate an order up to the maker's
+  min-remainder boundary and then stop with an invalid below-floor partial, because each
+  decision saw only the next 1/128 slice. Fixed by giving order selection the full remaining
+  requested amount: when the request covers the current order's remaining liquidity, the router
+  full-fills that order, matching `SweepPlanner`'s proven V5 behavior.
+- Added direct composite-router tests for near-expiry order exclusion, max-five order cap, and
+  the single final partial invariant.
+- Pool discovery now treats owner payout address as part of the canonical beacon identity. Two
+  users adding MINIMA/mxUSDT liquidity can therefore remain distinct PandaPools positions
+  instead of being collapsed just because owner key, token, and KMIN match.
+
+Second read-only live preflight attempt on 2026-07-31:
+
+- `python3 contract/composite_live_preflight.py` could not connect to
+  `http://127.0.0.1:16005/` (`Connection refused`).
+- No transaction construction, signing, posting, `send`, `newscript`, or `coinnotify` command
+  was run.
+
+Third read-only live preflight attempt on 2026-07-31:
+
+- `python3 contract/composite_live_preflight.py status` reached `http://127.0.0.1:16005/` at
+  block `2217564` (`0x0000BBF66A7919CAB96EFC633AB60662EDF6C470FBEFAB5A3D0957CCFE7AB14C`).
+- The wallet reported MINIMA `sendable:0`, `confirmed:0`, `unconfirmed:0`, and no mxUSDT
+  balance entries.
+- `python3 contract/composite_live_preflight.py` ran the bounded sentinel command
+  `coins simplestate:true order:desc depth:1500 address:0x50414E4441504F4F4C53`.
+- The sentinel scan returned `0` coins, yielding `0` candidate mxUSDT pool beacons and
+  `0` funded pools.
+- Result: `PREFLIGHT_INCOMPLETE - no funded PandaPools MINIMA/mxUSDT pool visible in the
+  bounded scan`.
+- No transaction construction, signing, posting, `send`, `newscript`, or `coinnotify` command
+  was run.
+
+
+# v0.3.1 pool-only responsiveness fix (2026-07-31)
+
+Live Z Fold inspection of v0.3.0 showed `com.eurobuddha.pandadex` pegging one CPU core while
+Minima Core was much lower, so the sluggishness was app-side render/discovery churn.
+
+Fixes:
+
+- Synthetic PandaPools depth now samples marginal executable boundaries rather than cumulative
+  effective-price bands, so pool-only rows do not overstate how much can clear at a displayed
+  limit.
+- Pool depth calculation runs on a single background worker and `TradeView` renders the last
+  completed snapshot instead of doing BigDecimal pool routing on the UI thread.
+- Pool-only rows display `POOL <amount>` rather than `BOOK 0` plus pool size.
+- `NEWBALANCE` no longer triggers bounded PandaPools sentinel/reserve discovery; pool scans run
+  on launch, block ticks, and explicit post/recovery refreshes.
+- `PoolLiquidityRepository` now has a production min-interval throttle while preserving
+  single-flight queued refresh semantics.
+
+Verification:
+
+- Focused JVM regressions:
+  `./gradlew testDebugUnitTest --tests com.eurobuddha.pandadex.SyntheticDepthTest --tests com.eurobuddha.pandadex.PoolLiquidityRepositoryTest`.
+- Full JVM suite: `./gradlew test`.
+- Release build: `./gradlew assembleRelease`.
+- Static/utility checks: `git diff --check` and
+  `python3 -m py_compile contract/composite.py contract/composite_live_preflight.py`.
+- Release APK copied to `releases/pandadex-0.3.1.apk`
+  (`sha256 4b99e9417f4cbe64bc5475c0559168dd6f37066ca00419c40811c27dfd1f531d`).
+- Installed on connected Z Fold `SM_F966B` / `RFCY71KW3LX`; package reports
+  `versionCode=301`, `versionName=0.3.1`.
+- Post-install thread sample for PandaDEX process `24696` showed `pandadex-depth` idle and no
+  runaway worker; the main process thread sampled around `3.0-3.5%` instead of the v0.3.0
+  `100%` app CPU sample.
+
+
+# v0.3.2 ladder amount display cut (2026-07-31)
+
+Ladder amount labels now display exactly two decimal places and cut extra decimals with
+`RoundingMode.DOWN`, never half-up rounding. Round amounts therefore keep trailing zeros
+such as `5.00`, so the amount column lines up. This applies to the visible order-book/pool
+amount column, including split labels such as `BOOK <amount>` and `POOL <amount>`.
+
+Verification:
+
+- Focused JVM regressions:
+  `./gradlew testDebugUnitTest --tests com.eurobuddha.pandadex.PriceDisplayTest --tests com.eurobuddha.pandadex.SyntheticDepthTest`.
+- Full JVM suite: `./gradlew test`.
+- Release build: `./gradlew assembleRelease`.
+- Static check: `git diff --check`.
+- Release APK copied to `releases/pandadex-0.3.2.apk`
+  (`sha256 c3d95e2b28a3b6a9fd1d730627176c11ec3ebcd27aefe87f8c1a1511a9118c31`).
+- Install on Z Fold `RFCY71KW3LX` was attempted but ADB returned `device not found`; current
+  `adb devices -l` listed only `SM_S918B` / `R3CW30FN1FM`.
+
+
+# v0.3.3 finest ladder tick (2026-07-31)
+
+The ladder grouping selector no longer exposes `exact`. The finest/default resolution is now
+`0.00001`, followed by `0.0001`, `0.001`, and `0.01`. Ask levels still round up and bid
+levels still round down so grouping never flatters executable prices.
+
+Verification:
+
+- Focused JVM regressions:
+  `./gradlew testDebugUnitTest --tests com.eurobuddha.pandadex.PriceDisplayTest --tests com.eurobuddha.pandadex.SyntheticDepthTest`.
+- Full JVM suite: `./gradlew test`.
+- Release build: `./gradlew assembleRelease`.
+- Static check: `git diff --check`.
+- Release APK copied to `releases/pandadex-0.3.3.apk`
+  (`sha256 e5fbb602c6b69889c4adfcda28f887fc75e77775d95bac4517692ef762e4d57e`).
+- Installed and launched on Z Fold `SM_F966B` / `RFCY71KW3LX`; package reports
+  `versionCode=303`, `versionName=0.3.3`.
+
+
+# v0.3.4 composite review fixes (2026-07-31)
+
+Deep APK review after pool-only live testing found and fixed these issues:
+
+- Exact-output pool routing can no longer silently underfill when a requested buy is at or
+  beyond aggregate reserve capacity; exact MINIMA-out routes now fail unless the requested
+  MINIMA can actually be delivered.
+- Composite capacity trimming now drops the smallest MINIMA-contributing pool, including on
+  sell-side routes where mxUSDT output is not the right contribution metric.
+- Synthetic pool ladder rows now fall back to `0.00001` instead of the removed exact
+  `0.000001` resolution, and each displayed row is capped by the same composite planner used
+  by submission so displayed pool depth does not exceed executable depth for fragmented pools.
+- Pool reserve discovery uses `coins simplestate:true depth:1500 address:<pool>` to cut IPC
+  payload and parsing load during refreshes.
+- Taker-fill and queued-rest confirmation now does a direct `coins simplestate:true
+  coinid:<source>` check before recording success or placing the resting balance, avoiding
+  both stale-cache delays and phantom success if pool discovery drops a live beacon.
+- Composite confirmation now includes a price-impact line when pool liquidity contributes.
+
+Verification:
+
+- Full JVM suite: `./gradlew test`.
+- Release lint: `./gradlew lintRelease`.
+- Release build: `./gradlew assembleRelease`.
+- Static check: `git diff --check`.
+- Release APK copied to `releases/pandadex-0.3.4.apk`
+  (`sha256 6c7c929c0977cc571cc399413237b0a74255e574ff858ba967e9a85c6af6e7ee`).
+- Build metadata reports `versionCode=304`, `versionName=0.3.4`.
+- ADB install was not attempted: `adb devices -l` listed only `SM_S918B` /
+  `R3CW30FN1FM`; the expected Z Fold `SM_F966B` / `RFCY71KW3LX` was not visible.

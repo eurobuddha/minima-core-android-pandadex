@@ -20,9 +20,9 @@ import java.math.BigDecimal;
  *   CANCEL  — {@link DexTxn#cancel} refunds exactly {@code locked} of {@code lockedTok}
  *   FILL    — the taker pays {@code wantAmt} of {@code wantTok}, the OTHER token
  *
- * So one bounded `coins address:` query settles it. Only POSITIVE proof of a refund suppresses
- * anything: if the evidence is absent or the query fails we still record the fill, because
- * losing a real trade is the worse error — a missing trade is invisible, a phantom one is not.
+ * So one bounded `coins address:` query settles it. Only positive payment evidence records a
+ * full fill; positive refund evidence records a cancel. UNKNOWN is deliberately left out of the
+ * normal tape so ambiguous rows do not look like real trades.
  */
 public final class FillVerifier {
 

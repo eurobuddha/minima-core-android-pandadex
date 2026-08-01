@@ -12,7 +12,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Map;
 
-/** ASSETS tab: balances split into free / locked-in-orders, portfolio value at book mid,
+/** ASSETS tab: node wallet balances using sendable / confirmed / locked / unconfirmed,
  *  receive address, and the mxUSDT bridge pointer. */
 @SuppressLint("ViewConstructor")
 public final class AssetsTab extends LinearLayout {
@@ -63,26 +63,28 @@ public final class AssetsTab extends LinearLayout {
             else lockedUsdt = lockedUsdt.add(o.locked);
         }
 
-        BigDecimal mid = act.bookMid();
         BigDecimal freeM = act.minimaSendable(), freeU = act.usdtSendable();
-        BigDecimal totalM = freeM.add(lockedMinima).add(act.minimaPending());
-        BigDecimal totalU = freeU.add(lockedUsdt).add(act.usdtPending());
+        BigDecimal mid = act.bookMid();
 
         LinearLayout head = card();
-        head.addView(t("PORTFOLIO", Design.DIM(), 10f, Design.sansBold()));
+        head.addView(t("AVAILABLE TO TRADE", Design.DIM(), 10f, Design.sansBold()));
         if (mid != null && mid.signum() > 0) {
-            BigDecimal value = totalU.add(totalM.multiply(mid, PriceMath.MC));
+            BigDecimal value = freeU.add(freeM.multiply(mid, PriceMath.MC));
             head.addView(t("≈ " + PriceMath.fmt(value.setScale(4, RoundingMode.HALF_UP)) + " mxUSDT",
                     Design.TEXT(), 22f, Design.monoBold()));
-            head.addView(t("valued at the current book mid " + PriceMath.fmtPrice(mid),
+            head.addView(t("sendable funds only, valued at book mid " + PriceMath.fmtPrice(mid),
                     Design.DIM2(), 9.5f, Design.sans()));
         } else {
             head.addView(t("—", Design.TEXT(), 22f, Design.monoBold()));
             head.addView(t("no book mid yet", Design.DIM2(), 9.5f, Design.sans()));
         }
 
-        assetCard("MINIMA", freeM, lockedMinima, totalM, act.minimaPending());
-        assetCard("mxUSDT", freeU, lockedUsdt, totalU, act.usdtPending());
+        assetCard("MINIMA · available to trade", freeM, act.minimaConfirmed(),
+                act.minimaLockedNode(), act.minimaUnconfirmed(), act.minimaCoins(),
+                act.minimaBalanceAtMs(), lockedMinima);
+        assetCard("mxUSDT · available to trade", freeU, act.usdtConfirmed(),
+                act.usdtLockedNode(), act.usdtUnconfirmed(), act.usdtCoins(),
+                act.usdtBalanceAtMs(), lockedUsdt);
 
         LinearLayout recv = card();
         recv.addView(t("RECEIVE", Design.DIM(), 10f, Design.sansBold()));
@@ -103,40 +105,33 @@ public final class AssetsTab extends LinearLayout {
         LinearLayout bridge = card();
         bridge.addView(t("NEED mxUSDT?", Design.DIM(), 10f, Design.sansBold()));
         bridge.addView(t("mxUSDT is the wrapped-USDT token on Minima. Bridge in at mxusd.global, "
-                + "or swap ERC20 USDT ↔ mxUSDT with usdtSwap.", Design.DIM2(), 10f, Design.sans()));
+                + "or swap ERC20 USDT ↔ mxUSDT with AtomiX.", Design.DIM2(), 10f, Design.sans()));
     }
 
-    private void assetCard(String symbol, BigDecimal free, BigDecimal locked, BigDecimal total,
-                           BigDecimal confirming) {
+    private void assetCard(String title, BigDecimal sendable, BigDecimal confirmed,
+                           BigDecimal locked, BigDecimal unconfirmed, int coins,
+                           long updatedAtMs, BigDecimal inDexOrders) {
         LinearLayout c = card();
-        LinearLayout top = new LinearLayout(getContext());
-        top.setGravity(Gravity.CENTER_VERTICAL);
-        top.addView(t(symbol, Design.TEXT(), 14f, Design.sansBold()),
-                new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        TextView tot = t(PriceMath.fmt(total), Design.TEXT(), 15f, Design.monoBold());
-        top.addView(tot);
-        c.addView(top);
-
-        LinearLayout split = new LinearLayout(getContext());
-        split.setPadding(0, Design.dp(getContext(), 6), 0, 0);
-        col(split, "Available", PriceMath.fmt(free), Design.IN());
-        col(split, "In orders", PriceMath.fmt(locked), Design.ACCENT());
-        // Proceeds from a trade land here first. Without this the money looks missing between
-        // "sold" and the coins maturing, which is exactly when a user starts to worry.
-        col(split, "Confirming", PriceMath.fmt(confirming),
-                confirming.signum() > 0 ? Design.ACCENT() : Design.DIM2());
-        c.addView(split);
-        if (confirming.signum() > 0) {
-            c.addView(t("Funds from a recent trade are still being confirmed by your node — "
-                    + "they'll become available in a block or two.", Design.DIM2(), 9.5f, Design.sans()));
+        c.addView(t(title, Design.DIM(), 10f, Design.sansBold()));
+        c.addView(t(PriceMath.fmt(sendable), Design.IN(), 18f, Design.monoBold()));
+        c.addView(t("confirmed " + PriceMath.fmt(confirmed)
+                + "  ·  locked ≈ " + PriceMath.fmt(locked)
+                + "  ·  unconfirmed " + PriceMath.fmt(unconfirmed)
+                + "  ·  " + coins + " coins"
+                + "  ·  updated " + age(updatedAtMs),
+                Design.DIM2(), 9.5f, Design.mono()));
+        if (inDexOrders.signum() > 0) {
+            c.addView(t("in PandaDEX orders " + PriceMath.fmt(inDexOrders),
+                    Design.ACCENT(), 9.5f, Design.mono()));
         }
     }
 
-    private void col(LinearLayout row, String label, String value, int color) {
-        LinearLayout c = new LinearLayout(getContext());
-        c.setOrientation(VERTICAL);
-        c.addView(t(label, Design.DIM2(), 9f, Design.sans()));
-        c.addView(t(value, color, 11.5f, Design.mono()));
-        row.addView(c, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+    private static String age(long updatedAtMs) {
+        if (updatedAtMs <= 0) return "never";
+        long sec = Math.max(0, (System.currentTimeMillis() - updatedAtMs) / 1000);
+        if (sec < 60) return sec + "s ago";
+        long min = sec / 60;
+        if (min < 60) return min + "m ago";
+        return (min / 60) + "h ago";
     }
 }

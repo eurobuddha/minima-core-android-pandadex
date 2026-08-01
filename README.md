@@ -56,6 +56,9 @@ partials, buy-side token-leg partials, atomic edit and renew, expiry sweeps, and
 multi-order sweep — plus 9 adversarial attacks that were all rejected with the order coin
 left untouched.
 
+The PandaPools composite-liquidity proof harness lives in `contract/composite.py`; the remaining
+real-funds dust interop checklist is `contract/COMPOSITE_LIVE_INTEROP.md`.
+
 ## Requirements
 
 - Minima Core (the standard, upstream node app) installed and running on the same device.
@@ -73,11 +76,14 @@ outright rather than returning an error.
 
 ## Status
 
-Built and proven on a private chain; **not yet run on a device and not yet tested with real
-funds**. Treat it as experimental until it has been through a live dust test.
+The V5 order book has settled real mainnet trades between two devices. The composite
+PandaDEX + PandaPools path is implemented and privately proven, including pool-only fills,
+mixed fills in both directions, layout invariants, and stale/race rejection cases. It remains
+behind the final real-funds composite dust gate until PandaDEX executes pool-only and mixed
+trades against a PandaPools-created mainnet pool and PandaPools confirms the recreated
+reserves.
 
-It has been through one adversarial fund-safety review, which found two critical issues (an
-expiry that sat beyond the node's visibility horizon, and a script registration that made
-every stranger's order read as your own). Both are fixed and the full proof suite was re-run;
-`contract/RESULTS.md` documents what was wrong, why the original proofs missed it, and what
-changed.
+The app has been through adversarial fund-safety reviews that found and fixed critical issues,
+including an expiry beyond the node's visibility horizon, `trackall:true` ownership pollution,
+and phantom-fill recording on partial scans. `contract/RESULTS.md` documents the proofs,
+mainnet sessions, and remaining composite-live gate.

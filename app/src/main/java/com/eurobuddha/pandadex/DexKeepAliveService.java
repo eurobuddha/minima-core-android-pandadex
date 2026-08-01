@@ -164,6 +164,7 @@ public class DexKeepAliveService extends Service {
         if (!partial) {
             verifier.verify(order, chainBlock, v -> {
                 if (v == FillVerifier.Verdict.CANCELLED) { db.noteCancelled(spentCoin); return; }
+                if (v == FillVerifier.Verdict.UNKNOWN) return;
                 recordFill(spentCoin, order, size, price, takerBuy, false);
             });
             return;
@@ -178,7 +179,9 @@ public class DexKeepAliveService extends Service {
                 takerBuy, partial, mine);
         if (isNew && mine) {
             db.addMyTrade(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
-                    !order.sell, true, order.orderId);
+                    !order.sell, true, order.orderId, "", "BOOK", spentCoin, "",
+                    "LOCAL_VERIFIED", partial ? "Partial fill proven by successor order"
+                            : "Full fill verified by payout evidence", chainBlock);
             Notifier.fill(getApplicationContext(), order.sell, size, price, partial);
         }
     }

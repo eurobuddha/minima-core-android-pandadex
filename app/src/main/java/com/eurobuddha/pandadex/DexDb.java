@@ -24,7 +24,7 @@ import java.util.List;
 public final class DexDb extends SQLiteOpenHelper {
 
     private static final String DB = "pandadex.db";
-    private static final int V = 3;
+    private static final int V = 4;
     private static final int TAPE_CAP = 8000;
 
     public DexDb(Context ctx) {
@@ -36,7 +36,9 @@ public final class DexDb extends SQLiteOpenHelper {
                 + " price TEXT, size TEXT, buy INTEGER, partial INTEGER, mine INTEGER)");
         db.execSQL("CREATE INDEX tape_time ON tape(timems)");
         db.execSQL("CREATE TABLE mytrade (spentcoin TEXT PRIMARY KEY, timems INTEGER, block INTEGER,"
-                + " price TEXT, size TEXT, buy INTEGER, maker INTEGER, orderid TEXT)");
+                + " price TEXT, size TEXT, buy INTEGER, maker INTEGER, orderid TEXT,"
+                + " txpowid TEXT, source_kind TEXT, source_coinids TEXT, proceeds_coinid TEXT,"
+                + " verification_status TEXT, verification_note TEXT, verified_block INTEGER)");
         db.execSQL("CREATE TABLE book (coinid TEXT PRIMARY KEY, json TEXT)");
         db.execSQL("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)");
         db.execSQL("CREATE TABLE cancelled (coinid TEXT PRIMARY KEY, timems INTEGER)");
@@ -74,6 +76,22 @@ public final class DexDb extends SQLiteOpenHelper {
             db.execSQL("DELETE FROM tape");
             db.execSQL("DELETE FROM mytrade");
         }
+        if (oldV < 4) addMyTradeEvidenceColumns(db);
+    }
+
+    private static void addMyTradeEvidenceColumns(SQLiteDatabase db) {
+        addColumn(db, "mytrade", "txpowid TEXT");
+        addColumn(db, "mytrade", "source_kind TEXT");
+        addColumn(db, "mytrade", "source_coinids TEXT");
+        addColumn(db, "mytrade", "proceeds_coinid TEXT");
+        addColumn(db, "mytrade", "verification_status TEXT");
+        addColumn(db, "mytrade", "verification_note TEXT");
+        addColumn(db, "mytrade", "verified_block INTEGER");
+    }
+
+    private static void addColumn(SQLiteDatabase db, String table, String spec) {
+        try { db.execSQL("ALTER TABLE " + table + " ADD COLUMN " + spec); }
+        catch (Exception ignore) {}
     }
 
     // ---- cancels (shared by the Activity's and the service's FillTape) ----
@@ -220,6 +238,17 @@ public final class DexDb extends SQLiteOpenHelper {
 
     public boolean addMyTrade(String spentCoin, long timeMs, long block, BigDecimal price,
                               BigDecimal size, boolean buy, boolean maker, String orderId) {
+        return addMyTrade(spentCoin, timeMs, block, price, size, buy, maker, orderId,
+                "", maker ? "BOOK" : "", spentCoin, "", maker ? "LOCAL_VERIFIED" : "LOCAL_VERIFIED",
+                maker ? "Observed from owned order fill evidence" : "Observed from taker fill evidence",
+                block);
+    }
+
+    public boolean addMyTrade(String spentCoin, long timeMs, long block, BigDecimal price,
+                              BigDecimal size, boolean buy, boolean maker, String orderId,
+                              String txpowid, String sourceKind, String sourceCoinids,
+                              String proceedsCoinid, String verificationStatus,
+                              String verificationNote, long verifiedBlock) {
         ContentValues cv = new ContentValues();
         cv.put("spentcoin", spentCoin);
         cv.put("timems", timeMs);
@@ -229,6 +258,13 @@ public final class DexDb extends SQLiteOpenHelper {
         cv.put("buy", buy ? 1 : 0);
         cv.put("maker", maker ? 1 : 0);
         cv.put("orderid", orderId);
+        cv.put("txpowid", txpowid == null ? "" : txpowid);
+        cv.put("source_kind", sourceKind == null ? "" : sourceKind);
+        cv.put("source_coinids", sourceCoinids == null ? "" : sourceCoinids);
+        cv.put("proceeds_coinid", proceedsCoinid == null ? "" : proceedsCoinid);
+        cv.put("verification_status", verificationStatus == null ? "" : verificationStatus);
+        cv.put("verification_note", verificationNote == null ? "" : verificationNote);
+        cv.put("verified_block", verifiedBlock);
         return getWritableDatabase().insertWithOnConflict("mytrade", null, cv, SQLiteDatabase.CONFLICT_IGNORE) != -1;
     }
 
@@ -243,6 +279,41 @@ public final class DexDb extends SQLiteOpenHelper {
             }
         }
         return out;
+    }
+
+    /** Newest-first personal trade rows with evidence fields for the TRADES tab. */
+    public List<TradeExport.TradeRow> myTradeRows(int limit) {
+        List<TradeExport.TradeRow> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT spentcoin, timems, block, price, size, buy, maker, orderid,"
+                        + " txpowid, source_kind, source_coinids, proceeds_coinid,"
+                        + " verification_status, verification_note, verified_block"
+                        + " FROM mytrade ORDER BY timems DESC LIMIT " + limit, null)) {
+            while (c.moveToNext()) out.add(tradeRow(c));
+        }
+        return out;
+    }
+
+    /** Chronological confirmed personal fills for accounting export. */
+    public List<TradeExport.TradeRow> myTradesAll(long fromMs, long toMs) {
+        List<TradeExport.TradeRow> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT spentcoin, timems, block, price, size, buy, maker, orderid,"
+                        + " txpowid, source_kind, source_coinids, proceeds_coinid,"
+                        + " verification_status, verification_note, verified_block"
+                        + " FROM mytrade WHERE timems>=? AND timems<=? ORDER BY timems ASC",
+                new String[]{String.valueOf(fromMs), String.valueOf(toMs)})) {
+            while (c.moveToNext()) out.add(tradeRow(c));
+        }
+        return out;
+    }
+
+    private static TradeExport.TradeRow tradeRow(Cursor c) {
+        return new TradeExport.TradeRow(c.getString(0), c.getLong(1), c.getLong(2),
+                new BigDecimal(c.getString(3)), new BigDecimal(c.getString(4)),
+                c.getInt(5) == 1, c.getInt(6) == 1, c.getString(7),
+                c.getString(8), c.getString(9), c.getString(10), c.getString(11),
+                c.getString(12), c.getString(13), c.getLong(14));
     }
 
     // ---- book cache (instant first paint) ----

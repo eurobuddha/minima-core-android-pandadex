@@ -201,6 +201,16 @@ public final class OrdersTab extends LinearLayout {
                             + PriceMath.fmt(pnl.setScale(6, java.math.RoundingMode.HALF_UP)) + " mxUSDT",
                     pnl.signum() >= 0 ? Design.IN() : Design.RED(), 10f));
         }
+        TextView export = line("EXPORT RECONCILIATION ZIP", Design.ACCENT(), 10.5f);
+        export.setGravity(Gravity.CENTER);
+        export.setPadding(0, Design.dp(getContext(), 9), 0, Design.dp(getContext(), 9));
+        export.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
+        export.setOnClickListener(v -> act.exportTradeReconciliation());
+        Design.pressable(export);
+        LinearLayout.LayoutParams el = new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+        el.topMargin = Design.dp(getContext(), 8);
+        summary.addView(export, el);
         LayoutParams sl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
         sl.bottomMargin = Design.dp(getContext(), 10);
         body.addView(summary, sl);

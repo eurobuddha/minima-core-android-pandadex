@@ -50,20 +50,22 @@ public class PriceDisplayTest {
 
     // ---------------- D1: distinct prices must never merge ----------------
 
-    @Test public void distinctPricesGetDistinctLevelsByDefault() {
+    @Test public void distinctPricesGetDistinctLevelsAtFinestTick() {
         // the exact case from the device test
         Order5 a = sellAt("0xC1", "0.0515", "300", "0xAA");
         Order5 b = sellAt("0xC2", "0.0520", "300", "0xAA");
-        BigDecimal la = TradeView.levelPrice(a, null);
-        BigDecimal lb = TradeView.levelPrice(b, null);
+        BigDecimal finest = new BigDecimal("0.00001");
+        BigDecimal la = TradeView.levelPrice(a, finest);
+        BigDecimal lb = TradeView.levelPrice(b, finest);
         assertNotEquals("0.0515 and 0.0520 must be separate ladder rows", la, lb);
         assertNotEquals(PriceMath.fmtPrice(la), PriceMath.fmtPrice(lb));
     }
 
-    @Test public void veryClosePricesStillSeparateAtFiveDecimals() {
+    @Test public void veryClosePricesStillSeparateAtFinestTick() {
         Order5 a = sellAt("0xC1", "0.05150", "100", "0xAA");
         Order5 b = sellAt("0xC2", "0.05151", "100", "0xAA");
-        assertNotEquals(TradeView.levelPrice(a, null), TradeView.levelPrice(b, null));
+        BigDecimal finest = new BigDecimal("0.00001");
+        assertNotEquals(TradeView.levelPrice(a, finest), TradeView.levelPrice(b, finest));
     }
 
     @Test public void coarseTickStillGroupsWhenExplicitlyChosen() {
@@ -118,6 +120,18 @@ public class PriceDisplayTest {
     @Test public void amountsStillStripTrailingZeros() {
         // amounts keep the tidy formatter — only PRICES are fixed-width
         assertEquals("300", PriceMath.fmt(new BigDecimal("300.00")));
+    }
+
+    @Test public void displayAmountsCanBeTruncatedWithoutOverstating() {
+        assertEquals("12.34", PriceMath.fmtDown(new BigDecimal("12.349999"), 2));
+        assertEquals("12.34", PriceMath.fmtDown(new BigDecimal("12.340001"), 2));
+        assertEquals("12.00", PriceMath.fmtDown(new BigDecimal("12.009"), 2));
+        assertEquals("0.00", PriceMath.fmtDown(new BigDecimal("0.009"), 2));
+        assertEquals("5.00", PriceMath.fmtDown(new BigDecimal("5"), 2));
+    }
+
+    @Test public void displayAmountsCutDecimalsRatherThanFlooringNegatives() {
+        assertEquals("-1.23", PriceMath.fmtDown(new BigDecimal("-1.239"), 2));
     }
 
     @Test public void nullPriceRendersAsDash() {

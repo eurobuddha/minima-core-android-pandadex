@@ -4,7 +4,6 @@ import org.json.JSONObject;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -231,9 +230,169 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         });
     }
 
+    /** Execute a blended order-book + PandaPools fill in one atomic transaction. */
+    public void fillComposite(CompositeRouter.Plan plan, boolean takerBuys, Result cb) {
+        if (plan == null || plan.isEmpty()) { cb.onFailed("Nothing to fill"); return; }
+        CompositePrep prep = prepareComposite(plan, takerBuys);
+
+        java.util.HashSet<String> exclude = new java.util.HashSet<>();
+        if (prep.route != null) {
+            for (String a : prep.route.pairAddresses) if (a != null) exclude.add(a.toLowerCase());
+            for (PoolRouter.Alloc a : prep.route.allocs) {
+                if (a.pool.address != null) exclude.add(a.pool.address.toLowerCase());
+                if (a.pool.oadr != null) exclude.add(a.pool.oadr.toLowerCase());
+            }
+        }
+        findCoins(prep.payTok, prep.needed, exclude, 8, coins -> {
+            if (coins == null) {
+                String why = takeFundError();
+                cb.onFailed(why != null ? why : "Insufficient funds for trade");
+                return;
+            }
+            ensureTrackedPools(prep.route == null ? new ArrayList<>() : prep.route.allocs, 0,
+                    () -> buildComposite(plan, prep, takerBuys, coins, cb));
+        });
+    }
+
+    static final class CompositePrep {
+        PoolRouter.Route route;
+        String payTok;
+        BigDecimal needed = BigDecimal.ZERO;
+        List<String[]> payments = new ArrayList<>();
+        SweepPlanner.Take partial;
+        BigDecimal partialRem, partialNewWant;
+    }
+
+    static CompositePrep prepareComposite(CompositeRouter.Plan plan, boolean takerBuys) {
+        CompositePrep prep = new CompositePrep();
+        prep.payTok = takerBuys ? DexContract.USDT_ID : Util.MINIMA_TOKENID;
+        for (SweepPlanner.Take t : plan.orderTakes) {
+            Order5 o = t.order;
+            BigDecimal lockedTake = !t.partial ? o.locked
+                    : (o.sell ? t.minima
+                    : PriceMath.up(t.minima.multiply(o.price(), PriceMath.MC), PriceMath.USDT_DP));
+            BigDecimal pay = t.partial
+                    ? PriceMath.payFor(o.wantAmt, o.locked, lockedTake,
+                    o.sell ? PriceMath.USDT_DP : PriceMath.MINIMA_DP)
+                    : o.wantAmt;
+            prep.payments.add(new String[]{pay.toPlainString(), o.wantAddr, o.wantTok});
+            prep.needed = prep.needed.add(pay);
+            if (t.partial) {
+                prep.partial = t;
+                prep.partialRem = o.locked.subtract(lockedTake);
+                prep.partialNewWant = PriceMath.newWantFor(o.wantAmt, o.locked, prep.partialRem,
+                        o.sell ? PriceMath.USDT_DP : PriceMath.MINIMA_DP);
+            }
+        }
+        prep.route = plan.poolRoute;
+        if (prep.route != null && prep.route.ok) prep.needed = prep.needed.add(prep.route.totalIn);
+        return prep;
+    }
+
+    private void buildComposite(CompositeRouter.Plan plan, CompositePrep prep, boolean takerBuys,
+                                List<JSONObject> coins, Result cb) {
+        CompositeBuild built = buildCompositeSteps("combo_" + System.nanoTime(), myHexAddr, plan, prep, takerBuys, coins);
+        postGated(built.txid, built.steps, built.fundIds, cb);
+    }
+
+    static final class CompositeBuild {
+        String txid;
+        List<String> steps = new ArrayList<>();
+        List<String> fundIds = new ArrayList<>();
+    }
+
+    static CompositeBuild buildCompositeSteps(String txid, String myHexAddr, CompositeRouter.Plan plan,
+                                              CompositePrep prep, boolean takerBuys,
+                                              List<JSONObject> coins) {
+        PoolRouter.Route route = prep.route;
+        BigDecimal fundTotal = BigDecimal.ZERO;
+        for (JSONObject c : coins) fundTotal = fundTotal.add(coinValue(c));
+        CompositeBuild out = new CompositeBuild();
+        out.txid = txid;
+        List<String> steps = out.steps;
+        steps.add("txncreate id:" + txid);
+        if (route != null && route.ok) {
+            for (PoolRouter.Alloc a : route.allocs) {
+                steps.add("txninput id:" + txid + " coinid:" + a.pool.coinidM);
+                steps.add("txninput id:" + txid + " coinid:" + a.pool.coinidT);
+            }
+        }
+        for (SweepPlanner.Take t : plan.orderTakes) steps.add("txninput id:" + txid + " coinid:" + t.order.coinid);
+        for (JSONObject c : coins) {
+            steps.add("txninput id:" + txid + " coinid:" + c.optString("coinid"));
+            out.fundIds.add(c.optString("coinid"));
+        }
+        if (route != null && route.ok) {
+            for (PoolRouter.Alloc a : route.allocs) {
+                steps.add("txnoutput id:" + txid + " amount:" + amt(a.quote.newX)
+                        + " address:" + a.pool.address + " storestate:false");
+                steps.add("txnoutput id:" + txid + " amount:" + amt(a.quote.newY)
+                        + " address:" + a.pool.address + " tokenid:" + a.pool.tok + " storestate:false");
+            }
+        }
+        for (String[] p : prep.payments) {
+            steps.add("txnoutput id:" + txid + " amount:" + p[0] + " address:" + p[1]
+                    + (Util.MINIMA_TOKENID.equals(p[2]) ? "" : " tokenid:" + p[2]) + " storestate:false");
+        }
+        if (prep.partial != null) {
+            Order5 o = prep.partial.order;
+            steps.add("txnoutput id:" + txid + " amount:" + prep.partialRem.toPlainString()
+                    + " address:" + DexContract.ADDR_V5
+                    + (Util.MINIMA_TOKENID.equals(o.lockedTok) ? "" : " tokenid:" + o.lockedTok)
+                    + " storestate:true");
+        }
+        String proceedsTok = takerBuys ? Util.MINIMA_TOKENID : DexContract.USDT_ID;
+        BigDecimal proceeds = takerBuys ? plan.totalMinima : plan.totalUsdt;
+        steps.add("txnoutput id:" + txid + " amount:" + amt(proceeds)
+                + " address:" + myHexAddr
+                + (Util.MINIMA_TOKENID.equals(proceedsTok) ? "" : " tokenid:" + proceedsTok)
+                + " storestate:false");
+        BigDecimal change = fundTotal.subtract(prep.needed);
+        if (change.signum() > 0) {
+            steps.add("txnoutput id:" + txid + " amount:" + amt(change)
+                    + " address:" + myHexAddr
+                    + (Util.MINIMA_TOKENID.equals(prep.payTok) ? "" : " tokenid:" + prep.payTok) + " storestate:false");
+        }
+        if (prep.partial != null) {
+            Order5 o = prep.partial.order;
+            steps.add(stateStep(txid, 0, o.ownerPk));
+            steps.add(stateStep(txid, 1, o.wantAddr));
+            steps.add(stateStep(txid, 2, prep.partialNewWant.toPlainString()));
+            steps.add(stateStep(txid, 3, o.wantTok));
+            steps.add(stateStep(txid, 4, o.orderId));
+            steps.add(stateStep(txid, 5, o.sell ? "1" : "0"));
+            steps.add(stateStep(txid, 6, PriceMath.price(prep.partialNewWant, prep.partialRem).toPlainString()));
+            steps.add(stateStep(txid, 7, o.gtc ? "1" : "0"));
+            steps.add(stateStep(txid, 8, o.minRem.toPlainString()));
+        }
+        steps.add("txnsign id:" + txid + " publickey:auto");
+        steps.add("txnbasics id:" + txid);
+        return out;
+    }
+
+    private void ensureTrackedPools(List<PoolRouter.Alloc> allocs, int i, Runnable then) {
+        if (i >= allocs.size()) { then.run(); return; }
+        Pool p = allocs.get(i).pool;
+        String script = p.covenantScript != null && !p.covenantScript.isEmpty()
+                ? p.covenantScript : PoolCovenant.script(p.opk, p.oadr, p.tok, p.kmin);
+        // Keep pool scripts known for transaction construction without making every reserve
+        // coin at that address look wallet-owned/relevant. This is the same load-bearing
+        // trackall:false rule as the V5 order covenant.
+        node.cmd(poolScriptRegisterCommand(p, script), new NodeApi.Cb() {
+            @Override public void onResult(JSONObject j) { ensureTrackedPools(allocs, i + 1, then); }
+            @Override public void onError(String m) { ensureTrackedPools(allocs, i + 1, then); }
+        });
+    }
+
+    static String poolScriptRegisterCommand(Pool p, String script) {
+        return "newscript trackall:false script:" + Util.scriptArg(script);
+    }
+
     private static String stateStep(String txid, int port, String value) {
         return "txnstate id:" + txid + " port:" + port + " value:" + value;
     }
+
+    private static String amt(BigDecimal b) { return b.stripTrailingZeros().toPlainString(); }
 
     /**
      * Order ids must be unguessable AND collision-free: they key successor-matching in the
@@ -369,10 +528,35 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     /** txncheck gate → txnpost → txndelete. Reserves funding coins for the txn's lifetime. */
     private void postGated(String txid, List<String> steps, List<String> fundIds, Result cb) {
         for (String id : fundIds) inflight.put(id, chainBlock);
-        List<String> chain = new ArrayList<>(steps);
-        chain.add("txncheck id:" + txid);
-        CmdChain.run(node, chain, "txndelete id:" + txid, new CmdChain.Done() {
+        CmdChain.run(node, new ArrayList<>(steps), "txndelete id:" + txid, new CmdChain.Done() {
             @Override public void ok(JSONObject last) {
+                node.cmd("txnexport id:" + txid, new NodeApi.Cb() {
+                    @Override public void onResult(JSONObject exported) {
+                        if (txnBytes(exported) > 60 * 1024) {
+                            inflight.keySet().removeAll(fundIds);
+                            node.cmd("txndelete id:" + txid, null);
+                            cb.onFailed("Transaction is too large — reduce pools/orders or consolidate wallet coins");
+                            return;
+                        }
+                        checkAndPost(txid, fundIds, cb);
+                    }
+                    @Override public void onError(String message) {
+                        inflight.keySet().removeAll(fundIds);
+                        node.cmd("txndelete id:" + txid, null);
+                        cb.onFailed(message);
+                    }
+                });
+            }
+            @Override public void fail(String message) {
+                inflight.keySet().removeAll(fundIds);
+                cb.onFailed(message);
+            }
+        });
+    }
+
+    private void checkAndPost(String txid, List<String> fundIds, Result cb) {
+        node.cmd("txncheck id:" + txid, new NodeApi.Cb() {
+            @Override public void onResult(JSONObject last) {
                 JSONObject resp = last == null ? null : last.optJSONObject("response");
                 JSONObject valid = resp == null ? null : resp.optJSONObject("valid");
                 // gate on the VERDICT object (top-level `scripts` is a COUNT); validamounts
@@ -416,11 +600,19 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                     }
                 });
             }
-            @Override public void fail(String message) {
+            @Override public void onError(String message) {
                 inflight.keySet().removeAll(fundIds);
+                node.cmd("txndelete id:" + txid, null);
                 cb.onFailed(message);
             }
         });
+    }
+
+    private static int txnBytes(JSONObject exported) {
+        JSONObject resp = exported == null ? null : exported.optJSONObject("response");
+        String data = resp == null ? "" : resp.optString("data", "");
+        if (data.startsWith("0x") || data.startsWith("0X")) data = data.substring(2);
+        return data.length() / 2;
     }
 
     public interface CoinsCb { void found(List<JSONObject> coins); }
@@ -437,35 +629,19 @@ public class DexTxn {   // non-final so tests can stub the three order actions
      *  a pending order placement (or by the background service) is freely selectable, and one
      *  of the two transactions dies silently while both report success. */
     public void findCoins(String tokenid, BigDecimal need, CoinsCb cb) {
+        findCoins(tokenid, need, java.util.Collections.emptySet(), Integer.MAX_VALUE, cb);
+    }
+
+    public void findCoins(String tokenid, BigDecimal need, java.util.Set<String> excludeAddrsLower,
+                          int maxInputs, CoinsCb cb) {
+        lastFundError = null;
         node.cmd("coins relevant:true sendable:true checkmempool:true tokenid:" + tokenid, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 Object resp = json.opt("response");
-                if (!(resp instanceof org.json.JSONArray)) { cb.found(null); return; }
-                org.json.JSONArray arr = (org.json.JSONArray) resp;
-                Map<String, JSONObject> present = new LinkedHashMap<>();
-                List<JSONObject> candidates = new ArrayList<>();
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject c = arr.optJSONObject(i);
-                    if (c == null) continue;
-                    present.put(c.optString("coinid"), c);
-                    Object st = c.opt("state");
-                    boolean hasState = st instanceof org.json.JSONArray
-                            ? ((org.json.JSONArray) st).length() > 0
-                            : st instanceof JSONObject && ((JSONObject) st).length() > 0;
-                    if (hasState) continue;
-                    if (inflight.containsKey(c.optString("coinid"))) continue;
-                    candidates.add(c);
-                }
-                inflight.keySet().retainAll(present.keySet());   // drop reservations for spent coins
-                candidates.sort((a, b) -> coinValue(b).compareTo(coinValue(a)));
-                List<JSONObject> pick = new ArrayList<>();
-                BigDecimal sum = BigDecimal.ZERO;
-                for (JSONObject c : candidates) {
-                    pick.add(c);
-                    sum = sum.add(coinValue(c));
-                    if (sum.compareTo(need) >= 0) { cb.found(pick); return; }
-                }
-                cb.found(null);
+                FundingPick pick = selectFundingCoins(resp, need, excludeAddrsLower, maxInputs, inflight.keySet());
+                inflight.keySet().retainAll(pick.presentCoinIds);   // drop reservations for spent coins
+                if (pick.error != null) lastFundError = pick.error;
+                cb.found(pick.coins);
             }
             @Override public void onError(String message) {
                 // Distinguish "wallet too fragmented to enumerate" from "no funds" — this is
@@ -477,6 +653,54 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 cb.found(null);
             }
         });
+    }
+
+    static final class FundingPick {
+        final List<JSONObject> coins;
+        final java.util.Set<String> presentCoinIds;
+        final String error;
+
+        FundingPick(List<JSONObject> coins, java.util.Set<String> presentCoinIds, String error) {
+            this.coins = coins;
+            this.presentCoinIds = presentCoinIds;
+            this.error = error;
+        }
+    }
+
+    static FundingPick selectFundingCoins(Object resp, BigDecimal need, java.util.Set<String> excludeAddrsLower,
+                                          int maxInputs, java.util.Set<String> inflightIds) {
+        java.util.Set<String> present = new java.util.LinkedHashSet<>();
+        if (!(resp instanceof org.json.JSONArray)) return new FundingPick(null, present, null);
+        org.json.JSONArray arr = (org.json.JSONArray) resp;
+        List<JSONObject> candidates = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject c = arr.optJSONObject(i);
+            if (c == null) continue;
+            String coinid = c.optString("coinid");
+            present.add(coinid);
+            Object st = c.opt("state");
+            boolean hasState = st instanceof org.json.JSONArray
+                    ? ((org.json.JSONArray) st).length() > 0
+                    : st instanceof JSONObject && ((JSONObject) st).length() > 0;
+            if (hasState) continue;
+            String addr = c.optString("address", "");
+            if (addr != null && excludeAddrsLower != null && excludeAddrsLower.contains(addr.toLowerCase())) continue;
+            if (inflightIds != null && inflightIds.contains(coinid)) continue;
+            candidates.add(c);
+        }
+        candidates.sort((a, b) -> coinValue(b).compareTo(coinValue(a)));
+        List<JSONObject> pick = new ArrayList<>();
+        BigDecimal sum = BigDecimal.ZERO;
+        for (JSONObject c : candidates) {
+            pick.add(c);
+            sum = sum.add(coinValue(c));
+            if (pick.size() > maxInputs) {
+                return new FundingPick(null, present,
+                        "Wallet funding needs more than " + maxInputs + " inputs — consolidate coins and retry.");
+            }
+            if (sum.compareTo(need) >= 0) return new FundingPick(pick, present, null);
+        }
+        return new FundingPick(null, present, null);
     }
 
     /** Set when the last findCoins failure had a specific cause worth showing the user. */

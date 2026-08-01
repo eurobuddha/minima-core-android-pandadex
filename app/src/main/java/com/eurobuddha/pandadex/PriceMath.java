@@ -82,6 +82,12 @@ public final class PriceMath {
         return Util.tidyAmount(v.stripTrailingZeros().toPlainString());
     }
 
+    /** Display an amount with exactly {@code dp} decimals, truncated down so it never overstates. */
+    public static String fmtDown(BigDecimal v, int dp) {
+        if (v == null) v = BigDecimal.ZERO;
+        return v.setScale(dp, RoundingMode.DOWN).toPlainString();
+    }
+
     /** Decimals shown for every PRICE in the UI. MINIMA trades around 0.05 mxUSDT, so five
      *  decimals only resolves to the nearest 0.00001 — enough to make two genuinely different
      *  orders look identical and to misreport what you are about to trade at. Six gives a

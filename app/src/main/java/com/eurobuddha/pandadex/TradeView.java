@@ -21,6 +21,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * The MEXC-style spot screen: ticker → depth ladder → order panel → open orders.
@@ -41,15 +43,23 @@ public final class TradeView extends LinearLayout {
     // ladder
     private LinearLayout asksBox, bidsBox;
     private TextView centerPriceTv;
+    private final ExecutorService depthExec = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "pandadex-depth");
+        t.setDaemon(true);
+        return t;
+    });
+    private String requestedDepthKey = "";
+    private String readyDepthKey = "";
+    private List<SyntheticDepth.Row> readyPoolAsks = new ArrayList<>();
+    private List<SyntheticDepth.Row> readyPoolBids = new ArrayList<>();
     /**
-     * Price-level grouping. Index 0 is NO GROUPING (null tick) and is the DEFAULT: two orders
-     * at different prices must never be silently merged into one level — a maker who posts at
-     * 0.05150 and 0.05200 has to see two rows. Coarser ticks are opt-in for deep books, and
-     * the choice is persisted.
+     * Price-level grouping. Index 0 is the finest displayed tick and is the DEFAULT: it keeps
+     * prices readable while still separating normal book levels. Coarser ticks are opt-in for
+     * deep books, and the choice is persisted.
      */
-    private static final BigDecimal[] GROUPS = {null, new BigDecimal("0.0001"),
+    private static final BigDecimal[] GROUPS = {new BigDecimal("0.00001"), new BigDecimal("0.0001"),
             new BigDecimal("0.001"), new BigDecimal("0.01")};
-    private static final String[] GROUP_LABELS = {"exact", "0.0001", "0.001", "0.01"};
+    private static final String[] GROUP_LABELS = {"0.00001", "0.0001", "0.001", "0.01"};
     private static final String PREFS = "pandadex_ui";
     private static final String KEY_GROUP = "ladder_group";
     private int groupIdx = 0;
@@ -191,6 +201,7 @@ public final class TradeView extends LinearLayout {
                 groupIdx = idx;
                 getContext().getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
                         .edit().putInt(KEY_GROUP, idx).apply();
+                readyDepthKey = "";
                 restyleGroups();
                 act.repaintTrade();
             });
@@ -239,7 +250,7 @@ public final class TradeView extends LinearLayout {
     }
 
     /** One ladder row with a right-anchored translucent depth bar BEHIND the numbers. */
-    private View ladderRow(BigDecimal price, BigDecimal amount, BigDecimal total,
+    private View ladderRow(BigDecimal price, BigDecimal bookAmount, BigDecimal poolAmount, BigDecimal total,
                            float depthFrac, boolean ask, boolean mine, boolean filling,
                            BigDecimal exactPrice) {
         FrameLayout f = new FrameLayout(getContext());
@@ -262,7 +273,9 @@ public final class TradeView extends LinearLayout {
         TextView p = tv((mine ? "• " : "") + PriceMath.fmtPrice(price), 11f,
                 ask ? Design.RED() : Design.IN(), Design.mono());
         row.addView(p, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.2f));
-        TextView am = tv(PriceMath.fmt(amount), 11f, Design.TEXT(), Design.mono());
+        BigDecimal amount = bookAmount.add(poolAmount);
+        String amtText = amountText(bookAmount, poolAmount);
+        TextView am = tv(amtText, poolAmount.signum() > 0 ? 9.5f : 11f, Design.TEXT(), Design.mono());
         am.setGravity(Gravity.END);
         row.addView(am, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         TextView to = tv(filling ? "FILLING…" : PriceMath.fmt(total.setScale(4, RoundingMode.HALF_UP)),
@@ -454,7 +467,11 @@ public final class TradeView extends LinearLayout {
         // (that's what makes a "market order" possible without any AMM) and only rest the
         // unfilled balance. This is the taker path — one sweep txn, ≤1 partial.
         SweepPlanner.Plan plan = SweepPlanner.plan(act.book().values(), buyMode, amount, price, act.chainBlock());
-        if (!plan.isEmpty()) {
+        CompositeRouter.Plan composite = CompositeRouter.plan(act.book().values(), act.pools(),
+                buyMode, amount, price, act.chainBlock());
+        if (!composite.isEmpty()) {
+            act.confirmComposite(composite, buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
+        } else if (!plan.isEmpty()) {
             act.confirmSweep(plan, buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
         } else {
             act.placeOrder(buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
@@ -529,8 +546,13 @@ public final class TradeView extends LinearLayout {
 
     private void renderLadder(Map<String, Order5> book, long chainBlock) {
         BigDecimal tick = GROUPS[groupIdx];
+        List<Pool> pools = act.pools();
+        String depthKey = depthKey(pools, tick);
+        requestDepth(pools, tick, depthKey);
         TreeMap<BigDecimal, BigDecimal> asks = new TreeMap<>();
         TreeMap<BigDecimal, BigDecimal> bids = new TreeMap<>((a, b) -> b.compareTo(a));
+        TreeMap<BigDecimal, BigDecimal> poolAsks = new TreeMap<>();
+        TreeMap<BigDecimal, BigDecimal> poolBids = new TreeMap<>((a, b) -> b.compareTo(a));
         TreeMap<BigDecimal, Boolean> mineAt = new TreeMap<>();
         TreeMap<BigDecimal, Boolean> fillingAt = new TreeMap<>();
         // the exact price of the best order behind each level — tapping a row must prefill
@@ -544,6 +566,18 @@ public final class TradeView extends LinearLayout {
             if (act.filling().contains(o.coinid)) fillingAt.merge(g, true, (x, y) -> true);
             exactAt.merge(g, o.price(), (x, y) -> o.sell ? x.min(y) : x.max(y));
         }
+        if (depthKey.equals(readyDepthKey)) {
+            for (SyntheticDepth.Row r : readyPoolAsks) {
+                poolAsks.merge(r.price, r.poolMinima, BigDecimal::add);
+                exactAt.putIfAbsent(r.price, r.price);
+            }
+            for (SyntheticDepth.Row r : readyPoolBids) {
+                poolBids.merge(r.price, r.poolMinima, BigDecimal::add);
+                exactAt.putIfAbsent(r.price, r.price);
+            }
+        }
+        for (Map.Entry<BigDecimal, BigDecimal> e : poolAsks.entrySet()) asks.merge(e.getKey(), BigDecimal.ZERO, BigDecimal::add);
+        for (Map.Entry<BigDecimal, BigDecimal> e : poolBids.entrySet()) bids.merge(e.getKey(), BigDecimal.ZERO, BigDecimal::add);
 
         asksBox.removeAllViews();
         bidsBox.removeAllViews();
@@ -552,13 +586,15 @@ public final class TradeView extends LinearLayout {
         // asks render top-down from HIGH to LOW so the best ask sits just above center
         List<Map.Entry<BigDecimal, BigDecimal>> askList = new ArrayList<>(asks.entrySet());
         askList = askList.subList(0, Math.min(MAX_ROWS, askList.size()));
-        BigDecimal askMax = cumMax(askList);
+        BigDecimal askMax = cumMax(askList, poolAsks);
         BigDecimal running = BigDecimal.ZERO;
         List<View> askRows = new ArrayList<>();
         for (Map.Entry<BigDecimal, BigDecimal> e : askList) {
-            running = running.add(e.getValue());
-            askRows.add(ladderRow(e.getKey(), e.getValue(),
-                    PriceMath.up(e.getKey().multiply(e.getValue(), PriceMath.MC), 4),
+            BigDecimal pool = poolAsks.getOrDefault(e.getKey(), BigDecimal.ZERO);
+            BigDecimal totalAmount = e.getValue().add(pool);
+            running = running.add(totalAmount);
+            askRows.add(ladderRow(e.getKey(), e.getValue(), pool,
+                    PriceMath.up(e.getKey().multiply(totalAmount, PriceMath.MC), 4),
                     askMax.signum() == 0 ? 0 : running.divide(askMax, 4, RoundingMode.HALF_UP).floatValue(),
                     true, mineAt.containsKey(e.getKey()), fillingAt.containsKey(e.getKey()),
                     exactAt.get(e.getKey())));
@@ -567,12 +603,14 @@ public final class TradeView extends LinearLayout {
 
         List<Map.Entry<BigDecimal, BigDecimal>> bidList = new ArrayList<>(bids.entrySet());
         bidList = bidList.subList(0, Math.min(MAX_ROWS, bidList.size()));
-        BigDecimal bidMax = cumMax(bidList);
+        BigDecimal bidMax = cumMax(bidList, poolBids);
         running = BigDecimal.ZERO;
         for (Map.Entry<BigDecimal, BigDecimal> e : bidList) {
-            running = running.add(e.getValue());
-            bidsBox.addView(ladderRow(e.getKey(), e.getValue(),
-                    PriceMath.up(e.getKey().multiply(e.getValue(), PriceMath.MC), 4),
+            BigDecimal pool = poolBids.getOrDefault(e.getKey(), BigDecimal.ZERO);
+            BigDecimal totalAmount = e.getValue().add(pool);
+            running = running.add(totalAmount);
+            bidsBox.addView(ladderRow(e.getKey(), e.getValue(), pool,
+                    PriceMath.up(e.getKey().multiply(totalAmount, PriceMath.MC), 4),
                     bidMax.signum() == 0 ? 0 : running.divide(bidMax, 4, RoundingMode.HALF_UP).floatValue(),
                     false, mineAt.containsKey(e.getKey()), fillingAt.containsKey(e.getKey()),
                     exactAt.get(e.getKey())));
@@ -583,16 +621,52 @@ public final class TradeView extends LinearLayout {
         // from the GROUPED level keys, which disagreed with Assets and P&L by up to half a
         // tick whenever grouping was switched on.
         BigDecimal mid = act.bookMid();
-        centerPriceTv.setText(mid == null ? "—" : PriceMath.fmtPrice(mid));
+        if (mid == null && !pools.isEmpty()) mid = VirtualCurve.aggregatePrice(pools);
+        centerPriceTv.setText(mid == null || mid.signum() == 0 ? "—" : PriceMath.fmtPrice(mid));
         centerPriceTv.setTextColor(Design.TEXT());
     }
 
+    private void requestDepth(List<Pool> pools, BigDecimal tick, String key) {
+        if (key.equals(requestedDepthKey) || key.equals(readyDepthKey)) return;
+        requestedDepthKey = key;
+        List<Pool> snapshot = new ArrayList<>(pools);
+        depthExec.execute(() -> {
+            List<SyntheticDepth.Row> asks = SyntheticDepth.sample(snapshot, true, tick, 10);
+            List<SyntheticDepth.Row> bids = SyntheticDepth.sample(snapshot, false, tick, 10);
+            ui.post(() -> {
+                if (!key.equals(requestedDepthKey)) return;
+                readyDepthKey = key;
+                readyPoolAsks = asks;
+                readyPoolBids = bids;
+                act.repaintTrade();
+            });
+        });
+    }
+
+    private static String depthKey(List<Pool> pools, BigDecimal tick) {
+        StringBuilder sb = new StringBuilder(tick == null ? "exact" : tick.toPlainString());
+        if (pools != null) for (Pool p : pools) {
+            if (p == null) continue;
+            sb.append('|').append(p.address)
+              .append('|').append(p.coinidM).append(':').append(p.reserveM)
+              .append('|').append(p.coinidT).append(':').append(p.reserveT)
+              .append('|').append(p.tok);
+        }
+        return sb.toString();
+    }
+
+    static String amountText(BigDecimal bookAmount, BigDecimal poolAmount) {
+        boolean book = bookAmount != null && bookAmount.signum() > 0;
+        boolean pool = poolAmount != null && poolAmount.signum() > 0;
+        if (book && pool) return "BOOK " + PriceMath.fmtDown(bookAmount, 2)
+                + "\nPOOL " + PriceMath.fmtDown(poolAmount, 2);
+        if (pool) return "POOL " + PriceMath.fmtDown(poolAmount, 2);
+        return PriceMath.fmtDown(bookAmount == null ? BigDecimal.ZERO : bookAmount, 2);
+    }
+
     /**
-     * The price level an order belongs to. With no tick selected (the default) the level is
-     * the order's own price rounded only to what the UI actually shows — so two orders merge
-     * only when they are genuinely indistinguishable on screen, never because of a grouping
-     * bucket the user didn't ask for. With a tick, asks round UP and bids round DOWN so a
-     * level never flatters the side it's on.
+     * The price level an order belongs to. The finest UI tick is 0.00001; asks round UP and
+     * bids round DOWN so a grouped level never flatters the side it's on.
      */
     static BigDecimal levelPrice(Order5 o, BigDecimal tick) {
         BigDecimal p = o.price();
@@ -603,10 +677,17 @@ public final class TradeView extends LinearLayout {
                       : p.divide(tick, 0, RoundingMode.FLOOR).multiply(tick);
     }
 
-    private static BigDecimal cumMax(List<Map.Entry<BigDecimal, BigDecimal>> list) {
+    private static BigDecimal cumMax(List<Map.Entry<BigDecimal, BigDecimal>> list,
+                                     Map<BigDecimal, BigDecimal> pools) {
         BigDecimal sum = BigDecimal.ZERO;
-        for (Map.Entry<BigDecimal, BigDecimal> e : list) sum = sum.add(e.getValue());
+        for (Map.Entry<BigDecimal, BigDecimal> e : list)
+            sum = sum.add(e.getValue()).add(pools.getOrDefault(e.getKey(), BigDecimal.ZERO));
         return sum;
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        depthExec.shutdownNow();
+        super.onDetachedFromWindow();
     }
 
     private void renderOrders(Map<String, Order5> book, long chainBlock, List<Pending.Row> pending) {
