@@ -1297,7 +1297,8 @@ public class MainActivity extends AppCompatActivity {
                 + " and "
                 + (nBids > 0 ? nBids + " bid" + (nBids == 1 ? "" : "s") + " locking "
                         + PriceMath.fmt(c.bidUsdt) + " mxUSDT" : "no bids");
-        new AlertDialog.Builder(this, Design.dialogTheme())
+        String fundingHint = makerFundingHint(nAsks, nBids);
+        AlertDialog.Builder b = new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle("Publish the ladder")
                 .setMessage("This puts " + (nBids + nAsks) + " orders on the book — " + sides + ".\n\n"
                         + (pegged
@@ -1313,7 +1314,8 @@ public class MainActivity extends AppCompatActivity {
                         + "sticks. The Maker tab shows each rung's progress.\n\n"
                         + "With the app CLOSED the ladder is still maintained, but only every "
                         + "few minutes — so it builds slower and a stale-feed withdrawal can "
-                        + "lag by that much. Keep the app open while it builds.")
+                        + "lag by that much. Keep the app open while it builds."
+                        + (fundingHint.isEmpty() ? "" : "\n\n" + fundingHint))
                 .setPositiveButton("Publish", (d, w) -> {
                     makerCfg.armed = true;
                     makerCfg.lastActedMid = null;      // act on the next cycle
@@ -1322,8 +1324,120 @@ public class MainActivity extends AppCompatActivity {
                     repo.refresh();
                     repaint();
                 })
-                .setNegativeButton("Not yet", null)
+                .setNegativeButton("Not yet", null);
+        if (!fundingHint.isEmpty()) b.setNeutralButton("Split funds first", (d, w) -> prepareMakerFundingUtxos());
+        b.show();
+    }
+
+    private String makerFundingHint(int nAsks, int nBids) {
+        StringBuilder sb = new StringBuilder();
+        if (nAsks > 1 && minimaCoins > 0 && minimaCoins < nAsks) {
+            sb.append("MINIMA funding looks thin: ").append(minimaCoins)
+                    .append(" coin").append(minimaCoins == 1 ? "" : "s")
+                    .append(" for ").append(nAsks).append(" ask rungs.");
+        }
+        if (nBids > 1 && usdtCoins > 0 && usdtCoins < nBids) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append("mxUSDT funding looks thin: ").append(usdtCoins)
+                    .append(" coin").append(usdtCoins == 1 ? "" : "s")
+                    .append(" for ").append(nBids).append(" bid rungs.");
+        }
+        if (sb.length() == 0) return "";
+        return sb.append("\nUse split:").append(SelfSplit.COUNT)
+                .append(" first if you want more funding coins before publishing.").toString();
+    }
+
+    /** Split either side's sendable wallet balance into ten self-pay coins before publishing. */
+    public void prepareMakerFundingUtxos() {
+        if (!ready()) return;
+        if (busy) { toast("A transaction is already in flight"); return; }
+        if (makerCfg != null && makerCfg.armed) {
+            toast("Withdraw the live ladder before splitting maker funding coins");
+            return;
+        }
+        String[] items = {
+                "MINIMA - " + PriceMath.fmt(minimaSendable) + " sendable, "
+                        + minimaCoins + " coin" + (minimaCoins == 1 ? "" : "s"),
+                "mxUSDT - " + PriceMath.fmt(usdtSendable) + " sendable, "
+                        + usdtCoins + " coin" + (usdtCoins == 1 ? "" : "s")
+        };
+        new AlertDialog.Builder(this, Design.dialogTheme())
+                .setTitle("Split maker funding")
+                .setMessage("This sends the selected sendable balance back to your own wallet "
+                        + "with split:" + SelfSplit.COUNT + ". The new coins are unconfirmed "
+                        + "until a block mines; publish the ladder after ASSETS shows them "
+                        + "sendable.")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) splitMakerFunding(Util.MINIMA_TOKENID, "MINIMA", minimaSendable);
+                    else splitMakerFunding(DexContract.USDT_ID, "mxUSDT", usdtSendable);
+                })
+                .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private void splitMakerFunding(String tokenid, String label, BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0) {
+            toast("No sendable " + label + " to split");
+            return;
+        }
+        if (busy) { toast("A transaction is already in flight"); return; }
+        if (receiveAddr != null && !receiveAddr.isEmpty()) {
+            postMakerSelfSplit(tokenid, label, amount, receiveAddr);
+            return;
+        }
+        setStage("Fetching your wallet address...");
+        node.cmd("getaddress", new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                JSONObject r = json.optJSONObject("response");
+                String addr = r == null ? "" : r.optString("miniaddress", r.optString("address", ""));
+                if (addr.isEmpty()) {
+                    setStage("Split failed - could not get your wallet address");
+                    toast("Could not get your wallet address");
+                    return;
+                }
+                receiveAddr = addr;
+                postMakerSelfSplit(tokenid, label, amount, addr);
+            }
+            @Override public void onError(String message) {
+                setStage("Split failed - " + message);
+                toast("Split failed: " + message);
+            }
+        });
+    }
+
+    private void postMakerSelfSplit(String tokenid, String label, BigDecimal amount, String address) {
+        final String cmd;
+        try {
+            cmd = SelfSplit.command(address, tokenid, amount);
+        } catch (Throwable t) {
+            toast("Could not build split command");
+            return;
+        }
+        busy = true;
+        setStage("Splitting " + PriceMath.fmt(amount) + " " + label + " into "
+                + SelfSplit.COUNT + " wallet coins...");
+        SignGate.submit(gate -> node.cmd(cmd, new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                gate.free();
+                busy = false;
+                if (json.optBoolean("status", false) || json.optBoolean("pending", false)) {
+                    setStage(label + " split posted - wait for the next block, then publish.");
+                    toast(label + " split posted");
+                    poll(false);
+                } else {
+                    String msg = nodeReplyMessage(json, "split failed");
+                    setStage("Split failed - " + msg);
+                    toast("Split failed: " + msg);
+                }
+            }
+            @Override public void onError(String message) {
+                gate.free();
+                busy = false;
+                setStage("Split failed - " + message);
+                toast("Split failed: " + message);
+            }
+        }));
+        repaint();
     }
 
     /**
@@ -1602,5 +1716,14 @@ public class MainActivity extends AppCompatActivity {
             sb.append(PriceMath.fmt(unconfirmed)).append(" unconfirmed");
         }
         sb.append(")");
+    }
+
+    static String nodeReplyMessage(JSONObject json, String fallback) {
+        if (json == null) return fallback;
+        String msg = json.optString("message", "");
+        if (msg.isEmpty()) msg = json.optString("error", "");
+        Object resp = json.opt("response");
+        if (msg.isEmpty() && resp instanceof String) msg = (String) resp;
+        return msg.isEmpty() ? fallback : msg;
     }
 }

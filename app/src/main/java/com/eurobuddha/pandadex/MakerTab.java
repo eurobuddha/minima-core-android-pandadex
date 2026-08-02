@@ -38,7 +38,7 @@ public final class MakerTab extends LinearLayout {
     private final MainActivity act;
     private final MakerConfig cfg;
 
-    private TextView stateTv, feedTv, midTv, armBtn, previewTv, pegPxTv, slotsTv, stageTv, applyBtn;
+    private TextView stateTv, feedTv, midTv, armBtn, prepBtn, previewTv, pegPxTv, slotsTv, stageTv, applyBtn;
     private SwitchCompat pegSw;
     private EditText midIn, stepIn, levelsIn, askSizeIn, bidSizeIn, skewIn, repriceIn;
     private final EditText[][] askRows = new EditText[MakerLadder.MAX_LEVELS][];
@@ -190,6 +190,17 @@ public final class MakerTab extends LinearLayout {
         hint.setLineSpacing(dp(2), 1f);
         hint.setPadding(0, dp(4), 0, dp(6));
         lc.addView(hint);
+
+        prepBtn = tv("SPLIT FUNDS INTO 10 UTXOS", 12f, Design.ACCENT(), Design.sansBold());
+        prepBtn.setGravity(Gravity.CENTER);
+        prepBtn.setPadding(0, dp(10), 0, dp(10));
+        prepBtn.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
+        prepBtn.setOnClickListener(v -> act.prepareMakerFundingUtxos());
+        Design.pressable(prepBtn);
+        LayoutParams pp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+        pp.topMargin = dp(4);
+        pp.bottomMargin = dp(8);
+        lc.addView(prepBtn, pp);
 
         // ---- auto-MM: peg the ladder to the live MEXC MINIMA/USDT market ----
         lc.addView(sectionLabel("AUTO MARKET-MAKE — PEG TO MEXC"));
@@ -803,6 +814,7 @@ public final class MakerTab extends LinearLayout {
                                    : Design.DIM());
         // only meaningful against a live ladder
         applyBtn.setVisibility(armed ? VISIBLE : GONE);
+        prepBtn.setVisibility(armed ? GONE : VISIBLE);
         armBtn.setText(armed ? "WITHDRAW LADDER (cancels all rungs)" : "PUBLISH LADDER");
         armBtn.setBackground(Design.ripple(Design.roundBg(getContext(),
                 armed ? Design.RED() : Design.IN(), 12)));
