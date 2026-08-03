@@ -26,9 +26,24 @@ import java.util.Set;
 public final class FillTape {
 
     public interface Sink {
-        /** A market fill was observed. spentCoin = the consumed order coin (exactly-once key). */
+        /**
+         * A market fill was observed. spentCoin = the consumed order coin (exactly-once key).
+         *
+         * @param sinceBlock the last chain height at which this order was seen RESTING. Evidence
+         *                   older than that cannot explain its disappearance, so it is the
+         *                   tightest floor available to the verifier — tighter than the fixed
+         *                   lookback, which let an older wallet coin of the same size stand in.
+         */
         void onFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
-                    boolean takerBuy, boolean partial);
+                    boolean takerBuy, boolean partial, long sinceBlock);
+
+        /**
+         * This scan has emitted everything it is going to. Whole-coin disappearances must be
+         * adjudicated as a BATCH — a payout coin can only be evidence for one order, and that
+         * cannot be decided one order at a time — so the sink buffers during the diff and settles
+         * here. Nothing to do for a sink that records immediately.
+         */
+        default void onScanComplete() {}
     }
 
     private static final int MISS_GRACE = 2;
@@ -53,6 +68,9 @@ public final class FillTape {
 
     private Map<String, Order5> prev = null;            // coinid -> order (last good scan)
     private final Map<String, Integer> missing = new java.util.HashMap<>();
+    /** coinid -> the last chain height at which the coin was seen resting. The verifier's
+     *  evidence floor: a coin created before this cannot explain the disappearance. */
+    private final Map<String, Long> lastSeen = new java.util.HashMap<>();
     private final CancelLog cancels;
     /** How old the previous observation may be and still be diffable. MUST exceed the owner's
      *  polling gap: the background service polls every PASS_GAP_MS, so a 4-minute ceiling made
@@ -87,6 +105,8 @@ public final class FillTape {
             prev = new java.util.HashMap<>(book);
             prevAtMs = now;
             missing.clear();
+            lastSeen.clear();
+            for (String coinid : book.keySet()) lastSeen.put(coinid, chainBlock);
             return;
         }
 
@@ -179,7 +199,7 @@ public final class FillTape {
                 if (cmp < 0) {
                     // PARTIAL: exact delta at the order's enforced price
                     BigDecimal size = minimaDelta(old, successor);
-                    sink.onFill(coinid, old, size, old.price(), old.sell, true);
+                    sink.onFill(coinid, old, size, old.price(), old.sell, true, seenAt(coinid));
                 }                                        // same amount = renewal/edit, not a trade
                 continue;
             }
@@ -206,13 +226,25 @@ public final class FillTape {
             }
             emitted++;
             // FULL fill (or a foreign cancel — indistinguishable; counted as fill)
-            sink.onFill(coinid, old, old.minimaAmount(), old.price(), old.sell, false);
+            sink.onFill(coinid, old, old.minimaAmount(), old.price(), old.sell, false, seenAt(coinid));
         }
 
         // counters exist only while a coin is absent — a reappeared coin's counter dies here
         missing.keySet().removeAll(book.keySet());
+        for (String coinid : book.keySet()) lastSeen.put(coinid, chainBlock);
         prev = mergePrev(book, prev);
         prevAtMs = now;
+        // Everything this diff had to say. The sink settles its batch now — see Sink.onScanComplete.
+        sink.onScanComplete();
+        // A coin that is neither resting nor mid-grace can never be asked about again.
+        lastSeen.keySet().retainAll(prev.keySet());
+    }
+
+    /** Falls back to the order's own creation block when we have no sighting — never to 0, which
+     *  would widen the evidence window rather than narrow it. */
+    private long seenAt(String coinid) {
+        Long at = lastSeen.get(coinid);
+        return at == null ? 0 : at;
     }
 
     /** next prev = the new book PLUS pending-missing coins (they must stay diffable until

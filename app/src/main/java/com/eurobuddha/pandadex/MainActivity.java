@@ -56,6 +56,8 @@ public class MainActivity extends AppCompatActivity {
     private DexTxn txn;
     private KeySet keySet;
     private FillVerifier verifier;
+    private DexHistory history;
+    private FillSettler settler;
     private Pending pending;
     private DexProcessor processor;
     private boolean keepAliveAsked = false;
@@ -148,10 +150,21 @@ public class MainActivity extends AppCompatActivity {
         repo = new BookRepository(node, db);
         poolRepo = new PoolLiquidityRepository(node);
         verifier = new FillVerifier(node);
+        history = new DexHistory(node);
         txn = new DexTxn(node, db);
         processor = new DexProcessor(this, txn);
         maker = new MakerEngine(makerCfg, txn);
-        repo.setFillSink(this::onFillObserved);
+        // History first, then EXCLUSIVE payout evidence over the whole scan at once — a payout
+        // coin can only be evidence for one order, which cannot be decided one order at a time.
+        settler = new FillSettler(history, verifier, () -> chainBlock, new FillSettler.Outcome() {
+            @Override public void record(String spentCoin, Order5 order, BigDecimal size,
+                                         BigDecimal price, boolean takerBuy, boolean partial,
+                                         String evidence, String note) {
+                recordFill(spentCoin, order, size, price, takerBuy, partial, evidence, note);
+            }
+            @Override public void cancelled(String spentCoin) { db.noteCancelled(spentCoin); }
+        });
+        repo.setFillSink(settler);
         repo.subscribe((orders, syncing) -> {
             pending.resolve(orders, chainBlock, new Pending.Listener() {
                 @Override public void onLive(Pending.Row r) {
@@ -1564,34 +1577,15 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void onFillObserved(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
-                                boolean takerBuy, boolean partial) {
-        // A PARTIAL is proven by the remainder coin — the delta is exact, record it. A whole
-        // coin vanishing is ambiguous (fill or somebody's cancel), so ask the chain first.
-        if (!partial) {
-            verifier.verify(order, chainBlock, v -> {
-                if (v == FillVerifier.Verdict.CANCELLED) {
-                    db.noteCancelled(spentCoin);   // settled — never adjudicate it again
-                    return;
-                }
-                if (v == FillVerifier.Verdict.UNKNOWN) return;
-                recordFill(spentCoin, order, size, price, takerBuy, false);
-            });
-            return;
-        }
-        recordFill(spentCoin, order, size, price, takerBuy, true);
-    }
-
     private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
-                            boolean takerBuy, boolean partial) {
+                            boolean takerBuy, boolean partial, String evidence, String note) {
         boolean mine = order.isMine(keys(), addrs());
         boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                 takerBuy, partial, mine);
         if (isNew && mine) {
             db.addMyTrade(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                     !order.sell, true, order.orderId, "", "BOOK", spentCoin, "",
-                    "LOCAL_VERIFIED", partial ? "Partial fill proven by successor order"
-                            : "Full fill verified by payout evidence", chainBlock);
+                    evidence, note, chainBlock);
             toast((partial ? "Partial fill: " : "Filled: ") + PriceMath.fmt(size) + " MINIMA @ "
                     + PriceMath.fmtPrice(price));
             Notifier.fill(this, order.sell, size, price, partial);

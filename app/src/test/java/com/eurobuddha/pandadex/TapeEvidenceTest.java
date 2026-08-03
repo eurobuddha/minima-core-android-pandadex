@@ -26,7 +26,7 @@ public class TapeEvidenceTest {
     private FillTape tape;
     private final List<Object[]> fills = new ArrayList<>();
     private final java.util.Set<String> cancelled = new HashSet<>();
-    private final FillTape.Sink sink = (spent, order, size, price, takerBuy, partial) ->
+    private final FillTape.Sink sink = (spent, order, size, price, takerBuy, partial, sinceBlock) ->
             fills.add(new Object[]{spent, size, price, partial});
 
     @Before public void setUp() {

@@ -23,6 +23,12 @@ phones can trade with each other with nothing in between but the chain.
   book and there is no window where your funds are sitting loose in your wallet.
 - **An honest chart.** Candles, the trades tape, 24h stats and your P&L are all built from
   fills *your node observed on-chain*. Nothing is fetched from an exchange.
+- **Fills are proven, not assumed.** When an order coin vanishes, the app reads the transaction
+  that spent it and takes the verdict from that transaction's outputs — order-linked, and still
+  readable long after the proceeds have been spent onward. Where history cannot answer, payout
+  evidence is adjudicated across the whole scan at once so a single refund coin cannot prove a
+  payment for every other order of the same size. Anything still unproven is dropped: a lost
+  trade is invisible, a phantom one is not.
 
 ## Screens
 

@@ -43,6 +43,8 @@ public class DexKeepAliveService extends Service {
     private MakerConfig makerCfg;
     private MakerEngine maker;
     private FillVerifier verifier;
+    private DexHistory history;
+    private FillSettler settler;
     private KeySet keySet;
     private FillTape tape;
     private boolean started = false;
@@ -62,6 +64,7 @@ public class DexKeepAliveService extends Service {
         makerCfg = new MakerConfig(getApplicationContext());
         maker = new MakerEngine(makerCfg, txn);
         verifier = new FillVerifier(node);
+        history = new DexHistory(node);
         keySet = new KeySet(getApplicationContext(), null);
         // The staleness ceiling must clear OUR polling gap, or every pass re-seeds and this
         // service can never record a fill (nor fire the "order filled" notification).
@@ -69,6 +72,16 @@ public class DexKeepAliveService extends Service {
             @Override public void note(String coinid) { db.noteCancelled(coinid); }
             @Override public boolean consume(String coinid) { return db.wasCancelled(coinid); }
         }, PASS_GAP_MS * 2 + 60_000);
+        // Same three-layer settlement as the Activity — history, then exclusive payout evidence
+        // over the whole scan. Both must agree, or whichever sees a coin vanish first decides.
+        settler = new FillSettler(history, verifier, () -> chainBlock, new FillSettler.Outcome() {
+            @Override public void record(String spentCoin, Order5 order, java.math.BigDecimal size,
+                                         java.math.BigDecimal price, boolean takerBuy,
+                                         boolean partial, String evidence, String note) {
+                recordFill(spentCoin, order, size, price, takerBuy, partial, evidence, note);
+            }
+            @Override public void cancelled(String spentCoin) { db.noteCancelled(spentCoin); }
+        });
         HeartbeatReceiver.schedule(this);
         started = true;
     }
@@ -118,7 +131,7 @@ public class DexKeepAliveService extends Service {
         if (chainBlock <= 0) return;
         BookScanner.scan(node, (orders, truncated, raw) -> {
             if (truncated) return;                     // never act on a failed scan
-            tape.ingest(orders, false, chainBlock, this::onFill);
+            tape.ingest(orders, false, chainBlock, settler);
             if (!keySet.ready()) return;               // never renew on a blind key set
             makerCfg.reload();   // the maker's rungs are its own to renew — see driveMaker
             processor.process(orders, keySet.keys(), keySet.addrs(),
@@ -157,31 +170,15 @@ public class DexKeepAliveService extends Service {
         maker.onBook(orders, keySet.keys(), chainBlock, l);
     }
 
-    private void onFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
-                        boolean takerBuy, boolean partial) {
-        // Same rule as the Activity: a partial is proven by its remainder, a whole coin
-        // vanishing has to be settled against the chain before it becomes a trade.
-        if (!partial) {
-            verifier.verify(order, chainBlock, v -> {
-                if (v == FillVerifier.Verdict.CANCELLED) { db.noteCancelled(spentCoin); return; }
-                if (v == FillVerifier.Verdict.UNKNOWN) return;
-                recordFill(spentCoin, order, size, price, takerBuy, false);
-            });
-            return;
-        }
-        recordFill(spentCoin, order, size, price, takerBuy, true);
-    }
-
     private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
-                            boolean takerBuy, boolean partial) {
+                            boolean takerBuy, boolean partial, String evidence, String note) {
         boolean mine = order.isMine(keySet.keys(), keySet.addrs());
         boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                 takerBuy, partial, mine);
         if (isNew && mine) {
             db.addMyTrade(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                     !order.sell, true, order.orderId, "", "BOOK", spentCoin, "",
-                    "LOCAL_VERIFIED", partial ? "Partial fill proven by successor order"
-                            : "Full fill verified by payout evidence", chainBlock);
+                    evidence, note, chainBlock);
             Notifier.fill(getApplicationContext(), order.sell, size, price, partial);
         }
     }

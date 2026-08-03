@@ -17,7 +17,7 @@ public class FillTapeTest {
 
     private FillTape tape;
     private final List<Object[]> fills = new ArrayList<>();
-    private final FillTape.Sink sink = (spentCoin, order, size, price, takerBuy, partial) ->
+    private final FillTape.Sink sink = (spentCoin, order, size, price, takerBuy, partial, sinceBlock) ->
             fills.add(new Object[]{spentCoin, order.orderId, size, price, takerBuy, partial});
 
     private final java.util.Set<String> cancelled = new java.util.HashSet<>();
