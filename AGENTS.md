@@ -21,9 +21,14 @@ These instructions are project memory for future Codex/agent work in this reposi
 
 ## PandaDEX scope notes
 
-- PandaDEX APK `0.2.19` is the source-of-truth parity target for PandaDEX MDS work unless the user explicitly changes the target.
-- PandaDEX MDS must not include unmandated PandaPools/pool integration.
-- PandaPools is a separate product/repo and must evolve independently from PandaDEX unless the user explicitly asks to merge or integrate behavior.
+- PandaDEX APK `0.3.9` is the source-of-truth parity target for PandaDEX MDS work, **including the
+  PandaPools composite/pool integration**. The user changed the target on 2026-08-02; it was
+  previously `0.2.19` with pool integration explicitly excluded, and the earlier scope cut is what
+  produced the orphaned `preserve-pool-composite-*.patch` in the MDS repo. Do not re-cut it.
+- The composite path remains behind the real-funds gate in `contract/COMPOSITE_LIVE_INTEROP.md`.
+  That test is run by hand on real devices — never from an automated agent session.
+- PandaPools is still a separate product/repo and evolves independently. PandaDEX consuming pool
+  liquidity as a taker is not the same thing as merging the two apps.
 - For UI parity work, match the Android APK layout, flow, detail, wording, validation behavior, and feedback model before designing anything new.
 
 ## PandaPools scope notes
