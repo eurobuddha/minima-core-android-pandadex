@@ -104,6 +104,10 @@ public final class TradeExport {
         public Totals totals;
     }
 
+    interface ExternalVerifier {
+        ExplorerVerifier.Result lookup(String txpowid);
+    }
+
     public static Report build(Snapshot s) {
         Report r = new Report();
         r.tradeCount = s.rows.size();
@@ -116,6 +120,10 @@ public final class TradeExport {
     }
 
     public static Snapshot verifiedCopy(Snapshot s) {
+        return verifiedCopy(s, ExplorerVerifier::lookup);
+    }
+
+    static Snapshot verifiedCopy(Snapshot s, ExternalVerifier verifier) {
         Snapshot out = new Snapshot();
         out.exportedAtMs = s.exportedAtMs;
         out.appVersion = s.appVersion;
@@ -129,17 +137,33 @@ public final class TradeExport {
         out.pendingUsdt = s.pendingUsdt;
         out.lockedUsdt = s.lockedUsdt;
         out.bookMid = s.bookMid;
-        for (TradeRow row : s.rows) out.rows.add(verify(row));
+        for (TradeRow row : s.rows) out.rows.add(verify(row, verifier));
         return out;
     }
 
-    private static TradeRow verify(TradeRow row) {
+    private static TradeRow verify(TradeRow row, ExternalVerifier verifier) {
         if (row.txpowid == null || row.txpowid.isEmpty()) return row;
-        ExplorerVerifier.Result v = ExplorerVerifier.lookup(row.txpowid);
+        ExplorerVerifier.Result v = verifier == null ? null : verifier.lookup(row.txpowid);
+        if (v == null) return row;
         long block = v.block > 0 ? v.block : row.verifiedBlock;
+        boolean externalOk = v.block > 0 && "EXPLORER_OK".equals(v.status);
+        String baseStatus = row.verificationStatus == null || row.verificationStatus.isEmpty()
+                ? "LOCAL_ONLY" : row.verificationStatus;
+        String status = externalOk ? baseStatus + "+EXPLORER_OK" : baseStatus;
+        String note = externalOk
+                ? appendNote(row.verificationNote, v.note)
+                : appendNote(row.verificationNote,
+                        "Public explorer unavailable; retained PandaDEX local/node verification"
+                                + (v.note == null || v.note.isEmpty() ? "" : " (" + v.note + ")"));
         return new TradeRow(row.spentCoin, row.timeMs, row.block, row.price, row.sizeMinima,
                 row.buy, row.maker, row.orderId, row.txpowid, row.sourceKind, row.sourceCoinids,
-                row.proceedsCoinid, v.status, v.note, block);
+                row.proceedsCoinid, status, note, block);
+    }
+
+    private static String appendNote(String a, String b) {
+        if (a == null || a.isEmpty()) return b == null ? "" : b;
+        if (b == null || b.isEmpty()) return a;
+        return a + " | " + b;
     }
 
     private static Totals totals(Snapshot s) {
@@ -170,7 +194,7 @@ public final class TradeExport {
         StringBuilder sb = new StringBuilder();
         sb.append("timestamp_utc,block,spent_coin,side,role,source_kind,minima_delta,mxusdt_delta,"
                 + "minima_amount,price,mxusdt_notional,order_id,txpowid,source_coinids,"
-                + "proceeds_coinid,verification_status,verified_block,verification_note,explorer_url\n");
+                + "proceeds_coinid,verification_status,verified_block,verification_note,explorer_url,block_explorer_url\n");
         for (TradeRow row : s.rows) {
             BigDecimal notional = usdtNotional(row);
             BigDecimal md = row.buy ? row.sizeMinima : row.sizeMinima.negate();
@@ -193,7 +217,8 @@ public final class TradeExport {
                     .append(csv(row.verificationStatus)).append(',')
                     .append(row.verifiedBlock).append(',')
                     .append(csv(row.verificationNote)).append(',')
-                    .append(csv(explorerUrl(row.txpowid))).append('\n');
+                    .append(csv(explorerUrl(row.txpowid))).append(',')
+                    .append(csv(blockUrl(row.txpowid))).append('\n');
         }
         return sb.toString();
     }
@@ -223,7 +248,7 @@ public final class TradeExport {
 
     private static String verificationCsv(Snapshot s) {
         StringBuilder sb = new StringBuilder();
-        sb.append("timestamp_utc,spent_coin,txpowid,source_kind,verification_status,verified_block,note,explorer_url\n");
+        sb.append("timestamp_utc,spent_coin,txpowid,source_kind,verification_status,verified_block,note,explorer_url,block_explorer_url\n");
         for (TradeRow row : s.rows) {
             sb.append(csv(utc(row.timeMs))).append(',')
                     .append(csv(row.spentCoin)).append(',')
@@ -232,7 +257,8 @@ public final class TradeExport {
                     .append(csv(row.verificationStatus)).append(',')
                     .append(row.verifiedBlock).append(',')
                     .append(csv(row.verificationNote)).append(',')
-                    .append(csv(explorerUrl(row.txpowid))).append('\n');
+                    .append(csv(explorerUrl(row.txpowid))).append(',')
+                    .append(csv(blockUrl(row.txpowid))).append('\n');
         }
         return sb.toString();
     }
@@ -299,6 +325,11 @@ public final class TradeExport {
     private static String explorerUrl(String txpowid) {
         if (txpowid == null || txpowid.isEmpty()) return "";
         return "https://explorer.minima.global/transactions/" + txpowid;
+    }
+
+    private static String blockUrl(String txpowid) {
+        if (txpowid == null || txpowid.isEmpty()) return "";
+        return "https://block.minima.global/transactions/" + txpowid;
     }
 
     private static String utc(long ms) {

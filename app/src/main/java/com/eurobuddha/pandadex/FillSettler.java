@@ -33,7 +33,7 @@ public final class FillSettler implements FillTape.Sink {
      *  carries the strength of the proof behind it, not just the fact of it. */
     public interface Outcome {
         void record(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
-                    boolean takerBuy, boolean partial, String evidence, String note);
+                    boolean takerBuy, boolean partial, String txpowid, String evidence, String note);
         /** Settled as a cancellation — never adjudicate this coin again. */
         void cancelled(String spentCoin);
     }
@@ -69,7 +69,7 @@ public final class FillSettler implements FillTape.Sink {
     @Override public void onFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
                                  boolean takerBuy, boolean partial, long sinceBlock) {
         if (partial) {
-            outcome.record(spentCoin, order, size, price, takerBuy, true, LOCAL_VERIFIED, NOTE_PARTIAL);
+            outcome.record(spentCoin, order, size, price, takerBuy, true, "", LOCAL_VERIFIED, NOTE_PARTIAL);
             return;
         }
         buffer.add(new Vanish(spentCoin, order, size, price, takerBuy, sinceBlock));
@@ -89,29 +89,35 @@ public final class FillSettler implements FillTape.Sink {
         history.findSpends(coinids, found -> {
             List<FillVerifier.Item> unresolved = new ArrayList<>();
             Map<String, FillVerifier.Verdict> decided = new HashMap<>();
+            Map<String, String> chainTxpow = new HashMap<>();
             for (Vanish v : batch) {
                 DexHistory.Spend spend = found.get(v.coinid);
                 FillVerifier.Verdict verdict = spend == null
-                        ? null : DexHistory.verdictFor(spend.outputs, v.order);
-                if (verdict != null) decided.put(v.coinid, verdict);
+                        ? null : DexHistory.verdictFor(spend, v.order);
+                if (verdict != null) {
+                    decided.put(v.coinid, verdict);
+                    chainTxpow.put(v.coinid, spend.txpowid);
+                }
                 else unresolved.add(new FillVerifier.Item(v.coinid, v.order, v.since));
             }
-            if (unresolved.isEmpty()) { apply(batch, decided, found); return; }
+            if (unresolved.isEmpty()) { apply(batch, decided, chainTxpow); return; }
             verifier.verifyBatch(unresolved, seenBlock, verdicts -> {
                 decided.putAll(verdicts);
-                apply(batch, decided, found);
+                apply(batch, decided, chainTxpow);
             });
         });
     }
 
     private void apply(List<Vanish> batch, Map<String, FillVerifier.Verdict> verdicts,
-                       Map<String, DexHistory.Spend> found) {
+                       Map<String, String> chainTxpow) {
         for (Vanish v : batch) {
             FillVerifier.Verdict verdict = verdicts.get(v.coinid);
             if (verdict == FillVerifier.Verdict.CANCELLED) { outcome.cancelled(v.coinid); continue; }
             if (verdict != FillVerifier.Verdict.FILLED) continue;      // UNKNOWN is never recorded
-            boolean fromChain = found.containsKey(v.coinid);
+            String txpowid = chainTxpow.get(v.coinid);
+            boolean fromChain = txpowid != null;
             outcome.record(v.coinid, v.order, v.size, v.price, v.takerBuy, false,
+                    txpowid == null ? "" : txpowid,
                     fromChain ? CHAIN_VERIFIED : LOCAL_VERIFIED,
                     fromChain ? NOTE_HISTORY : NOTE_PAYOUT);
         }

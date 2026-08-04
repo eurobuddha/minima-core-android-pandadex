@@ -108,6 +108,9 @@ public class MainActivity extends AppCompatActivity {
     private int minimaCoins = 0, usdtCoins = 0;
     private long minimaBalanceAtMs = 0, usdtBalanceAtMs = 0;
     private String receiveAddr = "";
+    private boolean makerSplitPending = false;
+    private String makerSplitPendingToken = "";
+    private long makerSplitPendingBlock = 0;
 
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
@@ -159,8 +162,8 @@ public class MainActivity extends AppCompatActivity {
         settler = new FillSettler(history, verifier, () -> chainBlock, new FillSettler.Outcome() {
             @Override public void record(String spentCoin, Order5 order, BigDecimal size,
                                          BigDecimal price, boolean takerBuy, boolean partial,
-                                         String evidence, String note) {
-                recordFill(spentCoin, order, size, price, takerBuy, partial, evidence, note);
+                                         String txpowid, String evidence, String note) {
+                recordFill(spentCoin, order, size, price, takerBuy, partial, txpowid, evidence, note);
             }
             @Override public void cancelled(String spentCoin) { db.noteCancelled(spentCoin); }
         });
@@ -596,6 +599,7 @@ public class MainActivity extends AppCompatActivity {
                 minimaUnconfirmed = b.unconfirmed;
                 minimaCoins = b.coins;
                 minimaBalanceAtMs = b.atMs;
+                maybeClearMakerSplitPending(Util.MINIMA_TOKENID, b);
                 repaint();
             }
             @Override public void onError(String message) {}
@@ -608,6 +612,7 @@ public class MainActivity extends AppCompatActivity {
                 usdtUnconfirmed = b.unconfirmed;
                 usdtCoins = b.coins;
                 usdtBalanceAtMs = b.atMs;
+                maybeClearMakerSplitPending(DexContract.USDT_ID, b);
                 repaint();
             }
             @Override public void onError(String message) {}
@@ -644,6 +649,17 @@ public class MainActivity extends AppCompatActivity {
         out.coins = row.optInt("coins", row.optInt("coinamount", 0));
         out.atMs = System.currentTimeMillis();
         return out;
+    }
+
+    private void maybeClearMakerSplitPending(String tokenid, BalanceMeta b) {
+        if (!makerSplitPending || tokenid == null || !tokenid.equalsIgnoreCase(makerSplitPendingToken)) return;
+        if (chainBlock <= makerSplitPendingBlock) return;
+        if (b != null && b.sendable.signum() > 0 && b.coins >= SelfSplit.COUNT) {
+            makerSplitPending = false;
+            makerSplitPendingToken = "";
+            makerSplitPendingBlock = 0;
+            setStage("Funding split confirmed — maker funds are sendable.");
+        }
     }
 
     // ------------------------------------------------------------------ actions
@@ -1271,6 +1287,15 @@ public class MainActivity extends AppCompatActivity {
     /** Publish the ladder — after an affordability check and showing what will be committed. */
     public void publishMaker(java.util.List<MakerLadder.Slot> desired, boolean pegged) {
         if (!ready()) return;
+        if (makerSplitPending) {
+            new AlertDialog.Builder(this, Design.dialogTheme())
+                    .setTitle("Funding split is confirming")
+                    .setMessage("Wait for the next block and balance refresh before publishing. "
+                            + "The split outputs are not spendable yet.")
+                    .setPositiveButton("OK", null)
+                    .show();
+            return;
+        }
         if (desired == null || desired.isEmpty()) {
             toast("No rungs to publish — set a price and size first");
             return;
@@ -1357,7 +1382,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (sb.length() == 0) return "";
         return sb.append("\nUse split:").append(SelfSplit.COUNT)
-                .append(" first if you want more funding coins before publishing.").toString();
+                .append(" first to prepare funding coins, then wait for them to confirm before publishing.").toString();
     }
 
     /** Split either side's sendable wallet balance into ten self-pay coins before publishing. */
@@ -1398,12 +1423,14 @@ public class MainActivity extends AppCompatActivity {
             postMakerSelfSplit(tokenid, label, amount, receiveAddr);
             return;
         }
+        busy = true;
         setStage("Fetching your wallet address...");
         node.cmd("getaddress", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 JSONObject r = json.optJSONObject("response");
                 String addr = r == null ? "" : r.optString("miniaddress", r.optString("address", ""));
                 if (addr.isEmpty()) {
+                    busy = false;
                     setStage("Split failed - could not get your wallet address");
                     toast("Could not get your wallet address");
                     return;
@@ -1412,6 +1439,7 @@ public class MainActivity extends AppCompatActivity {
                 postMakerSelfSplit(tokenid, label, amount, addr);
             }
             @Override public void onError(String message) {
+                busy = false;
                 setStage("Split failed - " + message);
                 toast("Split failed: " + message);
             }
@@ -1423,6 +1451,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             cmd = SelfSplit.command(address, tokenid, amount);
         } catch (Throwable t) {
+            busy = false;
             toast("Could not build split command");
             return;
         }
@@ -1432,12 +1461,16 @@ public class MainActivity extends AppCompatActivity {
         SignGate.submit(gate -> node.cmd(cmd, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 gate.free();
-                busy = false;
                 if (json.optBoolean("status", false) || json.optBoolean("pending", false)) {
+                    makerSplitPending = true;
+                    makerSplitPendingToken = tokenid;
+                    makerSplitPendingBlock = chainBlock;
+                    busy = false;
                     setStage(label + " split posted - wait for the next block, then publish.");
                     toast(label + " split posted");
                     poll(false);
                 } else {
+                    busy = false;
                     String msg = nodeReplyMessage(json, "split failed");
                     setStage("Split failed - " + msg);
                     toast("Split failed: " + msg);
@@ -1578,13 +1611,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
-                            boolean takerBuy, boolean partial, String evidence, String note) {
+                            boolean takerBuy, boolean partial, String txpowid, String evidence, String note) {
         boolean mine = order.isMine(keys(), addrs());
         boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                 takerBuy, partial, mine);
         if (isNew && mine) {
             db.addMyTrade(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
-                    !order.sell, true, order.orderId, "", "BOOK", spentCoin, "",
+                    !order.sell, true, order.orderId, txpowid, "BOOK", spentCoin, "",
                     evidence, note, chainBlock);
             toast((partial ? "Partial fill: " : "Filled: ") + PriceMath.fmt(size) + " MINIMA @ "
                     + PriceMath.fmtPrice(price));

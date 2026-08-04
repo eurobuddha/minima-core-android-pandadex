@@ -54,9 +54,11 @@ public final class DexHistory {
     /** The transaction that spent an order coin, and what it paid out. */
     public static final class Spend {
         public final String txpowid;
+        public final int inputIndex;
         public final JSONArray outputs;
-        Spend(String txpowid, JSONArray outputs) {
+        Spend(String txpowid, int inputIndex, JSONArray outputs) {
             this.txpowid = txpowid == null ? "" : txpowid;
+            this.inputIndex = inputIndex;
             this.outputs = outputs == null ? new JSONArray() : outputs;
         }
     }
@@ -128,7 +130,7 @@ public final class DexHistory {
                     JSONObject in = ins.optJSONObject(k);
                     String id = in == null ? "" : in.optString("coinid", "");
                     if (!id.isEmpty() && wanted.remove(id)) {
-                        found.put(id, new Spend(tx.optString("txpowid", ""), outs));
+                        found.put(id, new Spend(tx.optString("txpowid", ""), k, outs));
                     }
                 }
             }
@@ -176,18 +178,30 @@ public final class DexHistory {
      * Given the spending transaction's outputs, what happened to this order?
      * Returns null when the outputs say neither — the caller then falls back to payout evidence.
      */
+    static FillVerifier.Verdict verdictFor(Spend spend, Order5 o) {
+        if (spend == null || o == null) return null;
+        if (spend.inputIndex < 0 || spend.inputIndex >= spend.outputs.length()) return null;
+        return verdictForOutput(spend.outputs.optJSONObject(spend.inputIndex), o);
+    }
+
     static FillVerifier.Verdict verdictFor(JSONArray outputs, Order5 o) {
         if (outputs == null || o == null) return null;
         for (int i = 0; i < outputs.length(); i++) {
             JSONObject out = outputs.optJSONObject(i);
-            if (!paysTo(out, o.wantAddr)) continue;
-            String tok = out.optString("tokenid", "0x00");
-            BigDecimal val = value(out);
-            // the taker paid the maker what the order asked for
-            if (sameToken(tok, o.wantTok) && val.compareTo(o.wantAmt) == 0) return FillVerifier.Verdict.FILLED;
-            // the owner took their own funds back
-            if (sameToken(tok, o.lockedTok) && val.compareTo(o.locked) == 0) return FillVerifier.Verdict.CANCELLED;
+            FillVerifier.Verdict v = verdictForOutput(out, o);
+            if (v != null) return v;
         }
+        return null;
+    }
+
+    static FillVerifier.Verdict verdictForOutput(JSONObject out, Order5 o) {
+        if (!paysTo(out, o.wantAddr)) return null;
+        String tok = out.optString("tokenid", "0x00");
+        BigDecimal val = value(out);
+        // the taker paid the maker what the order asked for
+        if (sameToken(tok, o.wantTok) && val.compareTo(o.wantAmt) == 0) return FillVerifier.Verdict.FILLED;
+        // the owner took their own funds back
+        if (sameToken(tok, o.lockedTok) && val.compareTo(o.locked) == 0) return FillVerifier.Verdict.CANCELLED;
         return null;
     }
 }

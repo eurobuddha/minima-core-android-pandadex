@@ -60,4 +60,38 @@ public class TradeExportTest {
         assertTrue(r.verificationCsv.contains("\"LOCAL_VERIFIED\""));
         assertTrue(r.verificationCsv.contains("\"POOL\""));
     }
+
+    @Test public void publicExplorerFailureDoesNotDowngradeLocalVerification() {
+        TradeExport.Snapshot s = new TradeExport.Snapshot();
+        s.rows.add(new TradeExport.TradeRow("0xCHAIN", 1_700_000_001_000L, 100,
+                new BigDecimal("0.01000000"), new BigDecimal("10"), true, true, "0xORD",
+                "0xTX", "BOOK", "0xCHAIN", "", "CHAIN_VERIFIED", "node history proof", 100));
+        ExplorerVerifier.Result unavailable = new ExplorerVerifier.Result();
+        unavailable.status = "EXPLORER_UNAVAILABLE";
+        unavailable.note = "service down";
+
+        TradeExport.Report r = TradeExport.build(TradeExport.verifiedCopy(s, txpowid -> unavailable));
+
+        assertTrue(r.verificationCsv.contains("\"CHAIN_VERIFIED\""));
+        assertTrue(r.verificationCsv.contains("retained PandaDEX local/node verification"));
+        assertTrue(r.verificationCsv.contains("https://explorer.minima.global/transactions/0xTX"));
+        assertTrue(r.verificationCsv.contains("https://block.minima.global/transactions/0xTX"));
+    }
+
+    @Test public void publicExplorerSuccessCorroboratesRatherThanReplacesLocalVerification() {
+        TradeExport.Snapshot s = new TradeExport.Snapshot();
+        s.rows.add(new TradeExport.TradeRow("0xCHAIN", 1_700_000_001_000L, 100,
+                new BigDecimal("0.01000000"), new BigDecimal("10"), true, true, "0xORD",
+                "0xTX", "BOOK", "0xCHAIN", "", "CHAIN_VERIFIED", "node history proof", 100));
+        ExplorerVerifier.Result ok = new ExplorerVerifier.Result();
+        ok.status = "EXPLORER_OK";
+        ok.block = 123;
+        ok.note = "TxPoW found";
+
+        TradeExport.Report r = TradeExport.build(TradeExport.verifiedCopy(s, txpowid -> ok));
+
+        assertTrue(r.verificationCsv.contains("\"CHAIN_VERIFIED+EXPLORER_OK\""));
+        assertTrue(r.verificationCsv.contains(",123,"));
+        assertTrue(r.verificationCsv.contains("node history proof | TxPoW found"));
+    }
 }

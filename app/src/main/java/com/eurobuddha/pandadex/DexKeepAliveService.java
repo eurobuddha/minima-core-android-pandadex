@@ -77,8 +77,8 @@ public class DexKeepAliveService extends Service {
         settler = new FillSettler(history, verifier, () -> chainBlock, new FillSettler.Outcome() {
             @Override public void record(String spentCoin, Order5 order, java.math.BigDecimal size,
                                          java.math.BigDecimal price, boolean takerBuy,
-                                         boolean partial, String evidence, String note) {
-                recordFill(spentCoin, order, size, price, takerBuy, partial, evidence, note);
+                                         boolean partial, String txpowid, String evidence, String note) {
+                recordFill(spentCoin, order, size, price, takerBuy, partial, txpowid, evidence, note);
             }
             @Override public void cancelled(String spentCoin) { db.noteCancelled(spentCoin); }
         });
@@ -171,13 +171,13 @@ public class DexKeepAliveService extends Service {
     }
 
     private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
-                            boolean takerBuy, boolean partial, String evidence, String note) {
+                            boolean takerBuy, boolean partial, String txpowid, String evidence, String note) {
         boolean mine = order.isMine(keySet.keys(), keySet.addrs());
         boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
                 takerBuy, partial, mine);
         if (isNew && mine) {
             db.addMyTrade(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
-                    !order.sell, true, order.orderId, "", "BOOK", spentCoin, "",
+                    !order.sell, true, order.orderId, txpowid, "BOOK", spentCoin, "",
                     evidence, note, chainBlock);
             Notifier.fill(getApplicationContext(), order.sell, size, price, partial);
         }

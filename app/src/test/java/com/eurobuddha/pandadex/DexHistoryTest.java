@@ -34,19 +34,30 @@ public class DexHistoryTest {
 
     /** A resting SELL: 300 MINIMA locked, wanting 15.45 mxUSDT. */
     private static Order5 sellOrder() {
+        return order("0xC1", "300", "0x00", "15.45", DexContract.USDT_ID, true);
+    }
+
+    /** A resting BUY: 15.45 mxUSDT locked, wanting 300 MINIMA. */
+    private static Order5 buyOrder(String coinid) {
+        return order(coinid, "15.45", DexContract.USDT_ID, "300", "0x00", false);
+    }
+
+    private static Order5 order(String coinid, String locked, String lockedTok,
+                                String want, String wantTok, boolean sell) {
         try {
             JSONObject c = new JSONObject();
-            c.put("coinid", "0xC1");
-            c.put("amount", "300");
-            c.put("tokenid", "0x00");
+            c.put("coinid", coinid);
+            c.put("tokenid", lockedTok);
+            if ("0x00".equals(lockedTok)) c.put("amount", locked);
+            else { c.put("amount", "0.000001"); c.put("tokenamount", locked); }
             c.put("created", 100);
             JSONObject st = new JSONObject();
             st.put("0", "0xMAKER");
             st.put("1", PAYOUT);
-            st.put("2", "15.45");
-            st.put("3", DexContract.USDT_ID);
+            st.put("2", want);
+            st.put("3", wantTok);
             st.put("4", "0xORD");
-            st.put("5", "1");
+            st.put("5", sell ? "1" : "0");
             st.put("6", "0.0515");
             st.put("7", "1");
             st.put("8", "1");
@@ -102,7 +113,7 @@ public class DexHistoryTest {
 
     @Test public void noOutputsMeansNoVerdictRatherThanAGuess() {
         assertNull(DexHistory.verdictFor(new JSONArray(), sellOrder()));
-        assertNull(DexHistory.verdictFor(null, sellOrder()));
+        assertNull(DexHistory.verdictFor((JSONArray) null, sellOrder()));
     }
 
     /** Token coins carry the scaled figure in `tokenamount`; reading `amount` would compare the
@@ -122,11 +133,19 @@ public class DexHistoryTest {
     // ---------------------------------------------------------------- paging
 
     private static JSONObject txpow(String txpowid, String spentCoin, JSONArray outputs) {
+        return txpow(txpowid, new String[]{spentCoin}, outputs);
+    }
+
+    private static JSONObject txpow(String txpowid, String[] spentCoins, JSONArray outputs) {
         try {
-            JSONObject in = new JSONObject();
-            in.put("coinid", spentCoin);
+            JSONArray ins = new JSONArray();
+            for (String spentCoin : spentCoins) {
+                JSONObject in = new JSONObject();
+                in.put("coinid", spentCoin);
+                ins.put(in);
+            }
             JSONObject txn = new JSONObject();
-            txn.put("inputs", new JSONArray().put(in));
+            txn.put("inputs", ins);
             txn.put("outputs", outputs == null ? new JSONArray() : outputs);
             JSONObject body = new JSONObject();
             body.put("txn", txn);
@@ -165,9 +184,28 @@ public class DexHistoryTest {
 
         assertEquals(1, got[0].size());
         assertEquals("0xTX", got[0].get("0xC1").txpowid);
+        assertEquals(0, got[0].get("0xC1").inputIndex);
         assertEquals("one page was enough — it must not keep walking", 1, issued.size());
         assertEquals(FillVerifier.Verdict.CANCELLED,
-                DexHistory.verdictFor(got[0].get("0xC1").outputs, sellOrder()));
+                DexHistory.verdictFor(got[0].get("0xC1"), sellOrder()));
+    }
+
+    @Test public void spendingHistoryUsesTheMatchedInputOutputIndex() {
+        DexHistory h = new DexHistory((command, cb) -> cb.onResult(page(txpow("0xTX",
+                new String[]{"0xASK", "0xBID"},
+                outs(out(PAYOUT, "0x00", "300", null),
+                     out(PAYOUT, DexContract.USDT_ID, "0.0000001545", "15.45"))))));
+
+        final Map<String, DexHistory.Spend>[] got = new Map[1];
+        h.findSpends(Arrays.asList("0xASK", "0xBID"), found -> got[0] = found);
+
+        Order5 ask = order("0xASK", "300", "0x00", "15.45", DexContract.USDT_ID, true);
+        Order5 bid = buyOrder("0xBID");
+        assertEquals(0, got[0].get("0xASK").inputIndex);
+        assertEquals(1, got[0].get("0xBID").inputIndex);
+        assertEquals(FillVerifier.Verdict.CANCELLED, DexHistory.verdictFor(got[0].get("0xASK"), ask));
+        assertEquals("the ask refund at output 0 must not prove the bid was filled",
+                FillVerifier.Verdict.CANCELLED, DexHistory.verdictFor(got[0].get("0xBID"), bid));
     }
 
     @Test public void asksForNothingWhenThereIsNothingToAskAbout() {

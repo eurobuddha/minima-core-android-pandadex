@@ -60,9 +60,13 @@ public final class FillVerifier {
     /** What the chain says happened to a vanished order coin. */
     public enum Verdict { CANCELLED, FILLED, UNKNOWN }
 
-    private final NodeApi node;
+    interface Cmd { void run(String command, NodeApi.Cb cb); }
 
-    public FillVerifier(NodeApi node) { this.node = node; }
+    private final Cmd cmd;
+
+    public FillVerifier(NodeApi node) { this.cmd = node::cmd; }
+
+    FillVerifier(Cmd cmd) { this.cmd = cmd; }
 
     /** One vanished order awaiting a verdict. {@code since} is the last block it was seen alive. */
     public static final class Item {
@@ -94,7 +98,7 @@ public final class FillVerifier {
     private void fetch(List<String> addrs, int idx, Map<String, JSONArray> out, Runnable done) {
         if (idx >= addrs.size()) { done.run(); return; }
         String addr = addrs.get(idx);
-        node.cmd("coins simplestate:true address:" + addr + " coinage:0 depth:" + EVIDENCE_BLOCKS,
+        cmd.run("coins simplestate:true address:" + addr + " coinage:0 depth:" + EVIDENCE_BLOCKS,
                 new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 Object resp = json == null ? null : json.opt("response");
