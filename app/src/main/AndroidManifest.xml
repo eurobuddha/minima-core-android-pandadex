@@ -25,8 +25,15 @@
         <package android:name="org.minimarex.minimacore" />
     </queries>
 
+    <!-- allowBackup=false is a FUND-SAFETY setting here, not a preference. With the scaffold default
+         (true + empty rules) Android Auto Backup uploaded this app's whole data directory to the user's
+         cloud and RESTORED it on reinstall — which both exfiltrates the data below and re-plants state a
+         reinstall is supposed to clear. A reinstall must be a true reset.
+         At stake: pandadex_keys → node_keys/node_addrs, the wallet ownership set that decides "is this order mine".
+         Restored onto a different node it mis-answers in both directions: starving your own rungs, or filing
+         a stranger's fills as yours. Live maker slots and pending orders would be re-planted too -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
