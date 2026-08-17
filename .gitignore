@@ -21,3 +21,6 @@ __pycache__/
 graphify-out/
 .claude/
 contract/phaseB_state.json
+
+# Built APKs live in the minima-core-apks catalog + GitHub Releases
+*.apk
