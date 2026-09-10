@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MakerPreparedIdentityTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-10T18:31:03" hostname="ProMacBuddha.local" time="0.021">
+  <properties/>
+  <testcase name="existingPreparedIntentCannotBeReplacedEvenByFreshWriter" classname="com.eurobuddha.pandadex.MakerPreparedIdentityTest" time="0.011"/>
+  <testcase name="acceptedCreateRetainsDifferentIntentAndItsOwnAcceptedSlot" classname="com.eurobuddha.pandadex.MakerPreparedIdentityTest" time="0.005"/>
+  <testcase name="finishedMakerCallbackCannotPrepareOrAuthorizeAgain" classname="com.eurobuddha.pandadex.MakerPreparedIdentityTest" time="0.001"/>
+  <testcase name="matchingAcceptanceAtomicallyReplacesPreparedIntentWithAcceptedSlot" classname="com.eurobuddha.pandadex.MakerPreparedIdentityTest" time="0.001"/>
+  <testcase name="failedAcceptanceCommitNeverLosesBothPreparedAndAcceptedIdentity" classname="com.eurobuddha.pandadex.MakerPreparedIdentityTest" time="0.002"/>
+  <testcase name="failureBeforeOwnPreparationCannotClearDifferentIntent" classname="com.eurobuddha.pandadex.MakerPreparedIdentityTest" time="0.0"/>
+  <testcase name="matchingFailureClearsOnlyItsOwnPreparedIdentity" classname="com.eurobuddha.pandadex.MakerPreparedIdentityTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -376,10 +376,12 @@ public final class MakerEngine {
         final boolean[] advanced = {false};
         DexTxn.Result once = new DexTxn.Result() {
             @Override public boolean beforePost() {
+                if(advanced[0])return false;
                 cfg.reload();
                 return quoteGuard.allows(cfg,a);
             }
             @Override public boolean onPrepared(String handle) {
+                if(advanced[0])return false;
                 cfg.reload();
                 if(!quoteGuard.allows(cfg,a))return false;
                 return a.kind != MakerLadder.Kind.CREATE
@@ -393,7 +395,9 @@ public final class MakerEngine {
                 cfg.reload();
                 switch (a.kind) {
                     case CREATE:
-                        cfg.preparedCreate = "";
+                        // Reuse Pending's identity-scoped cleanup: retain another intent.
+                        // Clear and accepted-slot recording remain in the same save below.
+                        if(createOid.equals(cfg.preparedOrderId()))cfg.preparedCreate = "";
                         cfg.rememberSlot(a.slot.id, createOid, a.slot.sizeMinima, chainBlock,
                                 DexTxn.orderLockedAmount(!a.slot.sell,a.slot.sizeMinima,a.slot.price),
                                 a.slot.sell?Util.MINIMA_TOKENID:DexContract.USDT_ID);
@@ -424,7 +428,9 @@ public final class MakerEngine {
                     if (l != null) notifyState(l, "Maker paused: " + message);
                     working = false; drainIdle(); return;
                 }
-                if (a.kind == MakerLadder.Kind.CREATE) { cfg.preparedCreate = ""; cfg.save(); }
+                if (a.kind == MakerLadder.Kind.CREATE && createOid.equals(cfg.preparedOrderId())) {
+                    cfg.preparedCreate = ""; cfg.save();
+                }
                 // one rung failing must not stall the rest — the next cycle retries it
                 if (l != null) notifyState(l, "Maker: " + a.kind + " failed — " + message);
                 run(actions, idx + 1, mid, posted, chainBlock, l, quoteGuard);

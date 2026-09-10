@@ -134,6 +134,9 @@ public final class MakerConfig {
     private boolean prepareCreateLocked(String slot,String orderId,BigDecimal size,long block,BigDecimal locked,String token) {
         try {
             if(!canWrite())return false;
+            // One unresolved create owns this journal until its outcome or withdrawal.
+            // A fresh/reloaded writer must not replace a different acknowledged intent.
+            if(!preparedCreate.isEmpty())return false;
             String data = new JSONObject().put("slot", slot).put("id", orderId)
                     .put("size", size.toPlainString()).put("block", block)
                     .put("locked",locked==null?"":locked.toPlainString()).put("lock_token",token).toString();
