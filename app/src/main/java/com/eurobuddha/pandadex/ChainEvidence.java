@@ -29,6 +29,12 @@ final class ChainEvidence {
         } catch (Exception invalid) { return 0; }
     }
 
+    /** A failed or malformed stock `block` reply is not a usable chain tip. */
+    static long tipBlock(JSONObject reply) {
+        return TxValidation.truthy(reply, "status")
+                ? positiveLong(reply.optJSONObject("response"), "block") : 0;
+    }
+
     static long inclusionBlock(JSONObject inclusion) {
         return confirmationDepth(inclusion) < 0 ? 0 : positiveLong(inclusion.optJSONObject("response"), "block");
     }

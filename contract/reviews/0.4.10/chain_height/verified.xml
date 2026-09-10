@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.ChainHeightTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-10T19:56:49" hostname="ProMacBuddha.local" time="0.013">
+  <properties/>
+  <testcase name="validTipsPreserveExactLongValuesIncludingDecreasingHeights" classname="com.eurobuddha.pandadex.ChainHeightTest" time="0.003"/>
+  <testcase name="failedRepliesCannotSupplyEvenAValidLookingTip" classname="com.eurobuddha.pandadex.ChainHeightTest" time="0.0"/>
+  <testcase name="validCreationHeightsPreserveExpiryBoundaries" classname="com.eurobuddha.pandadex.ChainHeightTest" time="0.008"/>
+  <testcase name="missingAndWrongShapeRepliesStayUnknown" classname="com.eurobuddha.pandadex.ChainHeightTest" time="0.0"/>
+  <testcase name="malformedCreationHeightsStayUnknown" classname="com.eurobuddha.pandadex.ChainHeightTest" time="0.001"/>
+  <testcase name="badTipNumbersCannotTruncateWrapOrUseExponentNotation" classname="com.eurobuddha.pandadex.ChainHeightTest" time="0.0"/>
+  <testcase name="fractionalCreationHeightCannotInventAnExpiredOrder" classname="com.eurobuddha.pandadex.ChainHeightTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

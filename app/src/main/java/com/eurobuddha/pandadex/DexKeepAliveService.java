@@ -164,9 +164,9 @@ public class DexKeepAliveService extends Service {
     private void readBlockThenBook(Object attempt) {
         node.cmd("block", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
-                JSONObject r = json.optJSONObject("response");
-                if (!json.optBoolean("status", false) || r == null || !currentPass(attempt)) return;
-                if (r != null) chainBlock = Util.dec(r.optString("block", "0")).longValue();
+                long tip = ChainEvidence.tipBlock(json);
+                if (tip <= 0 || !currentPass(attempt)) return;
+                chainBlock = tip;
                 txn.setChainBlock(chainBlock);
                 scanBook(attempt);
             }

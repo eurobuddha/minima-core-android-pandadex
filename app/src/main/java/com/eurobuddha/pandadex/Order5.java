@@ -80,7 +80,7 @@ public final class Order5 {
             boolean gtc = "1".equals(st[7]);
             BigDecimal minRem = Util.decOr(st[8], null);
             if (minRem == null) return null;
-            long created = coin.optLong("created", 0);
+            long created = ChainEvidence.positiveLong(coin, "created");
             String wantTok = st[3] == null ? "0x00" : st[3];
             Order5 order = new Order5(coinid, st[0], st[1], want, wantTok, st[4], sell, gtc, minRem,
                     locked, tokenid, created);

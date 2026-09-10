@@ -640,8 +640,9 @@ public class MainActivity extends AppCompatActivity {
         // first. Your own order must never appear on someone else's device before yours.
         node.cmd("block", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
-                JSONObject r = json.optJSONObject("response");
-                if (r != null) chainBlock = Util.dec(r.optString("block", "0")).longValue();
+                long tip = ChainEvidence.tipBlock(json);
+                if (tip <= 0) return; // Retain the last valid observation; never coerce bad data into a height.
+                chainBlock = tip;
                 if (repo != null) repo.setChainBlock(chainBlock);
                 if (txn != null) txn.setChainBlock(chainBlock);
                 repaint();

@@ -1,0 +1,7 @@
+# Audit38 — chain-height callbacks
+
+1,012 assertions pass: 837 component +16 before deliberate process death +31 recovery +128 full Activity. Reuses audit37 unchanged except uniquely numbered artifacts and the new height callback fixtures. Tests execute the real MainActivity polling callback and DexKeepAliveService block callback with locally scripted replies: invalid/failed replies preserve prior observations and cannot start watcher book/upkeep work, while valid replies reach transaction context and the watcher scan. The Activity accepts a lower valid tip, so reorgs are not artificially forced monotonic.
+
+No INTERNET permission; MinimaCore is absent. Scripted callbacks are not stock-node integration. The production service is instantiated as a component fixture, not started as a foreground service; Samsung/Doze coverage remains open. No transaction was signed or posted. APK38 is a separate audit package and uniquely versioned artifact, not a release candidate.
+
+APK `/private/tmp/pandadex-android-audit-build-38/pandadex-export-audit-38.apk`, SHA-256 `622024dcf86ea1bfec1473f5d3c62b283346c7e0116615ba3ba7ce7c513a116c`. Production Java hashes matched at build and execution. Earlier APKs are preserved. Exact owned emulator/AVD checks preceded isolated ADB5049 access; cleanup stopped the emulator/server and removed its data/keys. Screenshots and the reconciliation ZIP remain in the temporary evidence directory; no new visual approval is claimed. Archived text logs only normalize trailing whitespace.
