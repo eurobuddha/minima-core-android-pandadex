@@ -648,7 +648,8 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout logBox;
     private android.view.View headerChrome;
     private int keyboardBottom;
-    private TextView logTitle, logText;
+    private TextView logTitle, logText, logDialogText;
+    private AlertDialog activityLogDialog;
     private String lastLogMessage = "";
     private String stage = "";
     private long stageAtMs = 0;
@@ -701,17 +702,32 @@ public class MainActivity extends AppCompatActivity {
             recent.append(line);
         }
         logText.setText(recent.toString());
+        if (logDialogText != null) {
+            String full = android.text.TextUtils.join("\n\n", logLines);
+            if (!android.text.TextUtils.equals(logDialogText.getText(), full)) logDialogText.setText(full);
+        }
     }
 
     private void showActivityLog() {
+        if (activityLogDialog != null && activityLogDialog.isShowing()) return;
         TextView text = new TextView(this);
         text.setText(android.text.TextUtils.join("\n\n", logLines));
         text.setTypeface(Design.mono()); text.setTextSize(12f); text.setTextColor(Design.TEXT());
         text.setTextIsSelectable(true);
         int pad = Design.dp(this,16); text.setPadding(pad,pad,pad,pad);
         ScrollView scroll = new ScrollView(this); scroll.addView(text);
-        new AlertDialog.Builder(this,Design.dialogTheme()).setTitle("Activity log")
-                .setView(scroll).setPositiveButton("Close",null).show();
+        text.setAccessibilityLiveRegion(android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        AlertDialog dialog = new AlertDialog.Builder(this,Design.dialogTheme()).setTitle("Activity log")
+                .setView(scroll).setPositiveButton("Close",null).create();
+        activityLogDialog = dialog;
+        logDialogText = text;
+        dialog.setOnDismissListener(closed -> {
+            if (activityLogDialog == dialog) {
+                activityLogDialog = null;
+                logDialogText = null;
+            }
+        });
+        dialog.show();
     }
 
     private void hideTradeKeyboard() {
@@ -1953,6 +1969,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override protected void onDestroy() {
+        if (activityLogDialog != null) activityLogDialog.dismiss();
         super.onDestroy();
         ui.removeCallbacksAndMessages(null);
         if (repo != null) repo.close();
