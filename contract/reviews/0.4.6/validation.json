@@ -1,5 +1,5 @@
 {
-  "created_utc": "2026-09-10T18:32:49.643148+00:00",
+  "created_utc": "2026-09-10T18:41:05.650177+00:00",
   "source_version": "0.4.6",
   "source_version_code": 406,
   "apk_built": false,
@@ -1284,5 +1284,38 @@
     "apk_built": false,
     "android_execution_for_this_change": false,
     "competing_production_submission_demonstrated": false
+  },
+  "android_offline_activity_audit": {
+    "passed": true,
+    "audit_build": 31,
+    "android_assertions": 895,
+    "assertion_phases": {
+      "normal": 808,
+      "before_crash": 16,
+      "recover": 31,
+      "app": 40
+    },
+    "apk_sha256": "31fc0ae643b79f6835a463f0d01fe57168b8c0963c70fe67b3b62ed98d12c267",
+    "evidence_directory": "contract/reviews/0.4.6/android_offline_activity",
+    "current_production_sources_match_audit_build": true,
+    "actual_main_activity": true,
+    "actual_activity_recreation": true,
+    "node_installed": false,
+    "network_permission": false,
+    "foreground_service_tested": false,
+    "user_device_accessed": false,
+    "user_node_accessed": false,
+    "emulator_and_keys_cleaned_up": true,
+    "visual_review_completed": true,
+    "offline_balance_and_empty_order_wording_correct": false,
+    "screenshot_sha256": {
+      "app-offline-assets.png": "78d4fc7e22b1ac84a3e27c5d45f6dbee15bce375ea93346a8e74fd4799682c31",
+      "app-offline-chart.png": "4b9d211dad39330df0f63d55c1893d0bbe97e69303a382d33004c3294e2dd05e",
+      "app-offline-maker.png": "3263be6f1fdc751002c9c0ce737e281e35aac8fc548edc52222e1bb50cf8dfeb",
+      "app-offline-orders.png": "6578b5f3475a275eca199b48f3e1652f4a526b6108c0c6681f5f3e5a968fdc43",
+      "app-offline-recreated.png": "b63e425f840aced33db712ea5ca7ead6f0b90762420691b9f6d9cf6492144bfd",
+      "app-offline-trade.png": "462e5b59c025badbc470828966f51ee2e28fa33dc502389cd551aed61c53be5e",
+      "app-offline-trades.png": "a99341d5a31dd1bc0c1afd76cb572e631626e04238ea8c15d8bed558f8d9a2d3"
+    }
   }
 }
