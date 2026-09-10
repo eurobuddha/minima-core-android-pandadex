@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <int name="checks" value="10" />
+    <int name="build" value="18" />
+    <boolean name="ready" value="true" />
+    <int name="pid" value="4938" />
+</map>

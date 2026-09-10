@@ -39,6 +39,7 @@ public class PoolBookTest {
         try {
             JSONObject c = new JSONObject();
             c.put("coinid", coinid);
+            c.put("address", POOL);
             c.put("tokenid", tokenid);
             c.put("amount", amount);
             c.put("tokenamount", amount);
@@ -66,10 +67,10 @@ public class PoolBookTest {
                 } catch (Exception e) { throw new RuntimeException(e); }
             } else if (command.contains("address:" + POOL)) {
                 cb.onResult(reply(new JSONArray()
-                        .put(coin("0xMINIDUST", Util.MINIMA_TOKENID, "1"))
-                        .put(coin("0xMINI", Util.MINIMA_TOKENID, "5"))
-                        .put(coin("0xTOKDUST", DexContract.USDT_ID, "0.01"))
-                        .put(coin("0xTOK", DexContract.USDT_ID, "0.2"))));
+                        .put(coin("0xDD01", Util.MINIMA_TOKENID, "1"))
+                        .put(coin("0xAA01", Util.MINIMA_TOKENID, "5"))
+                        .put(coin("0xDD02", DexContract.USDT_ID, "0.01"))
+                        .put(coin("0xBB01", DexContract.USDT_ID, "0.2"))));
             } else {
                 throw new AssertionError(command);
             }
@@ -88,13 +89,13 @@ public class PoolBookTest {
         assertEquals(1, seen.get().size());
         Pool p = seen.get().get(0);
         assertEquals(POOL, p.address);
-        assertEquals("0xMINI", p.coinidM);
-        assertEquals("0xTOK", p.coinidT);
+        assertEquals("0xAA01", p.coinidM);
+        assertEquals("0xBB01", p.coinidT);
         assertEquals(0, p.reserveM.compareTo(new java.math.BigDecimal("5")));
         assertEquals(0, p.reserveT.compareTo(new java.math.BigDecimal("0.2")));
     }
 
-    @Test public void nonParsingCovenantIsDropped() {
+    @Test public void nonParsingCovenantMakesTheSnapshotUnavailable() {
         PoolBook book = new PoolBook((command, cb) -> {
             if (command.contains("address:" + PoolCovenant.SENTINEL)) {
                 cb.onResult(reply(new JSONArray().put(beacon(DexContract.USDT_ID))));
@@ -108,11 +109,13 @@ public class PoolBookTest {
         });
 
         AtomicReference<List<Pool>> seen = new AtomicReference<>();
+        AtomicReference<String> error = new AtomicReference<>();
         book.scan(new PoolBook.Listener() {
             @Override public void onPools(List<Pool> pools) { seen.set(pools); }
-            @Override public void onError(String msg) { throw new AssertionError(msg); }
+            @Override public void onError(String msg) { error.set(msg); }
         });
-        assertEquals(0, seen.get().size());
+        assertEquals(null, seen.get());
+        assertTrue(error.get().contains("parse"));
     }
 
     @Test public void distinctOwnerPayoutAddressesRemainDistinctPools() {
@@ -132,9 +135,12 @@ public class PoolBookTest {
                                     .put("script", new JSONObject().put("address", address))));
                 } catch (Exception e) { throw new RuntimeException(e); }
             } else if (command.contains("address:" + POOL) || command.contains("address:" + oadr2)) {
-                cb.onResult(reply(new JSONArray()
-                        .put(coin("0xMINI" + runScripts.size(), Util.MINIMA_TOKENID, "5"))
-                        .put(coin("0xTOK" + runScripts.size(), DexContract.USDT_ID, "0.2"))));
+                JSONObject m = coin("0xAA010" + runScripts.size(), Util.MINIMA_TOKENID, "5");
+                JSONObject t = coin("0xBB010" + runScripts.size(), DexContract.USDT_ID, "0.2");
+                try { m.put("address", command.contains("address:" + POOL) ? POOL : oadr2);
+                      t.put("address", command.contains("address:" + POOL) ? POOL : oadr2); }
+                catch (Exception invalid) { throw new AssertionError(invalid); }
+                cb.onResult(reply(new JSONArray().put(m).put(t)));
             } else {
                 throw new AssertionError(command);
             }

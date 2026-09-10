@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MakerHandoffTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-10T09:27:26" hostname="ProMacBuddha.local" time="0.001">
+  <properties/>
+  <testcase name="foregroundCannotStartWhileBackgroundStillOwnsCycle" classname="com.eurobuddha.pandadex.MakerHandoffTest" time="0.001"/>
+  <testcase name="preparedCreateIsSeparateFromAcceptedSlotsAndSurvivesUnknownOutcome" classname="com.eurobuddha.pandadex.MakerHandoffTest" time="0.0"/>
+  <testcase name="aDisarmDuringAnAsyncActionStopsTheRemainingRungs" classname="com.eurobuddha.pandadex.MakerHandoffTest" time="0.0"/>
+  <testcase name="uncertainCreateKeepsItsIdentityAndDisarmsWithoutRetrying" classname="com.eurobuddha.pandadex.MakerHandoffTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

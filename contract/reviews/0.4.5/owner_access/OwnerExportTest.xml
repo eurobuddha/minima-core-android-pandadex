@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.OwnerExportTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-09-10T17:14:45" hostname="ProMacBuddha.local" time="0.048">
+  <properties/>
+  <testcase name="ownerRowsAreNotLimitedByTheVisibleHistoryPage" classname="com.eurobuddha.pandadex.OwnerExportTest" time="0.029"/>
+  <testcase name="ownerEvidenceStreamsWithoutBecomingTradesOrChangingOriginalBytes" classname="com.eurobuddha.pandadex.OwnerExportTest" time="0.005"/>
+  <testcase name="ownerSnapshotFailureCannotPublishPartialEvidence" classname="com.eurobuddha.pandadex.OwnerExportTest" time="0.002"/>
+  <testcase name="malformedTrailingOrOversizedOwnerPayloadIsNotSilentlyTruncated" classname="com.eurobuddha.pandadex.OwnerExportTest" time="0.011"/>
+  <testcase name="legacySnapshotReportAndVerifiedCopyPreserveOwnerEvidence" classname="com.eurobuddha.pandadex.OwnerExportTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

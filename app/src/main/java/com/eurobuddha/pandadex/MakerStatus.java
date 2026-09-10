@@ -30,6 +30,23 @@ public final class MakerStatus {
 
     private MakerStatus() {}
 
+    /** MakerTab's existing book cache, also invalidated when either ownership factor changes. */
+    static final class OwnedBook {
+        private Map<String, Order5> bookSeen, mine;
+        private Set<String> keysSeen, addressesSeen;
+        Map<String, Order5> get(Map<String, Order5> book, Set<String> keys, Set<String> addresses) {
+            if (book == bookSeen && mine != null && keys.equals(keysSeen) && addresses.equals(addressesSeen)) return mine;
+            Map<String, Order5> found = new java.util.HashMap<>();
+            for (Order5 order : book.values()) if (order.isMine(keys, addresses)) found.put(order.orderId, order);
+            bookSeen = book;
+            // KeySet exposes live unmodifiable views; retain copies, not aliases to those views.
+            keysSeen = new java.util.HashSet<>(keys);
+            addressesSeen = new java.util.HashSet<>(addresses);
+            mine = java.util.Collections.unmodifiableMap(found);
+            return mine;
+        }
+    }
+
     /**
      * One line per desired rung (plus any recorded rung being removed, plus a cancel summary).
      * {@code myBookByOrderId} must be MY confirmed book orders keyed by orderId.
@@ -38,7 +55,7 @@ public final class MakerStatus {
                                    Map<String, MakerConfig.SlotRec> slots,
                                    Map<String, ?> tombstones,
                                    Map<String, Order5> myBookByOrderId,
-                                   long chainBlock) {
+                                   long chainBlock, boolean ownershipAndBookReady) {
         List<Line> out = new ArrayList<>();
         Set<String> covered = new LinkedHashSet<>();
 
@@ -47,27 +64,37 @@ public final class MakerStatus {
                 covered.add(s.id);
                 MakerConfig.SlotRec r = slots == null ? null : slots.get(s.id);
                 if (r == null) {
-                    out.add(new Line(s.id, "waiting to post — next cycle", WAIT));
+                    out.add(new Line(s.id, ownershipAndBookReady ? "waiting to post — next cycle"
+                            : "no order recorded — wallet/book check pending", WAIT));
                     continue;
                 }
                 Order5 o = myBookByOrderId == null ? null : myBookByOrderId.get(r.orderId);
+                if (!ownershipAndBookReady) {
+                    out.add(new Line(s.id, o == null ? "order recorded — wallet/book check pending"
+                            : "last seen " + PriceMath.fmtPrice(o.price()) + " × " + PriceMath.fmt(o.minimaAmount())
+                            + " — wallet/book check pending", WAIT));
+                    continue;
+                }
                 if (o == null) {
                     long blk = r.sentBlock > 0 ? Math.max(0, chainBlock - r.sentBlock) : 0;
-                    out.add(new Line(s.id, "mining (" + blk + " blk, ~" + (blk * 50) + "s ago)"
-                            + (blk >= MakerEngine.PATIENCE_BLOCKS - 1 ? " — retries if lost" : ""),
+                    out.add(new Line(s.id, "not seen in this book snapshot (" + blk + " blk since recorded)"
+                            + (blk >= MakerEngine.PATIENCE_BLOCKS - 1 ? " — review if still absent" : ""),
                             WAIT));
                     continue;
                 }
-                BigDecimal posted = r.size;
-                if (posted != null && posted.signum() > 0
-                        && o.minimaAmount().compareTo(posted) < 0) {
-                    out.add(new Line(s.id, "part-filled — " + PriceMath.fmt(o.minimaAmount())
-                            + " of " + PriceMath.fmt(posted) + " left working", OK));
+                BigDecimal funded=MakerPosition.baseline(r,o);
+                if(funded==null) {
+                    out.add(new Line(s.id,"original funding unknown — review before automatic repricing",WAIT));
+                }else if(o.locked.compareTo(funded)>0) {
+                    out.add(new Line(s.id,"funding differs from recorded intent — review this order",WAIT));
+                }else if(o.locked.compareTo(funded)<0) {
+                    out.add(new Line(s.id,"less funding remains — "+PriceMath.fmt(o.locked)
+                            +" of "+PriceMath.fmt(funded)+(o.sell?" MINIMA":" mxUSDT")+" locked",OK));
                 } else if (r.lastActionBlock > 0
                         && chainBlock - r.lastActionBlock < MakerEngine.PATIENCE_BLOCKS) {
-                    out.add(new Line(s.id, "repricing — waiting for a block", WAIT));
+                    out.add(new Line(s.id, "reprice requested — outcome not yet verified", WAIT));
                 } else {
-                    out.add(new Line(s.id, "live " + PriceMath.fmtPrice(o.price()) + " × "
+                    out.add(new Line(s.id, "seen in latest book snapshot: " + PriceMath.fmtPrice(o.price()) + " × "
                             + PriceMath.fmt(o.minimaAmount()), OK));
                 }
             }
@@ -77,7 +104,7 @@ public final class MakerStatus {
         if (slots != null) {
             for (Map.Entry<String, MakerConfig.SlotRec> e : slots.entrySet()) {
                 if (!covered.contains(e.getKey())) {
-                    out.add(new Line(e.getKey(), "no longer wanted — cancelling", WAIT));
+                    out.add(new Line(e.getKey(), "no longer wanted — withdrawal still needed", WAIT));
                 }
             }
         }
@@ -87,9 +114,9 @@ public final class MakerStatus {
             if (myBookByOrderId != null) {
                 for (String id : tombstones.keySet()) if (myBookByOrderId.containsKey(id)) visible++;
             }
-            out.add(new Line("", "cancelling " + tombstones.size() + " order"
+            out.add(new Line("", "withdrawal instructions retained for " + tombstones.size() + " order"
                     + (tombstones.size() == 1 ? "" : "s")
-                    + (visible > 0 ? " — gone when a block confirms" : " — confirming…"), WAIT));
+                    + (visible > 0 ? " — " + visible + (ownershipAndBookReady ? " seen in latest snapshot" : " last seen; wallet/book check pending") : " — cancellation not proven by absence"), WAIT));
         }
         return out;
     }

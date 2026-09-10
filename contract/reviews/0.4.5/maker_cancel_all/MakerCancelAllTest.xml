@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MakerCancelAllTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-09-10T09:27:26" hostname="ProMacBuddha.local" time="0.013">
+  <properties/>
+  <testcase name="unreadableMakerRecordsCannotBeClearedToStartCancelAll" classname="com.eurobuddha.pandadex.MakerCancelAllTest" time="0.004"/>
+  <testcase name="uncertainBackgroundReplyCannotOverwriteForegroundWithdrawal" classname="com.eurobuddha.pandadex.MakerCancelAllTest" time="0.005"/>
+  <testcase name="acceptedBackgroundCreateKeepsTrackingUntilCancelAllCanRun" classname="com.eurobuddha.pandadex.MakerCancelAllTest" time="0.0"/>
+  <testcase name="failedPauseAndTrackingWriteCannotStartCancelAll" classname="com.eurobuddha.pandadex.MakerCancelAllTest" time="0.0"/>
+  <testcase name="preparedOnlyIntentIsRetainedAndCondemnedEvenWithNoVisibleOrders" classname="com.eurobuddha.pandadex.MakerCancelAllTest" time="0.0"/>
+  <testcase name="invisibleAcceptedSlotIsTrackedBeforeVisibleCancelsStart" classname="com.eurobuddha.pandadex.MakerCancelAllTest" time="0.001"/>
+  <testcase name="stopReloadsAnotherHostsNewerSlotBeforeSaving" classname="com.eurobuddha.pandadex.MakerCancelAllTest" time="0.0"/>
+  <testcase name="failedPostHandoffTrackingDoesNotStartVisibleCancellation" classname="com.eurobuddha.pandadex.MakerCancelAllTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

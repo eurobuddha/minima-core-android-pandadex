@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.PendingSchemaTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-10T16:30:16" hostname="ProMacBuddha.local" time="0.04">
+  <properties/>
+  <testcase name="invalidNewRowCannotPoisonReadableStore" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.007"/>
+  <testcase name="originalLegacyShapeAndZeroDisplayPriceRemainReadable" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.001"/>
+  <testcase name="unknownOperationKindCannotEscapeAutomaticRecoveryHold" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.007"/>
+  <testcase name="malformedAmountsDoNotBecomeZero" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.005"/>
+  <testcase name="timestampsAndHeightsCannotBeTruncatedOrOverflowed" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.003"/>
+  <testcase name="malformedCreationContainerCannotBecomeLegacyReceipt" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.001"/>
+  <testcase name="missingOriginalFieldsCannotTurnIntoDefaultReceipts" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.001"/>
+  <testcase name="explicitTextFieldsCannotCoerceNativeTypes" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.012"/>
+  <testcase name="flagsMustBeNativeBooleans" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.001"/>
+  <testcase name="unknownPhaseCannotMasqueradeAsOrdinaryWaiting" classname="com.eurobuddha.pandadex.PendingSchemaTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

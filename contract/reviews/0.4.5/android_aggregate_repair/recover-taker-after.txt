@@ -1,0 +1,3 @@
+PASS 7 assertions
+taker crash after database commit; pending retention and idempotent recovery
+

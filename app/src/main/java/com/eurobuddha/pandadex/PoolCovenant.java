@@ -40,7 +40,16 @@ public final class PoolCovenant {
     private PoolCovenant() {}
 
     public static String script(String opk, String oadr, String tok, String kmin) {
+        if (!validParams(opk, oadr, tok, kmin)) throw new IllegalArgumentException("Invalid pool parameters");
         return TEMPLATE.replace("$OPK", opk).replace("$OADR", oadr).replace("$TOK", tok).replace("$KMIN", kmin);
+    }
+
+    static boolean validParams(String opk, String oadr, String tok, String kmin) {
+        if (!FundingCoins.hex(opk) || !FundingCoins.hex(oadr) || !FundingCoins.hex(tok)
+                || "0x00".equalsIgnoreCase(tok) || kmin == null || kmin.length() > 80
+                || !kmin.matches("[0-9]+(?:\\.[0-9]+)?")) return false;
+        BigDecimal k = new BigDecimal(kmin);
+        return k.signum() > 0 && k.compareTo(MININUMBER_MAX) < 0;
     }
 
     public static String kmin(BigDecimal x0, BigDecimal y0) {

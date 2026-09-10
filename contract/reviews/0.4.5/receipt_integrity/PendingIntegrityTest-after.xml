@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.PendingIntegrityTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-09-10T16:21:01" hostname="ProMacBuddha.local" time="0.006">
+  <properties/>
+  <testcase name="validPrefixCannotHideTrailingReceiptBytes" classname="com.eurobuddha.pandadex.PendingIntegrityTest" time="0.001"/>
+  <testcase name="explicitlyMalformedIdentityDoesNotBecomeALegacyIdentity" classname="com.eurobuddha.pandadex.PendingIntegrityTest" time="0.0"/>
+  <testcase name="identicalLegacyRowsRemainPreservedInsteadOfSharingDeletionIdentity" classname="com.eurobuddha.pandadex.PendingIntegrityTest" time="0.003"/>
+  <testcase name="duplicateIdentityCannotRetireAnotherTransactionReceipt" classname="com.eurobuddha.pandadex.PendingIntegrityTest" time="0.0"/>
+  <testcase name="legacyMissingAndOpaqueNonemptyIdsRemainStable" classname="com.eurobuddha.pandadex.PendingIntegrityTest" time="0.001"/>
+  <testcase name="invalidNewIdentityCannotPoisonAnOtherwiseHealthyStore" classname="com.eurobuddha.pandadex.PendingIntegrityTest" time="0.001"/>
+  <testcase name="rawNulCannotTerminateTheReceiptFileEarly" classname="com.eurobuddha.pandadex.PendingIntegrityTest" time="0.0"/>
+  <testcase name="validSameIdentityUpdateStillReplacesOnlyItsOwnRow" classname="com.eurobuddha.pandadex.PendingIntegrityTest" time="0.0"/>
+  <testcase name="duplicateStoreCannotAdvanceOwnerIntentOrSubmission" classname="com.eurobuddha.pandadex.PendingIntegrityTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

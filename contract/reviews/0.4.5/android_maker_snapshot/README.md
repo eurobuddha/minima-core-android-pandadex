@@ -1,0 +1,9 @@
+# Maker snapshot writes — audit29
+
+**827 actual Android assertions pass**:781 normal,16 before deliberate process death and30 after restart. Reuses audit28's complete harness and adds20 assertions using real Android SharedPreferences. All production Java hashes match compilation and execution.
+
+An older config cannot overwrite an acknowledged pause, another prepared create, or newer slot/withdrawal records. The stored map remains identical after rejection. Conflict feedback differs from storage failure, reload retains the pause and failure guard, and only an explicit reviewed save clears the guard. Unrelated preference data survives without a false conflict. Two real threads load the same initial snapshot, wait at a barrier and attempt different saves: both finish, exactly one succeeds, the stored settings match that writer, and the rejected writer leaves the review guard active.
+
+APK `/private/tmp/pandadex-android-audit-build-29/pandadex-export-audit-29.apk`, SHA-256 `35f2276f8423e69d53cf5a124e2d78195201060c15dab04124d12b081752fe1f`. Package com.eurobuddha.pandadex.audit, versionCode29, fresh output path. Earlier APKs preserved; production405 unbuilt; frozen404 unchanged.
+
+Disposable Android16/API36 arm64 emulator; exact owned QEMU/AVD/path verified before commands; isolated ADB5049. No INTERNET permission, production MainActivity/NodeTransportService, user phone/node, signing or submission. Existing transaction fixtures/SQLite/process-death checks rerun. The new UI header/toast strings are compiled and their data source tested, but full MakerTab/MainActivity rendering and user recovery flow are not exercised here. This tests same-process preference writers, not multi-process SharedPreferences coordination or disk-full behavior on Samsung. Emulator and isolated ADB stopped; temporary data/keys deleted. APK/logs retained; screenshots/fixture ZIP remain in output with no new personal visual inspection claim.

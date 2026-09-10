@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.WatcherPassGateTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-10T10:12:56" hostname="ProMacBuddha.local" time="0.0">
+  <properties/>
+  <testcase name="foregroundPairingConsumesNeitherAllowance" classname="com.eurobuddha.pandadex.WatcherPassGateTest" time="0.0"/>
+  <testcase name="elapsedClockRollbackRecoversAndNegativeTimeCannotStart" classname="com.eurobuddha.pandadex.WatcherPassGateTest" time="0.0"/>
+  <testcase name="reconnectDoesNotBypassRecentSuccessfulScan" classname="com.eurobuddha.pandadex.WatcherPassGateTest" time="0.0"/>
+  <testcase name="coldRegistrationDoesNotDelayFirstPairedScan" classname="com.eurobuddha.pandadex.WatcherPassGateTest" time="0.0"/>
+  <testcase name="duplicatePairingAndHeartbeatCannotDuplicateScan" classname="com.eurobuddha.pandadex.WatcherPassGateTest" time="0.0"/>
+  <testcase name="callbacksBeforeStartupAndAfterShutdownCannotRun" classname="com.eurobuddha.pandadex.WatcherPassGateTest" time="0.0"/>
+  <testcase name="repeatedUnpairedStartsAreBoundedButPairingStillResumes" classname="com.eurobuddha.pandadex.WatcherPassGateTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

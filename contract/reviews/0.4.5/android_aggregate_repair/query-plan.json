@@ -1,0 +1,21 @@
+{
+  "scope": "Host SQLite query plans, not phone latency measurements",
+  "plans": {
+    "SELECT spentcoin,txpowid,block,blockid,json FROM takerreceipt WHERE needs_review=1 ORDER BY retry,spentcoin LIMIT ?": [
+      [
+        5,
+        0,
+        62,
+        "SEARCH takerreceipt USING INDEX takerreceipt_review (needs_review=?)"
+      ]
+    ],
+    "SELECT COALESCE(MAX(retry),0)+1 FROM takerreceipt WHERE needs_review=1": [
+      [
+        3,
+        0,
+        54,
+        "SEARCH takerreceipt USING COVERING INDEX takerreceipt_review (needs_review=?)"
+      ]
+    ]
+  }
+}

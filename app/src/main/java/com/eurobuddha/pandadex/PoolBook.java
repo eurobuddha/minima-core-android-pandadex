@@ -21,26 +21,35 @@ public final class PoolBook {
     interface Commander { void cmd(String command, NodeApi.Cb cb); }
 
     private final Commander node;
+    static final int MAX_DISCOVERED_POOLS = 64;
 
     public PoolBook(NodeApi node) { this.node = node::cmd; }
 
     PoolBook(Commander node) { this.node = node; }
 
-    public void scan(Listener cb) {
+    public void scan(Listener listener) {
+        final boolean[] completed = {false};
+        Listener cb = new Listener() {
+            public void onPools(List<Pool> pools) { if (!completed[0]) { completed[0] = true; listener.onPools(pools); } }
+            public void onError(String message) { if (!completed[0]) { completed[0] = true; listener.onError(message); } }
+        };
         node.cmd("coins simplestate:true order:desc depth:" + PoolCovenant.SENTINEL_SCAN_DEPTH
                 + " address:" + PoolCovenant.SENTINEL, new NodeApi.Cb() {
             @Override public void onResult(JSONObject j) {
                 Object resp = j.opt("response");
-                if (!(resp instanceof JSONArray)) { cb.onError("pool scan returned no coin list"); return; }
+                if (!TxValidation.truthy(j, "status") || !(resp instanceof JSONArray)) { cb.onError("pool scan returned no coin list"); return; }
                 JSONArray coins = (JSONArray) resp;
                 Map<String, String[]> params = new LinkedHashMap<>();
                 for (int i = 0; i < coins.length(); i++) {
                     JSONObject c = coins.optJSONObject(i);
                     String tok = state(c, 2), oadr = state(c, 3), opk = state(c, 4), kmin = state(c, 5);
-                    if (tok == null || oadr == null || opk == null || kmin == null) continue;
+                    if (!PoolCovenant.validParams(opk, oadr, tok, kmin)) continue;
                     if (!DexContract.USDT_ID.equalsIgnoreCase(tok)) continue;
-                    params.putIfAbsent((opk + "|" + oadr + "|" + tok + "|" + kmin).toLowerCase(),
+                    params.putIfAbsent((opk + "|" + oadr + "|" + tok + "|" + kmin).toLowerCase(java.util.Locale.ROOT),
                             new String[]{opk, oadr, tok, kmin});
+                }
+                if (params.size() > MAX_DISCOVERED_POOLS) {
+                    cb.onError("Too many pool announcements to safely refresh. Pool quotes are unavailable."); return;
                 }
                 if (params.isEmpty()) { cb.onPools(new ArrayList<>()); return; }
                 derive(new ArrayList<>(params.values()), cb);
@@ -61,19 +70,22 @@ public final class PoolBook {
                 @Override public void onResult(JSONObject j) {
                     try {
                         JSONObject resp = j.getJSONObject("response");
-                        if (truthy(resp, "parseok")) {
+                        if (!TxValidation.truthy(j, "status")) { cb.onError("Pool address check failed"); return; }
+                        if (TxValidation.truthy(resp, "parseok")) {
                             JSONObject sc = resp.getJSONObject("script");
                             Pool pool = new Pool();
                             pool.opk = opk; pool.oadr = oadr; pool.tok = tok; pool.kmin = kmin;
                             pool.address = sc.getString("address");
+                            if (!FundingCoins.hex(pool.address)) { cb.onError("Invalid pool address reply"); return; }
                             pool.mxaddress = sc.optString("mxaddress", "");
                             pool.covenantScript = script;
                             synchronized (pools) { pools.add(pool); }
                         }
-                    } catch (Exception ignore) {}
+                        else { cb.onError("Pool covenant did not parse"); return; }
+                    } catch (Exception invalid) { cb.onError("Malformed pool address reply"); return; }
                     if (pending.decrementAndGet() == 0) fund(pools, cb);
                 }
-                @Override public void onError(String m) { if (pending.decrementAndGet() == 0) fund(pools, cb); }
+                @Override public void onError(String m) { cb.onError(m); }
             });
         }
     }
@@ -85,11 +97,19 @@ public final class PoolBook {
             node.cmd("coins simplestate:true depth:" + PoolCovenant.SENTINEL_SCAN_DEPTH + " address:" + pool.address, new NodeApi.Cb() {
                 @Override public void onResult(JSONObject j) {
                     Object resp = j.opt("response");
-                    JSONArray cs = resp instanceof JSONArray ? (JSONArray) resp : new JSONArray();
+                    if (!TxValidation.truthy(j, "status") || !(resp instanceof JSONArray)) {
+                        cb.onError("Pool reserves could not be read"); return;
+                    }
+                    JSONArray cs = (JSONArray) resp;
                     int mb = 0, tb = 0;
                     for (int i = 0; i < cs.length(); i++) {
                         JSONObject c = cs.optJSONObject(i);
                         if (c == null || c.optBoolean("spent", false)) continue;
+                        try { FundingCoins.fundingCoin(c); } catch (RuntimeException invalid) { continue; }
+                        Object state = c.opt("state");
+                        if (!FundingCoins.hex(c.optString("coinid")) || !pool.address.equalsIgnoreCase(c.optString("address"))
+                                || (state instanceof JSONArray && ((JSONArray)state).length() > 0)
+                                || (state instanceof JSONObject && ((JSONObject)state).length() > 0)) continue;
                         String tid = c.optString("tokenid", "");
                         if (Util.MINIMA_TOKENID.equals(tid)) {
                             BigDecimal amt = Util.dec(c.optString("amount", "0"));
@@ -97,7 +117,7 @@ public final class PoolBook {
                                 pool.reserveM = amt; pool.coinidM = c.optString("coinid", ""); mb = c.optInt("created", 0);
                             }
                         } else if (pool.tok.equalsIgnoreCase(tid)) {
-                            BigDecimal amt = Util.dec(c.optString("tokenamount", c.optString("amount", "0")));
+                            BigDecimal amt = Util.dec(c.optString("tokenamount", "0"));
                             if (pool.reserveT == null || amt.compareTo(pool.reserveT) > 0) {
                                 pool.reserveT = amt; pool.coinidT = c.optString("coinid", ""); tb = c.optInt("created", 0);
                                 pool.tokDecimals = tokenDecimals(c.opt("token"));
@@ -107,7 +127,7 @@ public final class PoolBook {
                     pool.reserveBlock = Math.max(mb, tb);
                     if (pending.decrementAndGet() == 0) done(pools, cb);
                 }
-                @Override public void onError(String m) { if (pending.decrementAndGet() == 0) done(pools, cb); }
+                @Override public void onError(String m) { cb.onError(m); }
             });
         }
     }
@@ -117,7 +137,7 @@ public final class PoolBook {
         java.util.HashSet<String> seen = new java.util.HashSet<>();
         for (Pool p : pools) {
             if (!p.funded()) continue;
-            if (p.address != null && !seen.add(p.address.toLowerCase())) continue;
+            if (p.address != null && !seen.add(p.address.toLowerCase(java.util.Locale.ROOT))) continue;
             funded.add(p);
         }
         cb.onPools(funded);
@@ -149,7 +169,6 @@ public final class PoolBook {
     }
 
     private static int tokenDecimals(Object token) {
-        if (token instanceof JSONObject) return ((JSONObject) token).optInt("decimals", 8);
-        return 8;
+        return PriceMath.USDT_DP;
     }
 }

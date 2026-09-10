@@ -66,7 +66,7 @@ public final class ChartTab extends LinearLayout {
         addView(chart, new LayoutParams(LayoutParams.MATCH_PARENT, Design.dp(act, 300)));
 
         TextView note = new TextView(act);
-        note.setText("Candles are built from fills this device observed on-chain — there is no "
+        note.setText("Candles use this device's trade records and observation times, including older records that have not been rechecked. There is no "
                 + "server and no historical backfill, so the chart grows from the moment your "
                 + "node starts watching.");
         note.setTextColor(Design.DIM2());

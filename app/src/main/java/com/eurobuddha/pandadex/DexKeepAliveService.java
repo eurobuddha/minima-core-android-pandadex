@@ -48,7 +48,7 @@ public class DexKeepAliveService extends Service {
     private KeySet keySet;
     private FillTape tape;
     private boolean started = false;
-    private long lastPassMs = 0;
+    private final WatcherPassGate passGate = new WatcherPassGate(PASS_GAP_MS);
     private long chainBlock = 0;
 
     @Override public IBinder onBind(Intent i) { return null; }
@@ -57,15 +57,15 @@ public class DexKeepAliveService extends Service {
         super.onCreate();
         createChannel();
         if (!startForegroundCompat()) { stopSelf(); return; }
-        node = new NodeApi(getApplicationContext(), null);
+        node = new NodeApi(getApplicationContext(), this::onPaired);
         db = new DexDb(getApplicationContext());
         txn = new DexTxn(node, db);
         processor = new DexProcessor(getApplicationContext(), txn);
         makerCfg = new MakerConfig(getApplicationContext());
-        maker = new MakerEngine(makerCfg, txn);
+        maker = new MakerEngine(makerCfg, txn, o -> keySet != null && keySet.ready() && keySet.owns(o));
         verifier = new FillVerifier(node);
-        history = new DexHistory(node);
-        keySet = new KeySet(getApplicationContext(), null);
+        history = new DexHistory(node, db);
+        keySet = new KeySet(getApplicationContext(), this::onKeysReady);
         // The staleness ceiling must clear OUR polling gap, or every pass re-seeds and this
         // service can never record a fill (nor fire the "order filled" notification).
         tape = new FillTape(new FillTape.CancelLog() {
@@ -74,14 +74,29 @@ public class DexKeepAliveService extends Service {
         }, PASS_GAP_MS * 2 + 60_000);
         // Same three-layer settlement as the Activity — history, then exclusive payout evidence
         // over the whole scan. Both must agree, or whichever sees a coin vanish first decides.
-        settler = new FillSettler(history, verifier, () -> chainBlock, new FillSettler.Outcome() {
+        settler = new FillSettler(history, () -> keySet.ready() ? chainBlock : 0, new FillSettler.Outcome() {
             @Override public void record(String spentCoin, Order5 order, java.math.BigDecimal size,
                                          java.math.BigDecimal price, boolean takerBuy,
                                          boolean partial, String txpowid, String evidence, String note) {
                 recordFill(spentCoin, order, size, price, takerBuy, partial, txpowid, evidence, note);
             }
+            @Override public void recordAt(String spentCoin, Order5 order, BigDecimal size,
+                                           BigDecimal price, boolean takerBuy, boolean partial,
+                                           String txpowid, String evidence, String note, long timeMs, long block) {
+                recordFill(spentCoin, order, size, price, takerBuy, partial, txpowid, evidence, note, timeMs, block);
+            }
+            @Override public void recordVerified(FillSettler.Entry entry, DexHistory.Spend spend, Order5 order,
+                                                  BigDecimal size, BigDecimal price, boolean takerBuy, boolean partial,
+                                                  String note, long timeMs, long block) {
+                recordFill(entry.coinid, order, size, price, takerBuy, partial, spend.txpowid,
+                        FillSettler.CHAIN_VERIFIED, note, timeMs, block, entry, spend);
+            }
+            @Override public void cancelledVerified(FillSettler.Entry entry, DexHistory.Spend spend) {
+                db.completeNonTrade(entry, spend);
+            }
             @Override public void cancelled(String spentCoin) { db.noteCancelled(spentCoin); }
-        });
+            @Override public void recoveryError(String message) { Notifier.alert(getApplicationContext(), "Trade history needs attention", message); }
+        }, db);
         HeartbeatReceiver.schedule(this);
         started = true;
     }
@@ -92,26 +107,48 @@ public class DexKeepAliveService extends Service {
         return START_STICKY;
     }
 
+    /** Registration is asynchronous; resume a cold start when the node becomes available. */
+    private void onPaired(boolean enabled) {
+        if (!started || node == null) return;
+        if (!enabled) { passGate.invalidate(); keySet.invalidate(); return; }
+        pass();
+    }
+
+    private boolean canWatch() {
+        return started && node != null && node.isEnabled() && keySet != null
+                && keySet.ready() && !MainActivity.FOREGROUND;
+    }
+
     /** One unattended pass: identity → block → book → renew/sweep + record fills. */
     private void pass() {
-        long now = System.currentTimeMillis();
-        if (now - lastPassMs < PASS_GAP_MS) return;
-        if (MainActivity.FOREGROUND) return;          // the Activity is driving — stand down
-        lastPassMs = now;
-        if (!node.isEnabled()) { node.reRegister(); return; }
+        long now = android.os.SystemClock.elapsedRealtime();
+        WatcherPassGate.Action action = passGate.next(now, started && node != null,
+                MainActivity.FOREGROUND, node != null && node.isEnabled());
+        if (action == WatcherPassGate.Action.NONE) return;
+        if (action == WatcherPassGate.Action.REGISTER) { node.reRegister(); return; }
         acquireTimedWakelock();
 
         keySet.refresh(node);
+    }
+
+    /** Read a fresh block/book only after all wallet addresses have been derived. */
+    private void onKeysReady() {
+        if (!passGate.resumeAfterKeys(canWatch())) return;
         node.cmd("getaddress", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 JSONObject r = json.optJSONObject("response");
-                if (r == null) return;
+                if (!json.optBoolean("status", false) || r == null || !canWatch()) return;
                 keySet.addExtra(r.optString("publickey", ""));
                 keySet.addExtraAddr(r.optString("address", ""));
                 txn.setIdentity(r.optString("publickey", ""), r.optString("address", ""));
-                readBlockThenBook();
+                DexContract.ensureScript(node, new DexContract.Ready() {
+                    public void ok() { if (canWatch()) readBlockThenBook(); }
+                    public void failed(String why) {
+                        Notifier.alert(getApplicationContext(), "Order watcher paused", "Covenant check failed: " + why);
+                    }
+                });
             }
-            @Override public void onError(String message) { readBlockThenBook(); }
+            @Override public void onError(String message) { }
         });
     }
 
@@ -119,6 +156,7 @@ public class DexKeepAliveService extends Service {
         node.cmd("block", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 JSONObject r = json.optJSONObject("response");
+                if (!json.optBoolean("status", false) || r == null || !canWatch()) return;
                 if (r != null) chainBlock = Util.dec(r.optString("block", "0")).longValue();
                 txn.setChainBlock(chainBlock);
                 scanBook();
@@ -128,18 +166,23 @@ public class DexKeepAliveService extends Service {
     }
 
     private void scanBook() {
-        if (chainBlock <= 0) return;
+        if (!canWatch() || chainBlock <= 0) return;
         BookScanner.scan(node, (orders, truncated, raw) -> {
-            if (truncated) return;                     // never act on a failed scan
-            tape.ingest(orders, false, chainBlock, settler);
+            if (truncated || !canWatch()) return;                     // never act on a failed scan
+            try {
+                tape.ingest(orders, false, chainBlock, settler);
+            } catch (RuntimeException e) { return; }
             if (!keySet.ready()) return;               // never renew on a blind key set
             makerCfg.reload();   // the maker's rungs are its own to renew — see driveMaker
             processor.process(orders, keySet.keys(), keySet.addrs(),
                     maker.ownedOrderIds(), chainBlock, new DexProcessor.Listener() {
+                @Override public void onPaused(String why) {
+                    Notifier.alert(getApplicationContext(), "Order upkeep needs attention", why);
+                }
                 @Override public void onRenewed(Order5 o) { /* silent — routine upkeep */ }
                 @Override public void onRenewFailed(Order5 o, String why) {
-                    Notifier.alert(getApplicationContext(), "Couldn't renew an order",
-                            "Order @ " + PriceMath.fmtPrice(o.price()) + " — will retry. (" + why + ")");
+                    Notifier.alert(getApplicationContext(), "Order upkeep needs attention",
+                            "Order @ " + PriceMath.fmtPrice(o.price()) + " — " + why);
                 }
             });
             driveMaker(orders);
@@ -163,7 +206,7 @@ public class DexKeepAliveService extends Service {
         // round-trips, so that check is seconds stale and the user may have opened the app in
         // the meantime. Two engines have separate `working` flags and separate in-memory slot
         // maps, so both would read the same rung as missing and both would post it.
-        if (MainActivity.FOREGROUND) return;
+        if (!canWatch()) return;
         makerCfg.reload();
         MakerEngine.Listener l = message -> { /* nobody is watching — the Maker tab replays it */ };
         maker.sweepTombstones(orders, keySet.keys(), chainBlock, l);
@@ -172,13 +215,24 @@ public class DexKeepAliveService extends Service {
 
     private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
                             boolean takerBuy, boolean partial, String txpowid, String evidence, String note) {
+        recordFill(spentCoin, order, size, price, takerBuy, partial, txpowid, evidence,
+                note + ChainEvidence.OBSERVED_TIME_NOTE, System.currentTimeMillis(), chainBlock);
+    }
+
+    private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
+                            boolean takerBuy, boolean partial, String txpowid, String evidence, String note,
+                            long timeMs, long block) {
+        recordFill(spentCoin,order,size,price,takerBuy,partial,txpowid,evidence,note,timeMs,block,null,null);
+    }
+
+    private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
+                            boolean takerBuy, boolean partial, String txpowid, String evidence, String note,
+                            long timeMs, long block, FillSettler.Entry entry, DexHistory.Spend spend) {
         boolean mine = order.isMine(keySet.keys(), keySet.addrs());
-        boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
-                takerBuy, partial, mine);
-        if (isNew && mine) {
-            db.addMyTrade(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
-                    !order.sell, true, order.orderId, txpowid, "BOOK", spentCoin, "",
-                    evidence, note, chainBlock);
+        boolean isNew = entry == null
+                ? db.recordVerifiedFill(spentCoin, timeMs, block, price, size, takerBuy, partial, mine, order, txpowid, evidence, note)
+                : db.completeFill(entry, spend, order, timeMs, block, price, size, takerBuy, partial, mine, evidence, note);
+        if (isNew && mine && FillSettler.recentForNotification(timeMs, System.currentTimeMillis())) {
             Notifier.fill(getApplicationContext(), order.sell, size, price, partial);
         }
     }
@@ -201,13 +255,16 @@ public class DexKeepAliveService extends Service {
             PendingIntent pi = PendingIntent.getForegroundService(getApplicationContext(), 21,
                     new Intent(getApplicationContext(), DexKeepAliveService.class),
                     PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE);
-            if (am != null) am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 2000, pi);
+            if (am != null) am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, android.os.SystemClock.elapsedRealtime() + 2000, pi);
         } catch (Exception ignored) {}
         super.onTaskRemoved(rootIntent);
     }
 
     @Override public void onDestroy() {
+        started = false; // Ignore late pairing/scan callbacks before releasing the transport.
+        passGate.invalidate();
         super.onDestroy();
+        if (keySet != null) keySet.close();
         if (node != null) { try { node.onDestroy(); } catch (Exception ignored) {} node = null; }
     }
 

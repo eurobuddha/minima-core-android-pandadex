@@ -1,0 +1,11 @@
+# Owner receipt revisions without losing earlier proof
+
+The previous writer rejected any changed inclusion after archive commit, retaining a pending owner receipt indefinitely if the chain changed before pending cleanup. The correction writer now reuses DexDb's existing receiptaudit/transaction protocol, ReceiptRepair ordered proof guards, and strict retained-intent readers. No schema change.
+
+A revision must match the original economic intent. The same TxPoW cannot change the recorded outcome. Fresh full source/effect proof, inclusion coordinates, linked block time and proof ordering are required. A different TxPoW also requires the old transaction to have been reported missing before the new proof in the same process. Latest-check guards reject older conflicting inclusion. Prior database indexes must agree with retained original proof before a revision.
+
+The same SQLite transaction archives the exact previous owner row/JSON, previous check, and replacement JSON, updates current owner evidence, and adopts the check. The first recorded observation time remains unchanged. Pending clears only after this commit. Failed archive/update rolls back; identical replay keeps the first bytes. Correction keys use `owner:` plus receipt identity, distinct from coin IDs. Personal export includes these revisions even without a mytrade row. owner-receipts.json is the latest verified version plus last saved check; corrections.json preserves earlier versions. Neither operation creates volume/P&L.
+
+Five new JVM tests cover preserved observation/intent, incomplete freshness, changed economic intent, immutable-transaction outcome and malformed old data. Full suite617 tests, zero failures/errors/skips; lint zero errors/75 warnings. Audit26 adds real SQLite/cleanup/export evidence; see its explicit coverage qualifications.
+
+Remaining: already-cleared owner receipts need a bounded automatic reorg-recovery queue and foreground/service scheduling. Process-death specifically during a moved-inclusion correction, a complete pre-miss alternative DB regression, old-format reconstruction, full-app recovery UI and stock Samsung/MinimaCore/human-only gates remain open. The shared archive/correction writer is implemented; comprehensive owner reorg recovery is not yet complete. Original expectations lost by older builds cannot be invented.

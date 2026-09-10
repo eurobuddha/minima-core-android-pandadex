@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.CancellationReceiptTest" tests="14" skipped="0" failures="0" errors="0" timestamp="2026-09-10T10:25:10" hostname="ProMacBuddha.local" time="0.043">
+  <properties/>
+  <testcase name="tokenMetadataDoesNotInflateCancellationEvidence" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.027"/>
+  <testcase name="mismatchedOriginalFundingCannotVerifyARefund" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.004"/>
+  <testcase name="lateBatchReplyUpdatesOnlyStillUnresolvedSources" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.003"/>
+  <testcase name="corruptStoreAndDuplicateSourcesCannotCreateAPartialJournal" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.001"/>
+  <testcase name="missingBatchReceiptPreventsPostingTheWholeBatch" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.0"/>
+  <testcase name="failedPrepareAndPostingCommitsRefuseDependentWork" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.001"/>
+  <testcase name="callerRefusalIsRespectedBeforePosting" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.001"/>
+  <testcase name="entireBatchIsSavedOnceBeforeAnySigning" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.001"/>
+  <testcase name="unconfirmedRefundNeverResolvesRetainedCancellation" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.001"/>
+  <testcase name="lostReplyStillAllowsLinkedRefundRecoveryAfterRestart" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.0"/>
+  <testcase name="unknownResultPreservesEverySourceAndDoesNotReplay" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.001"/>
+  <testcase name="realCancelEntryPointsRefuseMissingReceiptStorageBeforeNodeAccess" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.001"/>
+  <testcase name="failedAcceptedStatusWriteRetainsPostingAndCompletesCallbackOnce" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.001"/>
+  <testcase name="preSubmitFailureIsRetainedWithoutPretendingToAwaitMining" classname="com.eurobuddha.pandadex.CancellationReceiptTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

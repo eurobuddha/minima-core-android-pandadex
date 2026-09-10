@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MakerStatusTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-09-10T08:51:33" hostname="ProMacBuddha.local" time="0.001">
+  <properties/>
+  <testcase name="aRelockInFlightReadsAsRepricing" classname="com.eurobuddha.pandadex.MakerStatusTest" time="0.001"/>
+  <testcase name="aRungOnTheBookReadsAsLiveWithItsPriceAndSize" classname="com.eurobuddha.pandadex.MakerStatusTest" time="0.0"/>
+  <testcase name="everySlotInTheLadderGetsALine" classname="com.eurobuddha.pandadex.MakerStatusTest" time="0.0"/>
+  <testcase name="cancellingOrdersAreSummarisedSoAWithdrawIsNeverSilent" classname="com.eurobuddha.pandadex.MakerStatusTest" time="0.0"/>
+  <testcase name="aPartlyTakenRungSaysWhatIsStillWorking" classname="com.eurobuddha.pandadex.MakerStatusTest" time="0.0"/>
+  <testcase name="aRungWithNoRecordIsWaitingToPost" classname="com.eurobuddha.pandadex.MakerStatusTest" time="0.0"/>
+  <testcase name="aRecordedRungNoLongerWantedSaysItIsGoing" classname="com.eurobuddha.pandadex.MakerStatusTest" time="0.0"/>
+  <testcase name="anAbsentRecordedRungDoesNotInventMining" classname="com.eurobuddha.pandadex.MakerStatusTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -53,7 +53,7 @@ public final class BookScanner {
     private static void slice(NodeApi node, Map<String, Order5> found, boolean[] truncated,
                               List<String> raw, int fromAge, int width, Cb cb) {
         if (fromAge >= DexContract.SCAN_DEPTH) {          // whole range covered
-            relevant(node, found, truncated, raw, cb);
+            cb.onBook(found, truncated[0], raw);
             return;
         }
         int depth = Math.min(fromAge + width, DexContract.SCAN_DEPTH);
@@ -61,9 +61,9 @@ public final class BookScanner {
                 + " coinage:" + fromAge + " depth:" + depth, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 Object resp = json.opt("response");
-                if (!(resp instanceof JSONArray)) {
+                if (!TxValidation.truthy(json, "status") || !(resp instanceof JSONArray)) {
                     truncated[0] = true;
-                    slice(node, found, truncated, raw, depth, width, cb);
+                    cb.onBook(found, true, raw);
                     return;
                 }
                 JSONArray arr = (JSONArray) resp;
@@ -74,7 +74,6 @@ public final class BookScanner {
                     if (o == null) {
                         // a coin at the book address we can't read = an incomplete view;
                         // callers must not treat the missing entry as a departed order
-                        truncated[0] = true;
                         continue;
                     }
                     if (!found.containsKey(o.coinid)) {
@@ -88,38 +87,14 @@ public final class BookScanner {
                 // An oversized reply is killed by the IPC ceiling and surfaces here. Halving
                 // the window is the difference between a book that recovers and one that
                 // freezes on its last good cache forever once it outgrows a single reply.
-                if (width > MIN_SLICE_BLOCKS) {
+                if (NodeApi.ERR_TOO_LONG.equals(message) && width > MIN_SLICE_BLOCKS) {
                     slice(node, found, truncated, raw, fromAge, Math.max(MIN_SLICE_BLOCKS, width / 2), cb);
                     return;
                 }
                 truncated[0] = true;                     // even the narrowest window failed
-                slice(node, found, truncated, raw, depth, width, cb);
+                cb.onBook(found, true, raw);
             }
         });
     }
 
-    private static void relevant(NodeApi node, Map<String, Order5> found, boolean[] truncated,
-                                 List<String> raw, Cb cb) {
-        // simplestate:true — only `coinid` is read here, and the verbose state array makes this
-        // reply as large as the book scan itself for no benefit (IPC ceiling, 256KB)
-        node.cmd("coins relevant:true simplestate:true address:" + DexContract.ADDR_V5, new NodeApi.Cb() {
-            @Override public void onResult(JSONObject json) {
-                Object resp = json.opt("response");
-                if (resp instanceof JSONArray) {
-                    JSONArray arr = (JSONArray) resp;
-                    for (int i = 0; i < arr.length(); i++) {
-                        JSONObject c = arr.optJSONObject(i);
-                        if (c == null) continue;
-                        Order5 o = found.get(c.optString("coinid", ""));
-                        if (o != null) o.markRelevant();
-                    }
-                }
-                cb.onBook(found, truncated[0], raw);
-            }
-            @Override public void onError(String message) {
-                // ownership belt is best-effort — a failure here does NOT taint the book
-                cb.onBook(found, truncated[0], raw);
-            }
-        });
-    }
 }

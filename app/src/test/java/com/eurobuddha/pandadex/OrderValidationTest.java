@@ -36,7 +36,7 @@ public class OrderValidationTest {
             st.put("1", wantAddr);
             st.put("2", want);
             st.put("3", wantTok);
-            st.put("4", "0xORDER1");
+            st.put("4", "0xAABB01");
             st.put("5", sell ? "1" : "0");
             st.put("6", "0");
             st.put("7", "1");

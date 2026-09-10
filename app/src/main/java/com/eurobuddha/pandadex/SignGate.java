@@ -1,10 +1,5 @@
 package com.eurobuddha.pandadex;
 
-import android.os.Handler;
-import android.os.Looper;
-
-import java.util.ArrayDeque;
-
 /**
  * SERIAL SIGNING. Only one signing operation from this app may be in flight at a time.
  *
@@ -31,59 +26,13 @@ import java.util.ArrayDeque;
  */
 public final class SignGate {
 
-    private static final ArrayDeque<Runnable> QUEUE = new ArrayDeque<>();
-    private static boolean busy = false;
-    private static Runnable watchdog = null;
-
-    /** Longer than NodeApi's write timeout, so this only fires for a genuinely lost callback and never
-     *  for a chain that is merely slow (PoW on a phone is not quick). */
-    private static final long MAX_HOLD_MS = 200_000;
-
+    private static final SerialQueue QUEUE = new SerialQueue();
     private SignGate() {}
-
-    /** Lazily resolved so the queue itself works without a Looper — the serialisation logic is plain
-     *  Java and is unit-tested on the JVM. Only the lost-callback watchdog needs Android; without a
-     *  Looper it is simply absent, which is correct for a test. */
-    private static Handler main;
-    private static boolean mainResolved = false;
-    private static Handler main() {
-        if (!mainResolved) {
-            mainResolved = true;
-            // Off-device, android.jar's stub THROWS rather than returning null, so catch broadly.
-            try { Looper l = Looper.getMainLooper(); if (l != null) main = new Handler(l); }
-            catch (Throwable noAndroidRuntime) { main = null; }
-        }
-        return main;
-    }
-
-    /** Queue a signing operation. It must call the supplied release exactly once, however it ends. */
-    public static void submit(final Op op) {
-        QUEUE.add(() -> op.run(new Release()));
-        if (!busy) next();
-    }
-
     public interface Op { void run(Release release); }
-
-    /** Idempotent — a chain with several exit paths can call this from all of them. */
+    public static void submit(Op op) { QUEUE.submit(finish -> op.run(new Release(finish))); }
     public static final class Release {
-        private boolean done = false;
-        public void free() {
-            if (done) return;
-            done = true;
-            if (watchdog != null) { Handler h = main(); if (h != null) h.removeCallbacks(watchdog); watchdog = null; }
-            next();
-        }
-    }
-
-    private static void next() {
-        Runnable r = QUEUE.poll();
-        if (r == null) { busy = false; return; }
-        busy = true;
-        Handler h = main();
-        if (h != null) {
-            watchdog = () -> { watchdog = null; next(); };
-            h.postDelayed(watchdog, MAX_HOLD_MS);
-        }
-        r.run();
+        private final Runnable finish;
+        private Release(Runnable finish) { this.finish = finish; }
+        public void free() { finish.run(); }
     }
 }

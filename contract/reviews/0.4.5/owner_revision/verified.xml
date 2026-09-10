@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.OwnerRevisionTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-09-10T17:36:33" hostname="ProMacBuddha.local" time="0.003">
+  <properties/>
+  <testcase name="changedInclusionPreservesOriginalObservationAndIntent" classname="com.eurobuddha.pandadex.OwnerRevisionTest" time="0.001"/>
+  <testcase name="revisionRequiresCompleteFreshTimeAndOrdering" classname="com.eurobuddha.pandadex.OwnerRevisionTest" time="0.0"/>
+  <testcase name="malformedOriginalNeverBecomesRevisionAuthority" classname="com.eurobuddha.pandadex.OwnerRevisionTest" time="0.001"/>
+  <testcase name="immutableTxpowCannotAcquireDifferentOutcome" classname="com.eurobuddha.pandadex.OwnerRevisionTest" time="0.0"/>
+  <testcase name="changedEconomicIntentCannotRewriteOwnerArchive" classname="com.eurobuddha.pandadex.OwnerRevisionTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

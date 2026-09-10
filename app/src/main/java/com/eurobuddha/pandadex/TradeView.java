@@ -48,6 +48,10 @@ public final class TradeView extends LinearLayout {
         t.setDaemon(true);
         return t;
     });
+    private boolean depthRunning, quoting, closed;
+    private final ExecutorService quoteExec = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "pandadex-quote"); t.setDaemon(true); return t;
+    });
     private String requestedDepthKey = "";
     private String readyDepthKey = "";
     private List<SyntheticDepth.Row> readyPoolAsks = new ArrayList<>();
@@ -405,8 +409,13 @@ public final class TradeView extends LinearLayout {
         e.setTextColor(Design.TEXT());
         e.setTypeface(Design.mono());
         e.setTextSize(13f);
-        e.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        e.setKeyListener(android.text.method.DigitsKeyListener.getInstance(java.util.Locale.US, false, true));
+        // Reuse MakerTab/AtomiX's Samsung-safe immediate-commit decimal field.
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        e.setTransformationMethod(null);
+        e.setFilters(new android.text.InputFilter[]{(src, start, end, dest, dstart, dend) -> {
+            String value = dest.toString().substring(0, dstart) + src.subSequence(start, end) + dest.toString().substring(dend);
+            return value.length() <= 44 && (value.isEmpty() || value.matches("[0-9]*\\.?[0-9]*")) ? null : "";
+        }});
         e.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 8));
         e.setPadding(dp(10), dp(9), dp(10), dp(9));
         LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
@@ -455,7 +464,7 @@ public final class TradeView extends LinearLayout {
     }
 
     private void submit() {
-        if (act.isBusy()) { act.toast("A transaction is already in flight"); return; }
+        if (closed || quoting || act.isBusy()) { act.toast("A quote or transaction is already in progress"); return; }
         BigDecimal price = Util.dec(priceIn.getText().toString());
         BigDecimal amount = Util.dec(amountIn.getText().toString());
         BigDecimal minRem = Util.dec(minFillIn.getText().toString());
@@ -463,20 +472,34 @@ public final class TradeView extends LinearLayout {
             act.toast("Enter a price and amount");
             return;
         }
-        // MARKETABLE LIMIT: if the order crosses the book, take the resting liquidity first
-        // (that's what makes a "market order" possible without any AMM) and only rest the
-        // unfilled balance. This is the taker path — one sweep txn, ≤1 partial.
-        SweepPlanner.Plan plan = SweepPlanner.plan(act.book().values(), buyMode, amount, price, act.chainBlock());
-        CompositeRouter.Plan composite = CompositeRouter.plan(act.book().values(), act.pools(),
-                buyMode, amount, price, act.chainBlock());
-        if (!composite.isEmpty()) {
-            act.confirmComposite(composite, buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
-        } else if (!plan.isEmpty()) {
-            act.confirmSweep(plan, buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
-        } else {
-            act.placeOrder(buyMode, amount, price, gtcOn, minRem.max(BigDecimal.ZERO));
-        }
-        amountIn.setText("");
+        final boolean buy = buyMode, gtc = gtcOn;
+        final long block = act.chainBlock();
+        final List<Order5> orders = new ArrayList<>(act.book().values());
+        final List<Pool> pools = new ArrayList<>(act.pools());
+        quoting = true;
+        ctaBtn.setEnabled(false); ctaBtn.setText("Calculating quote…");
+        quoteExec.execute(() -> {
+            try {
+                SweepPlanner.Plan plan = SweepPlanner.plan(orders, buy, amount, price, block);
+                CompositeRouter.Plan composite = CompositeRouter.plan(orders, pools, buy, amount, price, block);
+                ui.post(() -> {
+                    quoting = false;
+                    if (closed || act.isFinishing() || act.isDestroyed()) return;
+                    setMode(buyMode); ctaBtn.setEnabled(!act.isBusy());
+                    if (act.isBusy()) { act.toast("A transaction started while quoting. Please quote again."); return; }
+                    if (!composite.isEmpty()) act.confirmComposite(composite, buy, amount, price, gtc, minRem.max(BigDecimal.ZERO));
+                    else if (!plan.isEmpty()) act.confirmSweep(plan, buy, amount, price, gtc, minRem.max(BigDecimal.ZERO));
+                    else act.placeOrder(buy, amount, price, gtc, minRem.max(BigDecimal.ZERO));
+                });
+            } catch (RuntimeException invalid) {
+                ui.post(() -> {
+                    quoting = false;
+                    if (closed) return;
+                    setMode(buyMode); ctaBtn.setEnabled(!act.isBusy());
+                    act.toast("Could not calculate this quote. Refresh and check the amounts.");
+                });
+            }
+        });
     }
 
     // ------------------------------------------------------------------ open orders
@@ -538,8 +561,8 @@ public final class TradeView extends LinearLayout {
         lowTv.setText(PriceMath.fmtPrice(s[3]));
         volTv.setText(s[0] == null ? "—" : PriceMath.fmt(s[4]));
 
-        ctaBtn.setAlpha(act.isBusy() ? 0.5f : 1f);
-        ctaBtn.setEnabled(!act.isBusy());
+        ctaBtn.setAlpha(act.isBusy() || quoting ? 0.5f : 1f);
+        ctaBtn.setEnabled(!act.isBusy() && !quoting);
         renderLadder(book, chainBlock);
         renderOrders(book, chainBlock, pending);
     }
@@ -627,17 +650,24 @@ public final class TradeView extends LinearLayout {
     }
 
     private void requestDepth(List<Pool> pools, BigDecimal tick, String key) {
-        if (key.equals(requestedDepthKey) || key.equals(readyDepthKey)) return;
+        if (closed || depthRunning || key.equals(requestedDepthKey) || key.equals(readyDepthKey)) return;
+        depthRunning = true;
         requestedDepthKey = key;
         List<Pool> snapshot = new ArrayList<>(pools);
         depthExec.execute(() -> {
-            List<SyntheticDepth.Row> asks = SyntheticDepth.sample(snapshot, true, tick, 10);
-            List<SyntheticDepth.Row> bids = SyntheticDepth.sample(snapshot, false, tick, 10);
+            List<SyntheticDepth.Row> asks = new ArrayList<>(), bids = new ArrayList<>();
+            try {
+                asks = SyntheticDepth.sample(snapshot, true, tick, 10);
+                bids = SyntheticDepth.sample(snapshot, false, tick, 10);
+            } catch (RuntimeException invalid) { /* Invalid depth is never rendered as executable liquidity. */ }
+            final List<SyntheticDepth.Row> resultAsks = asks, resultBids = bids;
             ui.post(() -> {
-                if (!key.equals(requestedDepthKey)) return;
+                depthRunning = false;
+                if (closed) return;
                 readyDepthKey = key;
-                readyPoolAsks = asks;
-                readyPoolBids = bids;
+                readyPoolAsks = resultAsks;
+                readyPoolBids = resultBids;
+                // renderLadder schedules at most the latest changed snapshot, never a backlog.
                 act.repaintTrade();
             });
         });
@@ -686,6 +716,9 @@ public final class TradeView extends LinearLayout {
     }
 
     @Override protected void onDetachedFromWindow() {
+        closed = true;
+        ui.removeCallbacksAndMessages(null);
+        quoteExec.shutdownNow();
         depthExec.shutdownNow();
         super.onDetachedFromWindow();
     }
@@ -694,7 +727,7 @@ public final class TradeView extends LinearLayout {
         ordersBox.removeAllViews();
         for (Pending.Row r : pending) {
             LinearLayout row = orderRowShell();
-            row.addView(tv((r.buy ? "BUY " : "SELL ") + PriceMath.fmt(r.minima) + " @ "
+            row.addView(tv("RECOVERY_ERROR".equals(r.kind) ? "Receipt storage problem" : (r.buy ? "BUY " : "SELL ") + PriceMath.fmt(r.minima) + " @ "
                             + PriceMath.fmtPrice(r.price), 11f,
                     r.buy ? Design.IN() : Design.RED(), Design.mono()),
                     new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));

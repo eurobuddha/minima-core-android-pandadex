@@ -80,11 +80,12 @@ public class FillTapeTest {
         assertEquals(Boolean.TRUE, f[5]);    // partial
     }
 
-    @Test public void renewalIsNotATrade() {
+    @Test public void apparentRenewalMustStillBeSentForSpendingProof() {
         tape.ingest(book(sell("0xC1", "0xA1", "100", "0.575", 10)), false, 100, sink);
         // same orderId, same size, new coinid (atomic renew / edit)
         tape.ingest(book(sell("0xC2", "0xA1", "100", "0.500", 101)), false, 101, sink);
-        assertTrue(fills.isEmpty());
+        assertEquals(1, fills.size()); // A candidate, not a recorded trade.
+        assertEquals("0xC1", fills.get(0)[0]);
     }
 
     @Test public void fullFillNeedsMissGrace() {

@@ -1,0 +1,11 @@
+{
+  "elapsed_alarm_type_verified": true,
+  "alarm_type": 2,
+  "scheduled_elapsed": 975247,
+  "effective_elapsed": 975247,
+  "fallback_branch_exercised": true,
+  "exact_branch_executed": false,
+  "delivery_executed": false,
+  "device_policy_may_delay": true,
+  "alarm_block": "ELAPSED_WAKEUP #7: Alarm{136b099 type 2 origWhen 975247 whenElapsed 975247 com.eurobuddha.pandadex.audit}\n      tag=*walarm*:com.eurobuddha.pandadex.audit/com.eurobuddha.pandadex.HeartbeatReceiver\n      type=ELAPSED_WAKEUP origWhen=+14m58s196ms window=+11m14s992ms repeatInterval=0 count=0 flags=0x20\n      policyWhenElapsed: requester=+14m58s196ms app_standby=-1s552ms device_idle=-- battery_saver=-1s232ms\n      whenElapsed=+14m58s196ms maxWhenElapsed=+26m13s188ms\n      operation=PendingIntent{d6dff5e: PendingIntentRecord{c588f3f com.eurobuddha.pandadex.audit broadcastIntent}}\n      idle-options=Bundle[{android.pendingIntent.backgroundActivityAllowed=2, android:broadcast.temporaryAppAllowlistReasonCode=-1, android:broadcast.temporaryAppAllowlistDuration=10000, android:broadcast.temporaryAppAllowlistReason=, android:broadcast.temporaryAppAllowlistType=1, android:broadcast.flags=8}]"
+}

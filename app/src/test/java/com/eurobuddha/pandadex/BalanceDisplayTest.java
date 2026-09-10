@@ -16,6 +16,7 @@ public class BalanceDisplayTest {
         row.put("unconfirmed", "2.25");
         row.put("coins", 4);
         JSONObject reply = new JSONObject();
+        reply.put("status", true);
         reply.put("response", row);
 
         MainActivity.BalanceMeta b = MainActivity.balanceMeta(reply);
@@ -35,5 +36,12 @@ public class BalanceDisplayTest {
         assertEquals(0, BigDecimal.ZERO.compareTo(b.locked()));
         assertEquals(0, BigDecimal.ZERO.compareTo(b.unconfirmed));
         assertEquals(0, b.coins);
+    }
+    @Test public void failedOrIncompleteBalanceCannotClaimConfirmedFundsAreSpendable() throws Exception {
+        JSONObject row=new JSONObject().put("confirmed","100");
+        JSONObject reply=new JSONObject().put("status",true).put("response",row);
+        assertEquals(0,MainActivity.balanceMeta(reply).sendable.signum());
+        row.put("sendable","100"); reply.put("status",false);
+        assertEquals(0,MainActivity.balanceMeta(reply).sendable.signum());
     }
 }

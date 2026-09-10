@@ -1,0 +1,11 @@
+{
+  "ro.build.version.release": "16",
+  "ro.build.version.sdk": "36",
+  "ro.product.cpu.abi": "arm64-v8a",
+  "ro.build.fingerprint": "google/sdk_gphone64_arm64/emu64a:16/BE4B.251210.005/14574095:user/release-keys",
+  "ro.boot.qemu": "1",
+  "adb_server_port": 5049,
+  "emulator_name": "PandaDexAudit17",
+  "user_device_accessed": false,
+  "user_node_accessed": false
+}

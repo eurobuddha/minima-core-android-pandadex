@@ -1,0 +1,1 @@
+First runner invocation stopped before APK installation with KeyError production_java_sha266. Audit-number replacement accidentally changed the SHA256 identifier in host Python. Corrected to sha256; no APK was rebuilt or overwritten.

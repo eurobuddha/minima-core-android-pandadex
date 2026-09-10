@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MakerAuthorizationRevisionTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-10T18:20:04" hostname="ProMacBuddha.local" time="0.018">
+  <properties/>
+  <testcase name="legacySettingsRemainReadableAndGainProtectionOnChange" classname="com.eurobuddha.pandadex.MakerAuthorizationRevisionTest" time="0.012"/>
+  <testcase name="editAndRestoreCannotReviveOldQuote" classname="com.eurobuddha.pandadex.MakerAuthorizationRevisionTest" time="0.001"/>
+  <testcase name="failedPauseThenExplicitRearmStillInvalidatesEarlierWork" classname="com.eurobuddha.pandadex.MakerAuthorizationRevisionTest" time="0.001"/>
+  <testcase name="pauseAndRearmCannotReviveOldCreateOrRelock" classname="com.eurobuddha.pandadex.MakerAuthorizationRevisionTest" time="0.001"/>
+  <testcase name="invalidStoredRevisionCannotBeOverwritten" classname="com.eurobuddha.pandadex.MakerAuthorizationRevisionTest" time="0.001"/>
+  <testcase name="bookkeepingAndEquivalentDecimalsKeepCurrentAuthorization" classname="com.eurobuddha.pandadex.MakerAuthorizationRevisionTest" time="0.001"/>
+  <testcase name="staleHostCannotWriteAfterPauseAndIdenticalRearm" classname="com.eurobuddha.pandadex.MakerAuthorizationRevisionTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

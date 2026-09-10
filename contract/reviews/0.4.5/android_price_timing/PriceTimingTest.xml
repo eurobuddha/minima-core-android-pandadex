@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.PriceTimingTest" tests="14" skipped="0" failures="0" errors="0" timestamp="2026-09-10T08:39:20" hostname="ProMacBuddha.local" time="0.015">
+  <properties/>
+  <testcase name="closeTimeIsPartOfTheDeadline" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.005"/>
+  <testcase name="staleSuspectReadingCannotCorroborateANewJump" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.001"/>
+  <testcase name="ordinaryResponseRetainsDepthAndDisablesRedirectsAndCache" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.0"/>
+  <testcase name="oversizedBodyClosesAndDisconnects" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.002"/>
+  <testcase name="invalidElapsedClockFailsClosed" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.0"/>
+  <testcase name="elapsedDomainDoesNotRequireAnEpochTimestamp" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.001"/>
+  <testcase name="redirectsAndErrorsDoNotReadAnotherBody" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.002"/>
+  <testcase name="receiptAgeIncludesRequestTimeAndSleep" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.0"/>
+  <testcase name="lateSuccessfulPriceCannotRefreshPreviousSnapshot" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.001"/>
+  <testcase name="normalBackgroundCadenceCanResolveASuspectJump" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.0"/>
+  <testcase name="remainingTimeShrinksPerReadTimeout" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.001"/>
+  <testcase name="dribblingBodyCannotExtendTotalDeadline" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.001"/>
+  <testcase name="lateHeadersAreRejectedBeforeReadingBody" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.0"/>
+  <testcase name="malformedJsonIsNotAccepted" classname="com.eurobuddha.pandadex.PriceTimingTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

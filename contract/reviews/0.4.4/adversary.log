@@ -1,0 +1,13 @@
+Audit node version 1.1.2-TEST.4 private None
+PROOF rejected: shaved-payment (posted-not-mined)
+PROOF rejected: shaved-newwant (posted-not-mined)
+PROOF rejected: dust-remainder (posted-not-mined)
+PROOF rejected: remainder-hijack (posted-not-mined)
+PROOF rejected: keepstate-omitted (posted-not-mined)
+PROOF rejected: owner-port-flip (posted-not-mined)
+PROOF rejected: minrem-flip (posted-not-mined)
+PROOF rejected: third-party-steal (posted-not-mined)
+PROOF rejected: unsigned-relock-reprice (posted-not-mined)
+PROOF cancel: order 0x407298AD refunded to maker wallet
+
+Phase B adversary: 9/9 vectors REJECTED, order coin never moved

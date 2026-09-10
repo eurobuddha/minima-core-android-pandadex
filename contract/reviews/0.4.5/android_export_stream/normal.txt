@@ -1,0 +1,11 @@
+PASS 188 assertions
+correction, rollback, rechecks, export, nontrade and reopen
+overlapping aggregate taker receipt preserved
+actual SQLiteOpenHelper schema4/6/7/8/9/10to11 upgrades
+same-TxPoW reinclusion, exact time, queue rollback, stale proof, archive and same-height fork
+legacy source rediscovery after moved inclusion
+bounded source requeue across repeat checks
+durable taker record, write failure, exact time, proof adoption, replay and conflict rejection
+atomic full taker evidence, archive failure rollback, replay, export, conflict and reopen
+aggregate reinclusion, same-height fork, full-proof replacement ordering, stale callbacks, atomic archive/queue and metadata repair
+bounded indexed aggregate rotation, durable turns, schema10 evidence and atomic recheck queueing

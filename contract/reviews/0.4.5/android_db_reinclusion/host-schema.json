@@ -1,0 +1,23 @@
+{
+  "schema_migration_preserves_existing_rows": true,
+  "migration_idempotent": true,
+  "durable_candidates_after_reopen": 600,
+  "independent_history_offsets_after_reopen": true,
+  "batch_limit": 32,
+  "round_robin": true,
+  "sqlite_failure_rollback": true,
+  "historical_flag_and_verified_spend_survive_reopen": true,
+  "schema_6_candidates_preserved": true,
+  "schema_8_recheck_keeps_original_rows_visible": true,
+  "missing_proof_excluded_from_chart": true,
+  "restored_proof_returns_to_chart": true,
+  "stale_callback_rejected": true,
+  "schema_7_ledger_preserved": true,
+  "recent_and_old_checks_rotate": true,
+  "correction_failure_rolls_back_all_records": true,
+  "original_correction_snapshot_preserved": true,
+  "nontrade_correction_visible_but_excluded": true,
+  "schema_8_to_9_preserves_rows": true,
+  "source_correction_cannot_overwrite_taker_receipt": true,
+  "scope": "Host SQLite; not Android Java instrumentation"
+}

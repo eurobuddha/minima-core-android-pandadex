@@ -26,6 +26,7 @@ public final class PoolLiquidityRepository {
     private final List<Listener> listeners = new ArrayList<>();
     private List<Pool> cached = new ArrayList<>();
     private boolean haveLive = false;
+    private boolean current = false;
     private boolean scanning = false;
     private boolean pendingRescan = false;
     private long lastScanMs = 0;
@@ -53,6 +54,7 @@ public final class PoolLiquidityRepository {
     }
 
     public List<Pool> pools() { return cached; }
+    public boolean current() { return current; }
 
     public void subscribe(Listener l) {
         if (l != null && !listeners.contains(l)) listeners.add(l);
@@ -88,12 +90,14 @@ public final class PoolLiquidityRepository {
                     cached = pools == null ? new ArrayList<>() : pools;
                     haveLive = true;
                 }
-                notifyAllListeners(!haveLive);
+                current = believable;
+                notifyAllListeners(!current);
                 runPendingRescan();
             }
             @Override public void onError(String msg) {
                 scanning = false;
-                notifyAllListeners(!haveLive);
+                current = false;
+                notifyAllListeners(true);
                 runPendingRescan();
             }
         });

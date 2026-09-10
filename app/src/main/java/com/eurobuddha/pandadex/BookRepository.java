@@ -33,6 +33,7 @@ public final class BookRepository {
     private final List<Listener> listeners = new ArrayList<>();
 
     private Map<String, Order5> cached = new LinkedHashMap<>();
+    private boolean closed, current;
     private boolean haveLive = false;     // a live scan has landed this process
     private boolean scanning = false;
     private boolean pendingRescan = false;
@@ -67,6 +68,8 @@ public final class BookRepository {
     public FillTape tape() { return tape; }
 
     public Map<String, Order5> book() { return cached; }
+    public boolean current() { return current; }
+    public void close() { closed = true; pendingRescan = false; listeners.clear(); ui.removeCallbacksAndMessages(null); }
 
     public long chainBlock() { return chainBlock; }
 
@@ -87,6 +90,7 @@ public final class BookRepository {
 
     /** Coalesced, throttled refresh — safe to call from anywhere, any number of times. */
     public void refresh() {
+        if (closed) return;
         if (scanning) { pendingRescan = true; return; }
         long now = System.currentTimeMillis();
         long wait = lastScanMs + MIN_INTERVAL_MS - now;
@@ -101,6 +105,7 @@ public final class BookRepository {
         lastScanMs = now;
         BookScanner.scan(node, (orders, truncated, rawJsons) -> {
             scanning = false;
+            if (closed) return;
             // An EMPTY scan is not proof of an empty book — a partial or momentarily-empty
             // reply parses perfectly and is indistinguishable from "everything traded". But
             // DISTRUST MUST EXPIRE: the first cut refused an empty book unconditionally, so
@@ -118,25 +123,31 @@ public final class BookRepository {
             }
             boolean believable = believable(truncated, orders.isEmpty(), cached.isEmpty(),
                     emptyScans, haveLive);
-            if (believable) {
-                cached = orders;
-                haveLive = true;
-                if (sink != null) tape.ingest(orders, false, chainBlock, sink);
-                // Persist WHATEVER this scan says, empty included. Refusing to save an empty
-                // book left the snapshot holding the last non-empty one forever, so every cold
-                // start after cancelling everything repainted dead orders until the first live
-                // scan corrected it — ghosts that invite the user to act on spent coins.
-                // The protection against a BOGUS empty is the suspectEmpty gate above
-                // (EMPTY_CONFIRM believable empty scans, truncated ones not counted); by the
-                // time we are here the empty book has already earned belief. Worst case is a
-                // blank cold-start paint that self-heals on the next scan.
-                persist(orders, rawJsons);
-            } else if (!truncated) {
-                // still feed the tape so its own sanity gate observes and re-seeds
-                if (sink != null) tape.ingest(orders, false, chainBlock, sink);
+            current = believable;
+            try {
+                if (believable) {
+                    cached = orders;
+                    haveLive = true;
+                    if (sink != null) tape.ingest(orders, false, chainBlock, sink);
+                    // Persist WHATEVER this scan says, empty included. Refusing to save an empty
+                    // book left the snapshot holding the last non-empty one forever, so every cold
+                    // start after cancelling everything repainted dead orders until the first live
+                    // scan corrected it — ghosts that invite the user to act on spent coins.
+                    // The protection against a BOGUS empty is the suspectEmpty gate above
+                    // (EMPTY_CONFIRM believable empty scans, truncated ones not counted); by the
+                    // time we are here the empty book has already earned belief. Worst case is a
+                    // blank cold-start paint that self-heals on the next scan.
+                    persist(orders, rawJsons);
+                } else if (!truncated) {
+                    // still feed the tape so its own sanity gate observes and re-seeds
+                    if (sink != null) tape.ingest(orders, false, chainBlock, sink);
+                }
+            } catch (RuntimeException e) {
+                current = false;
+                believable = false; // A failed durable enqueue must not advance the disk snapshot.
             }
             // truncated → keep last-good cache (Limit lesson); still notify so views show "syncing"
-            for (Listener l : new ArrayList<>(listeners)) l.onBook(cached, truncated && !haveLive);
+            for (Listener l : new ArrayList<>(listeners)) l.onBook(cached, !believable);
             if (pendingRescan) {
                 pendingRescan = false;
                 refresh();

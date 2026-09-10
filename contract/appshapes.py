@@ -23,12 +23,14 @@ def down(x, dp=8):
 
 
 def check(txid):
-    """The app's gate: valid.scripts && valid.basic && validamounts && mmrproofs."""
-    chk = d.rpc("txncheck id:" + txid).get("response", {})
+    """Require every stock txncheck verdict; missing values fail closed."""
+    reply = d.rpc("txncheck id:" + txid)
+    chk = reply.get("response", {})
     v = chk.get("valid", {}) or {}
-    amounts = v.get("validamounts", chk.get("validamounts", True))
-    ok = bool(v.get("scripts")) and bool(v.get("basic")) and bool(v.get("mmrproofs")) and bool(amounts)
-    return ok, v
+    valid = (reply.get("status") is True
+             and all(v.get(k) is True for k in ("scripts", "basic", "mmrproofs"))
+             and all(chk.get(k) is True for k in ("validamounts", "allsignaturesvalid", "validtransaction")))
+    return valid, chk
 
 
 def run(name, steps, expect_ok=True):

@@ -51,8 +51,7 @@ public final class MakerTab extends LinearLayout {
      *  thing and running the wrong one rewrites amounts the user typed. */
     private Runnable pendingApply = null;
     private String pendingEdit = null;
-    /** Cache for the status panel's my-orders lookup, keyed on book identity. */
-    private java.util.Map<String, Order5> bookSeen, myById;
+    private final MakerStatus.OwnedBook ownedBook = new MakerStatus.OwnedBook();
 
     public MakerTab(MainActivity act, MakerConfig cfg) {
         super(act);
@@ -90,7 +89,7 @@ public final class MakerTab extends LinearLayout {
             String r = dest.toString().substring(0, dstart)
                     + source.subSequence(start, end)
                     + dest.toString().substring(dend);
-            return (r.isEmpty() || r.matches(pattern)) ? null : "";
+            return r.length() <= 44 && (r.isEmpty() || r.matches(pattern)) ? null : "";
         }});
         e.setText(value);
         e.setHint(hint);
@@ -214,7 +213,7 @@ public final class MakerTab extends LinearLayout {
         lc.addView(pegPxTv);
         TextView pegHint = tv("While pegged, the ladder regenerates around the MEXC mid "
                 + "(± step %, your size per rung) and reprices when the market moves ≥ your "
-                + "threshold. If the feed goes stale it quotes wider, then withdraws itself. "
+                + "threshold. A stale feed widens quotes, then triggers a withdrawal request. Android can delay checks; orders remain tradeable until cancellation confirms. "
                 + "MEXC's MINIMA market is THIN — keep step % above its typical spread and "
                 + "rung sizes small; you auto-trade at these prices. Every adjustment is a "
                 + "transaction your phone does proof-of-work for.",
@@ -639,6 +638,7 @@ public final class MakerTab extends LinearLayout {
 
     /** Read the fields back into the config. Called on blur, on arm, and before restructuring. */
     public void commit() {
+        cfg.reload(); // preserve other host's accepted slots, tombstones and explicit disarm
         cfg.asks.clear();
         cfg.bids.clear();
         for (EditText[] row : askRows) {
@@ -663,7 +663,8 @@ public final class MakerTab extends LinearLayout {
 
     private void togglePublish() {
         commit();
-        if (cfg.armed) {
+        if(!cfg.readable()){act.toast("Saved maker records could not be read. Keep app data for recovery; review live orders before taking action.");return;}
+        if (cfg.armed || !cfg.preparedCreate.isEmpty() || !cfg.slots.isEmpty()) {
             act.withdrawLadder();
             return;
         }
@@ -726,17 +727,21 @@ public final class MakerTab extends LinearLayout {
     /** The per-rung on-chain story + the engine's latest message, both refreshed cheaply. */
     private void updateStatus() {
         stageTv.setText(act.stage());
+        if (!cfg.preparedCreate.isEmpty()) {
+            slotsTv.setText("Interrupted create — review or withdraw this intent before publishing. Order " + cfg.preparedOrderId());
+            return;
+        }
         if (!cfg.armed) {
             // Not published: nothing is being reconciled, so don't narrate rungs as though
             // something were acting on them. Records may survive an interrupted withdraw.
             int n = cfg.slots.size(), t = cfg.cancelTombstones.size();
-            slotsTv.setText(n == 0 && t == 0 ? "nothing on-chain"
-                    : "not published — " + n + " rung" + (n == 1 ? "" : "s") + " still recorded"
-                    + (t > 0 ? ", " + t + " awaiting cancellation" : ""));
+            slotsTv.setText(n == 0 && t == 0 ? "no maker records stored here — check Orders for live positions"
+                    : "maker paused — " + n + " rung" + (n == 1 ? "" : "s") + " still recorded"
+                    + (t > 0 ? ", " + t + " with withdrawal instructions retained" : ""));
             return;
         }
         java.util.List<MakerStatus.Line> lines = MakerStatus.lines(desiredNow(), cfg.slots,
-                cfg.cancelTombstones, myOrdersById(), act.chainBlock());
+                cfg.cancelTombstones, myOrdersById(), act.chainBlock(), act.makerBookReady());
         if (lines.isEmpty()) {
             slotsTv.setText("waiting for the first cycle…");
             return;
@@ -751,16 +756,9 @@ public final class MakerTab extends LinearLayout {
         slotsTv.setText(sb.toString());
     }
 
-    /** My orders keyed by orderId, rebuilt only when the book actually changes — the status
-     *  panel refreshes every 2s and the book is the same object between scans. */
+    /** Reuse the last lookup only while the book and both wallet ownership factors agree. */
     private java.util.Map<String, Order5> myOrdersById() {
-        java.util.Map<String, Order5> book = act.book();
-        if (book == bookSeen && myById != null) return myById;
-        java.util.Map<String, Order5> mine = new java.util.HashMap<>();
-        for (Order5 o : book.values()) if (o.isMine(act.keys(), act.addrs())) mine.put(o.orderId, o);
-        bookSeen = book;
-        myById = mine;
-        return mine;
+        return ownedBook.get(act.book(), act.keys(), act.addrs());
     }
 
     private java.util.List<MakerLadder.Slot> desiredNow() {
@@ -807,15 +805,16 @@ public final class MakerTab extends LinearLayout {
         pegPxTv.setText(pegLine());
 
         boolean armed = cfg.armed;
-        stateTv.setText(armed ? (cfg.pegged && MarketPrice.mustWithdraw()
-                        ? "WITHDRAWN — STALE FEED" : "PUBLISHED")
-                              : "NOT PUBLISHED");
-        stateTv.setTextColor(armed ? (cfg.pegged && MarketPrice.mustWithdraw() ? Design.RED() : Design.IN())
+        stateTv.setText(!cfg.readable() ? "MAKER PAUSED — RECORDS UNREADABLE" : !MakerConfig.storageHealthy() ? (MakerConfig.settingsChangedElsewhere()?"MAKER PAUSED — SETTINGS CHANGED":"MAKER PAUSED — STORAGE ERROR") : armed ? (cfg.pegged && MarketPrice.mustWithdraw()
+                        ? "QUOTING PAUSED — CHECK ORDERS" : act.makerBookReady() ? "MAKER ENABLED" : "MAKER ENABLED — WALLET/BOOK CHECK PENDING")
+                              : cfg.hasRecordedOrders() ? "MAKER PAUSED — RECORDS RETAINED" : "MAKER OFF");
+        stateTv.setTextColor(!cfg.readable() || !MakerConfig.storageHealthy() ? Design.RED() : armed ? (cfg.pegged && MarketPrice.mustWithdraw() ? Design.RED() : act.makerBookReady() ? Design.IN() : Design.ACCENT())
                                    : Design.DIM());
         // only meaningful against a live ladder
         applyBtn.setVisibility(armed ? VISIBLE : GONE);
         prepBtn.setVisibility(armed ? GONE : VISIBLE);
-        armBtn.setText(armed ? "WITHDRAW LADDER (cancels all rungs)" : "PUBLISH LADDER");
+        boolean recorded = !cfg.preparedCreate.isEmpty() || !cfg.slots.isEmpty();
+        armBtn.setText(armed || recorded ? "WITHDRAW LADDER / RECORDED INTENT" : "PUBLISH LADDER");
         armBtn.setBackground(Design.ripple(Design.roundBg(getContext(),
                 armed ? Design.RED() : Design.IN(), 12)));
         updateStatus();

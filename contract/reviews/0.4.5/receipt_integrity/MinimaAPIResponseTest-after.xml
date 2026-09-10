@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="org.minimarex.minimaapi.MinimaAPIResponseTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-10T16:21:06" hostname="ProMacBuddha.local" time="0.025">
+  <properties/>
+  <testcase name="completeNodeReplyIsPreservedIncludingRealRejection" classname="org.minimarex.minimaapi.MinimaAPIResponseTest" time="0.0"/>
+  <testcase name="incompleteMalformedAndTrailingPayloadsStayUncertain" classname="org.minimarex.minimaapi.MinimaAPIResponseTest" time="0.001"/>
+  <testcase name="pairingIdsAcceptExistingCaseButNotPartialCorruption" classname="org.minimarex.minimaapi.MinimaAPIResponseTest" time="0.0"/>
+  <testcase name="streamingLimitIncludesExactBoundary" classname="org.minimarex.minimaapi.MinimaAPIResponseTest" time="0.002"/>
+  <testcase name="transportFailuresCannotClaimNodeRejection" classname="org.minimarex.minimaapi.MinimaAPIResponseTest" time="0.0"/>
+  <testcase name="bothInlineCharactersAndUtf8BytesAreBounded" classname="org.minimarex.minimaapi.MinimaAPIResponseTest" time="0.022"/>
+  <testcase name="trailingCommentsAndNonJsonWhitespaceCannotClaimAValidNodeReply" classname="org.minimarex.minimaapi.MinimaAPIResponseTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

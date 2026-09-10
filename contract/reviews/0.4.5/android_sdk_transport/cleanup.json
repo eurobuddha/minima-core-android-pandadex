@@ -1,0 +1,7 @@
+{
+  "emulator_stopped": true,
+  "isolated_adb_server_stopped": true,
+  "temporary_userdata_and_keys_removed": true,
+  "audit_apks_retained": true,
+  "production_apks_unchanged": true
+}

@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <int name="checks" value="13" />
+    <int name="build" value="25" />
+    <boolean name="ready" value="true" />
+    <int name="pid" value="4221" />
+    <string name="owner_receipt_id">7cf20c78-577e-45e5-915a-96738beb00a2</string>
+</map>

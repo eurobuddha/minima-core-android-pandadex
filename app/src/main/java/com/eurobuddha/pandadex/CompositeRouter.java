@@ -73,7 +73,7 @@ public final class CompositeRouter {
             BigDecimal step = remaining.min(chunk);
             OrderChoice oc = orderChoice(orders, oi, takenFromOrder, step, remaining, takerBuys);
             BigDecimal orderPrice = oc == null ? null : oc.usdt.divide(oc.minima, MC);
-            PoolChoice pc = poolChoice(pools, takerBuys, poolTarget, step);
+            PoolChoice pc = poolChoice(pools, takerBuys, poolTarget, step, currentRoute);
             BigDecimal poolPrice = pc == null ? null : pc.marginalUsdt.divide(pc.marginalMinima, MC);
             if (poolPrice != null && limitPrice != null) {
                 int cmp = poolPrice.compareTo(limitPrice);
@@ -176,11 +176,9 @@ public final class CompositeRouter {
         BigDecimal marginalMinima, marginalUsdt;
     }
 
-    private static PoolChoice poolChoice(List<Pool> pools, boolean takerBuys, BigDecimal currentMinima, BigDecimal step) {
+    private static PoolChoice poolChoice(List<Pool> pools, boolean takerBuys, BigDecimal currentMinima,
+                                         BigDecimal step, PoolRouter.Route before) {
         if (pools.isEmpty()) return null;
-        PoolRouter.Route before = currentMinima.signum() > 0
-                ? (takerBuys ? PoolRouter.routeExactMinimaOut(pools, currentMinima) : PoolRouter.route(pools, true, currentMinima))
-                : null;
         PoolRouter.Route after = takerBuys ? PoolRouter.routeExactMinimaOut(pools, currentMinima.add(step))
                 : PoolRouter.route(pools, true, currentMinima.add(step));
         if (after == null || !after.ok) return null;

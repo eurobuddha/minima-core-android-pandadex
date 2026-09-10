@@ -1,0 +1,6 @@
+FAIL after 25 assertions
+java.lang.AssertionError: late build after finish cleaned up
+	at com.eurobuddha.pandadex.ExportLifecycleAudit.check(ExportLifecycleAudit.java:56)
+	at com.eurobuddha.pandadex.ExportLifecycleAudit.normal(ExportLifecycleAudit.java:94)
+	at com.eurobuddha.pandadex.ExportLifecycleAudit.onStart(ExportLifecycleAudit.java:53)
+	at android.app.Instrumentation$InstrumentationThread.run(Instrumentation.java:2627)

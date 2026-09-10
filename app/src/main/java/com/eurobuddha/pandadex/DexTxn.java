@@ -24,6 +24,10 @@ import java.util.concurrent.ConcurrentHashMap;
 public class DexTxn {   // non-final so tests can stub the three order actions
 
     public interface Result {
+        /** Persist intent before signing. Returning false prevents submission. */
+        default boolean onPrepared(String transactionHandle) { return true; }
+        /** Persist the transition before asking the node to post. */
+        default boolean beforePost() { return true; }
         void onPosted(String txpowid);
         void onFailed(String message);
     }
@@ -32,26 +36,9 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     private final DexDb db;
     private String myPubkey = "";
     private String myHexAddr = "";
-    /**
-     * Funding coins used by posted-but-unconfirmed txns — never double-select. Reservations
-     * EXPIRE: a silently-rejected transaction (consensus drops it without an error) would
-     * otherwise pin its coins forever and the user would see "insufficient funds" on a funded
-     * wallet until the process restarted. Value = the block the reservation was made at.
-     *
-     * STATIC on purpose: MainActivity and DexKeepAliveService each build their own DexTxn, so an
-     * instance map left the two engines free to reserve — and therefore spend and sign — the very same
-     * coins. The only thing separating them was a MainActivity.FOREGROUND boolean read once at the top
-     * of a pipeline that then runs for minutes.
-     */
-    private static final Map<String, Long> inflight = new ConcurrentHashMap<>();
-    private static final long RESERVE_BLOCKS = 6;
-    private volatile long chainBlock = 0;
-
-    /** Keep the reservation clock honest; called from the host's block poll. */
-    public void setChainBlock(long b) {
-        chainBlock = b;
-        if (b > 0) inflight.values().removeIf(at -> b - at > RESERVE_BLOCKS);
-    }
+    /** Retained host API. Claims are process-wide and cannot be pruned by a token scan. */
+    private long chainBlock;
+    public void setChainBlock(long b) { chainBlock = b; CoinLock.prune(); }
 
     public DexTxn(NodeApi node, DexDb db) {
         this.node = node;
@@ -59,8 +46,8 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     }
 
     public void setIdentity(String pubkey, String hexAddr) {
-        myPubkey = pubkey;
-        myHexAddr = hexAddr;
+        myPubkey = FundingCoins.hex(pubkey) ? pubkey : "";
+        myHexAddr = FundingCoins.hex(hexAddr) ? hexAddr : "";
     }
 
     public String pubkey() { return myPubkey; }
@@ -71,7 +58,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
     /**
      * Place an order. buy=true locks mxUSDT wanting MINIMA; sell locks MINIMA wanting mxUSDT.
-     * One `send` — appears in the book next block; the caller adds the optimistic row.
+     * Bounded state-free funding, validated and posted through the shared signing gate.
      */
     public String createOrder(boolean buy, BigDecimal minimaAmount, BigDecimal price,
                               boolean gtc, BigDecimal minRemMinima, Result cb) {
@@ -83,6 +70,15 @@ public class DexTxn {   // non-final so tests can stub the three order actions
      *  ended up with dead ids for orders that were never funded). */
     public String createOrder(boolean buy, BigDecimal minimaAmount, BigDecimal price,
                               boolean gtc, BigDecimal minRemMinima, String orderId, Result cb) {
+        if (minimaAmount == null || price == null || minRemMinima == null
+                || price.signum() <= 0 || minRemMinima.signum() < 0
+                || Math.abs((long)price.scale()) > 44 || price.precision() > 44
+                || Math.abs((long)minRemMinima.scale()) > 44 || minRemMinima.precision() > 44
+                || minimaAmount.scale() > PriceMath.MINIMA_DP
+                || !FundingCoins.hex(orderId)) {
+            cb.onFailed("Invalid order amounts or identity. Nothing was sent.");
+            return null;
+        }
         if (myPubkey.isEmpty() || myHexAddr.isEmpty()) {
             cb.onFailed("Still reading your wallet identity — try again in a moment");
             return null;
@@ -98,7 +94,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             cb.onFailed("Order too large (max " + PriceMath.MAX_ORDER.toPlainString() + " per leg)");
             return null;
         }
-        BigDecimal lock = buy ? usdt : PriceMath.down(minimaAmount, PriceMath.MINIMA_DP);
+        BigDecimal lock = orderLockedAmount(buy,minimaAmount,price);
         BigDecimal want = buy ? PriceMath.down(minimaAmount, PriceMath.MINIMA_DP) : usdt;
         // Port 8 is compared on-chain against the remaining LOCKED amount, so a min-remainder
         // the user expressed in MINIMA has to be converted to the locked asset for a buy —
@@ -111,30 +107,102 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             cb.onFailed("Minimum remainder is larger than the order itself");
             return null;
         }
-        String state = "{\"0\":\"" + myPubkey + "\",\"1\":\"" + myHexAddr + "\","
-                + "\"2\":\"" + want.toPlainString() + "\","
-                + "\"3\":\"" + (buy ? "0x00" : DexContract.USDT_ID) + "\","
-                + "\"4\":\"" + orderId + "\",\"5\":\"" + (buy ? "0" : "1") + "\","
-                + "\"6\":\"" + price.toPlainString() + "\",\"7\":\"" + (gtc ? "1" : "0") + "\","
-                + "\"8\":\"" + minRem.toPlainString() + "\"}";
-        String cmd = "send amount:" + lock.toPlainString() + " address:" + DexContract.ADDR_V5
-                + (buy ? " tokenid:" + DexContract.USDT_ID : "") + " state:" + state;
-        // Behind the gate too: `send` signs internally, so it burns a key leaf exactly like a txnsign
-        // chain does and must not overlap with one.
-        SignGate.submit(gate -> node.cmd(cmd, new NodeApi.Cb() {
-            @Override public void onResult(JSONObject json) {
-                gate.free();
-                if (json.optBoolean("status", false) || json.optBoolean("pending", false)) {
-                    cb.onPosted(Util.extractTxpowid(json, orderId));
-                } else {
-                    cb.onFailed(json.optString("error", "send failed"));
-                }
+        final String payout = myHexAddr;
+        final String token = buy ? DexContract.USDT_ID : Util.MINIMA_TOKENID;
+        final String[] state = {myPubkey, payout, want.toPlainString(),
+                buy ? Util.MINIMA_TOKENID : DexContract.USDT_ID, orderId, buy ? "0" : "1",
+                price.toPlainString(), gtc ? "1" : "0", minRem.toPlainString()};
+        findCoins(token, lock, coins -> {
+            if (coins == null) {
+                String why = takeFundError();
+                cb.onFailed(why == null ? "Insufficient state-free funding for this order" : why);
+                return;
             }
-            @Override public void onError(String message) { gate.free(); cb.onFailed(message); }
-        }));
-        // The caller needs this to match its optimistic row against the live book — without
-        // it the row can never resolve and eventually cries "NOT CONFIRMED" on a good order.
+            String txid = "create_" + System.nanoTime();
+            List<String> steps = createOrderSteps(txid, token, lock, payout, state, coins);
+            List<String> ids = new ArrayList<>();
+            for (JSONObject c : coins) ids.add(c.optString("coinid"));
+            if (db == null) { cb.onFailed("Order receipt storage is unavailable. Nothing was signed."); return; }
+            Pending.Row receipt = CreationEvidence.prepare(buy, minimaAmount, price, token, lock,
+                    payout, state, coins, chainBlock);
+            postGated(txid, steps, ids, db.pendingReceipts().creationResult(receipt, cb));
+        });
         return orderId;
+    }
+
+    /** Shared exact funding amount for transaction construction and durable maker intent. */
+    static BigDecimal orderLockedAmount(boolean buy,BigDecimal minima,BigDecimal price) {
+        return buy ? PriceMath.up(minima.multiply(price,PriceMath.MC),PriceMath.USDT_DP)
+                : PriceMath.down(minima,PriceMath.MINIMA_DP);
+    }
+
+    /** Same explicit funding/output/change pattern as fillSweep; change must never carry order state. */
+    static List<String> createOrderSteps(String txid, String token, BigDecimal lock, String payout,
+                                         String[] state, List<JSONObject> coins) {
+        if (!FundingCoins.hex(token) || !FundingCoins.hex(payout) || !amountOk(lock)
+                || state == null || state.length != 9 || coins == null || coins.isEmpty()
+                || coins.size() > FundingCoins.SAFE_COINS)
+            throw new IllegalArgumentException("Invalid order funding");
+        List<String> steps = new ArrayList<>();
+        steps.add("txncreate id:" + txid);
+        BigDecimal total = BigDecimal.ZERO;
+        for (JSONObject c : coins) {
+            FundingCoins.fundingCoin(c);
+            if (!FundingCoins.hex(c.optString("coinid")) || !token.equalsIgnoreCase(c.optString("tokenid")))
+                throw new IllegalArgumentException("Wrong order funding token or input identity");
+            total = total.add(coinValue(c));
+            steps.add("txninput id:" + txid + " coinid:" + c.optString("coinid"));
+        }
+        if (total.compareTo(lock) < 0) throw new IllegalArgumentException("Insufficient order funding");
+        String tok = Util.isMinima(token) ? "" : " tokenid:" + token;
+        steps.add("txnoutput id:" + txid + " amount:" + lock.toPlainString()
+                + " address:" + DexContract.ADDR_V5 + tok + " storestate:true");
+        BigDecimal change = total.subtract(lock);
+        if (change.signum() > 0) steps.add("txnoutput id:" + txid + " amount:" + change.toPlainString()
+                + " address:" + payout + tok + " storestate:false");
+        for (int i = 0; i < state.length; i++) steps.add(stateStep(txid, i, state[i]));
+        steps.add("txnbasics id:" + txid);
+        steps.add("txnsign id:" + txid + " publickey:auto");
+        return steps;
+    }
+
+    /** Funding preparation uses the same bounded, state-free selector as trades. */
+    public void splitFunding(String token, BigDecimal amount, Result cb) {
+        final String payout = myHexAddr;
+        if (!FundingCoins.hex(payout) || !FundingCoins.hex(token) || !amountOk(amount)
+                || amount.scale() > PriceMath.MINIMA_DP
+                || amount.compareTo(new BigDecimal("0.0000001")) < 0) {
+            cb.onFailed("Invalid wallet split amount or address. Nothing was sent."); return;
+        }
+        findCoins(token, amount, coins -> {
+            if (coins == null) { String error = takeFundError(); cb.onFailed(error == null ? "Insufficient state-free funding" : error); return; }
+            String txid = "split_" + System.nanoTime();
+            List<String> ids = new ArrayList<>();
+            for (JSONObject c : coins) ids.add(c.optString("coinid"));
+            postGated(txid, splitFundingSteps(txid, token, amount, payout, coins), ids, cb);
+        });
+    }
+
+    static List<String> splitFundingSteps(String txid, String token, BigDecimal amount, String payout, List<JSONObject> coins) {
+        BigDecimal piece = amount.divide(new BigDecimal(SelfSplit.COUNT), PriceMath.MINIMA_DP, java.math.RoundingMode.DOWN);
+        if (piece.signum() <= 0) throw new IllegalArgumentException("Split outputs would be dust");
+        List<String> steps = new ArrayList<>();
+        steps.add("txncreate id:" + txid);
+        BigDecimal total = BigDecimal.ZERO;
+        for (JSONObject c : coins) {
+            steps.add("txninput id:" + txid + " coinid:" + c.optString("coinid"));
+            total = total.add(coinValue(c));
+        }
+        if (total.compareTo(amount) < 0) throw new IllegalArgumentException("Insufficient split funding");
+        String suffix = " address:" + payout + (Util.isMinima(token) ? "" : " tokenid:" + token) + " storestate:false";
+        for (int i = 0; i < SelfSplit.COUNT; i++) {
+            BigDecimal output = i == SelfSplit.COUNT - 1 ? amount.subtract(piece.multiply(new BigDecimal(SelfSplit.COUNT - 1))) : piece;
+            steps.add("txnoutput id:" + txid + " amount:" + output.toPlainString() + suffix);
+        }
+        if (total.compareTo(amount) > 0) steps.add("txnoutput id:" + txid + " amount:" + total.subtract(amount).toPlainString() + suffix);
+        steps.add("txnbasics id:" + txid);
+        steps.add("txnsign id:" + txid + " publickey:auto");
+        return steps;
     }
 
     // ------------------------------------------------------------------ sweep fill
@@ -142,7 +210,13 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     /** Execute a planned sweep (proven shape: order inputs first, index-matched payments,
      *  single partial last with its remainder at output k). */
     public void fillSweep(SweepPlanner.Plan plan, Result cb) {
-        if (plan.isEmpty()) { cb.onFailed("Nothing to fill"); return; }
+        final String payoutAddress = myHexAddr;
+        if (plan == null || plan.isEmpty()) { cb.onFailed("Nothing to fill"); return; }
+        for (SweepPlanner.Take t : plan.takes) {
+            if (t == null || !safeOrder(t.order) || !t.order.fillable()) {
+                cb.onFailed("Invalid order data. Refresh the book before trading."); return;
+            }
+        }
         boolean takerBuys = plan.takes.get(0).order.sell;
         // taker pays USDT when buying (consuming sells); pays MINIMA when selling
         String payTok = takerBuys ? DexContract.USDT_ID : "0x00";
@@ -210,13 +284,13 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 proceeds = proceeds.add(lockedTake);
             }
             steps.add("txnoutput id:" + txid + " amount:" + proceeds.toPlainString()
-                    + " address:" + myHexAddr
+                    + " address:" + payoutAddress
                     + ("0x00".equals(proceedsTok) ? "" : " tokenid:" + proceedsTok)
                     + " storestate:false");
             BigDecimal change = fundTotal.subtract(fNeeded);
             if (change.signum() > 0) {
                 steps.add("txnoutput id:" + txid + " amount:" + change.toPlainString()
-                        + " address:" + myHexAddr
+                        + " address:" + payoutAddress
                         + ("0x00".equals(payTok) ? "" : " tokenid:" + payTok) + " storestate:false");
             }
             if (fPartial != null) {
@@ -240,7 +314,13 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
     /** Execute a blended order-book + PandaPools fill in one atomic transaction. */
     public void fillComposite(CompositeRouter.Plan plan, boolean takerBuys, Result cb) {
+        final String payoutAddress = myHexAddr;
         if (plan == null || plan.isEmpty()) { cb.onFailed("Nothing to fill"); return; }
+        for (SweepPlanner.Take t : plan.orderTakes) {
+            if (t == null || !safeOrder(t.order) || !t.order.fillable()) {
+                cb.onFailed("Invalid order data. Refresh the book before trading."); return;
+            }
+        }
         CompositePrep prep = prepareComposite(plan, takerBuys);
 
         java.util.HashSet<String> exclude = new java.util.HashSet<>();
@@ -258,7 +338,9 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 return;
             }
             ensureTrackedPools(prep.route == null ? new ArrayList<>() : prep.route.allocs, 0,
-                    () -> buildComposite(plan, prep, takerBuys, coins, cb));
+                    () -> buildComposite(plan, prep, takerBuys, coins, payoutAddress, cb), message -> {
+                        CoinLock.release(coins); cb.onFailed(message);
+                    });
         });
     }
 
@@ -298,8 +380,8 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     }
 
     private void buildComposite(CompositeRouter.Plan plan, CompositePrep prep, boolean takerBuys,
-                                List<JSONObject> coins, Result cb) {
-        CompositeBuild built = buildCompositeSteps("combo_" + System.nanoTime(), myHexAddr, plan, prep, takerBuys, coins);
+                                List<JSONObject> coins, String payoutAddress, Result cb) {
+        CompositeBuild built = buildCompositeSteps("combo_" + System.nanoTime(), payoutAddress, plan, prep, takerBuys, coins);
         postGated(built.txid, built.steps, built.fundIds, cb);
     }
 
@@ -309,7 +391,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         List<String> fundIds = new ArrayList<>();
     }
 
-    static CompositeBuild buildCompositeSteps(String txid, String myHexAddr, CompositeRouter.Plan plan,
+    static CompositeBuild buildCompositeSteps(String txid, String payoutAddress, CompositeRouter.Plan plan,
                                               CompositePrep prep, boolean takerBuys,
                                               List<JSONObject> coins) {
         PoolRouter.Route route = prep.route;
@@ -352,13 +434,13 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         String proceedsTok = takerBuys ? Util.MINIMA_TOKENID : DexContract.USDT_ID;
         BigDecimal proceeds = takerBuys ? plan.totalMinima : plan.totalUsdt;
         steps.add("txnoutput id:" + txid + " amount:" + amt(proceeds)
-                + " address:" + myHexAddr
+                + " address:" + payoutAddress
                 + (Util.MINIMA_TOKENID.equals(proceedsTok) ? "" : " tokenid:" + proceedsTok)
                 + " storestate:false");
         BigDecimal change = fundTotal.subtract(prep.needed);
         if (change.signum() > 0) {
             steps.add("txnoutput id:" + txid + " amount:" + amt(change)
-                    + " address:" + myHexAddr
+                    + " address:" + payoutAddress
                     + (Util.MINIMA_TOKENID.equals(prep.payTok) ? "" : " tokenid:" + prep.payTok) + " storestate:false");
         }
         if (prep.partial != null) {
@@ -378,17 +460,28 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         return out;
     }
 
-    private void ensureTrackedPools(List<PoolRouter.Alloc> allocs, int i, Runnable then) {
+    private void ensureTrackedPools(List<PoolRouter.Alloc> allocs, int i, Runnable then, java.util.function.Consumer<String> fail) {
         if (i >= allocs.size()) { then.run(); return; }
         Pool p = allocs.get(i).pool;
-        String script = p.covenantScript != null && !p.covenantScript.isEmpty()
-                ? p.covenantScript : PoolCovenant.script(p.opk, p.oadr, p.tok, p.kmin);
+        if (!PoolCovenant.validParams(p.opk, p.oadr, p.tok, p.kmin) || !FundingCoins.hex(p.address)) {
+            fail.accept("Invalid pool recipe. Nothing was signed."); return;
+        }
+        String script = PoolCovenant.script(p.opk, p.oadr, p.tok, p.kmin);
+        if (p.covenantScript != null && !p.covenantScript.isEmpty() && !script.equals(p.covenantScript)) {
+            fail.accept("Pool covenant does not match its recipe. Nothing was signed."); return;
+        }
         // Keep pool scripts known for transaction construction without making every reserve
         // coin at that address look wallet-owned/relevant. This is the same load-bearing
         // trackall:false rule as the V5 order covenant.
         node.cmd(poolScriptRegisterCommand(p, script), new NodeApi.Cb() {
-            @Override public void onResult(JSONObject j) { ensureTrackedPools(allocs, i + 1, then); }
-            @Override public void onError(String m) { ensureTrackedPools(allocs, i + 1, then); }
+            @Override public void onResult(JSONObject j) {
+                JSONObject r = j == null ? null : j.optJSONObject("response");
+                if (!TxValidation.truthy(j, "status") || r == null || !p.address.equalsIgnoreCase(r.optString("address"))) {
+                    fail.accept("Pool registration did not verify. Nothing was signed."); return;
+                }
+                ensureTrackedPools(allocs, i + 1, then, fail);
+            }
+            @Override public void onError(String m) { fail.accept(m); }
         });
     }
 
@@ -397,6 +490,9 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     }
 
     private static String stateStep(String txid, int port, String value) {
+        if (!FundingCoins.hex(value) && (value == null || value.length() > 100
+                || !value.matches("[0-9]+(?:\\.[0-9]+)?")))
+            throw new IllegalArgumentException("Invalid transaction state literal");
         return "txnstate id:" + txid + " port:" + port + " value:" + value;
     }
 
@@ -422,6 +518,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
     /** Cancel: owner-signed refund of the whole coin to the maker wallet (token-aware). */
     public void cancel(Order5 o, Result cb) {
+        if (!safeOrder(o)) { cb.onFailed("Invalid order data. Nothing was signed."); return; }
         // Do NOT mark this as cancelled yet. `txnpost` only means the node accepted it to the
         // mempool; if it loses a double-spend race to a real fill, a premature marker would
         // permanently suppress that fill from the tape. The verifier records a cancellation
@@ -435,7 +532,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 + ("0x00".equals(o.lockedTok) ? "" : " tokenid:" + o.lockedTok) + " storestate:false");
         steps.add("txnsign id:" + txid + " publickey:" + o.ownerPk);
         steps.add("txnbasics id:" + txid);
-        postGated(txid, steps, new ArrayList<>(), cb);
+        postCancellation(txid,steps,java.util.Collections.singletonList(o),cb);
     }
 
     /**
@@ -461,6 +558,9 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             cb.onFailed("Too many orders for one transaction");
             return;
         }
+        for (Order5 o : orders) if (!safeOrder(o)) {
+            cb.onFailed("Invalid order data. Nothing was signed."); return;
+        }
         if (orders.size() == 1) { cancel(orders.get(0), cb); return; }
 
         String txid = "cancelb_" + System.nanoTime();
@@ -485,16 +585,29 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             }
         }
         steps.add("txnbasics id:" + txid);
-        postGated(txid, steps, new ArrayList<>(), cb);
+        postCancellation(txid,steps,orders,cb);
+    }
+
+    private void postCancellation(String txid,List<String> steps,List<Order5> orders,Result cb) {
+        Result journal;
+        try {
+            if(db==null)throw new IllegalStateException("Receipt storage unavailable");
+            journal=db.pendingReceipts().cancellationResult(orders,chainBlock,cb);
+        }catch(RuntimeException failure){cb.onFailed("Could not prepare cancellation receipts. Nothing was signed.");return;}
+        postGated(txid,steps,new ArrayList<>(),journal);
     }
 
     /** Atomic in-place re-lock: GTC renew (newWant null) or edit (newWant set). ONE txn —
      *  the coin never leaves the book (the V5 owner branch; proven in Phase B chunk D). */
     public void relock(Order5 o, BigDecimal newWant, Result cb) {
+        if (!safeOrder(o)) { cb.onFailed("Invalid order data. Nothing was signed."); return; }
         // A successful re-lock is recognised from its successor coin by FillTape. Do not add a
         // cancellation marker here: a transaction accepted to the mempool may still lose to a
         // taker fill, which must remain recordable.
         BigDecimal want = newWant == null ? o.wantAmt : newWant;
+        if (!amountOk(want) || want.stripTrailingZeros().scale() > 8) {
+            cb.onFailed("Invalid replacement amount. Nothing was signed."); return;
+        }
         String txid = "relock_" + System.nanoTime();
         List<String> steps = new ArrayList<>();
         steps.add("txncreate id:" + txid);
@@ -514,11 +627,17 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         steps.add(stateStep(txid, 8, o.minRem.toPlainString()));
         steps.add("txnsign id:" + txid + " publickey:" + o.ownerPk);
         steps.add("txnbasics id:" + txid);
-        postGated(txid, steps, new ArrayList<>(), cb);
+        Result journal;
+        try {
+            if(db==null)throw new IllegalStateException("Receipt storage unavailable");
+            journal=db.pendingReceipts().relockResult(o,want,chainBlock,cb);
+        }catch(RuntimeException failure){cb.onFailed("Could not prepare relock receipt. Nothing was signed.");return;}
+        postGated(txid,steps,new ArrayList<>(),journal);
     }
 
     /** Third-party sweep of an expired order back to its maker (book hygiene; COINAGE path). */
     public void collectExpired(Order5 o, Result cb) {
+        if (!safeOrder(o)) { cb.onFailed("Invalid order data. Nothing was signed."); return; }
         String txid = "collect_" + System.nanoTime();
         List<String> steps = new ArrayList<>();
         steps.add("txncreate id:" + txid);
@@ -528,7 +647,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 + ("0x00".equals(o.lockedTok) ? "" : " tokenid:" + o.lockedTok) + " storestate:false");
         steps.add("txnsign id:" + txid + " publickey:auto");
         steps.add("txnbasics id:" + txid);
-        postGated(txid, steps, new ArrayList<>(), cb);
+        postCancellation(txid, steps, java.util.Collections.singletonList(o), cb);
     }
 
     // ------------------------------------------------------------------ plumbing
@@ -541,137 +660,106 @@ public class DexTxn {   // non-final so tests can stub the three order actions
      * transactions, which leaks that leaf's private key — confirmed on a live node, 7 of 64 keys.
      */
     private void postGated(String txid, List<String> steps, List<String> fundIds, Result cb) {
+        List<String> inputs = new ArrayList<>();
+        for (String command : steps) {
+            String invalid = CommandSafety.failure(command);
+            if (invalid != null) { cb.onFailed(invalid); return; }
+            if (command.startsWith("txninput ")) {
+                String id = "";
+                for (String part : command.split("\\s+")) if (part.startsWith("coinid:")) id = part.substring(7);
+                if (!FundingCoins.hex(id)) { cb.onFailed("Invalid transaction input. Nothing was signed."); return; }
+                inputs.add(id);
+            }
+        }
+        if (inputs.isEmpty() || inputs.size() > FundingCoins.MAX_INPUTS) {
+            cb.onFailed("Too many transaction inputs. Consolidate funding or use fewer orders/pools."); return;
+        }
+        if (!cb.onPrepared(txid)) { cb.onFailed("Could not save transaction intent. Nothing was signed."); return; }
+        if (!CoinLock.claimInputs(inputs)) {
+            cb.onFailed("An input is already in another queued transaction or appears twice. Wait and refresh."); return;
+        }
         SignGate.submit(gate -> {
             final Result gated = new Result() {
-                @Override public void onPosted(String txpowid) { gate.free(); cb.onPosted(txpowid); }
-                @Override public void onFailed(String message) { gate.free(); cb.onFailed(message); }
+                private boolean completed;
+                private void finish(String id, String error) {
+                    if (completed) return;
+                    completed = true;
+                    CoinLock.finishInputs(inputs);
+                    try { if (error == null) cb.onPosted(id); else cb.onFailed(error); }
+                    finally { gate.free(); }
+                }
+                public boolean beforePost() { return cb.beforePost(); }
+                public void onPosted(String id) { finish(id, null); }
+                public void onFailed(String message) { finish(null, message); }
             };
-            for (String id : fundIds) inflight.put(id, chainBlock);
             CmdChain.run(node, new ArrayList<>(steps), "txndelete id:" + txid, new CmdChain.Done() {
-                @Override public void ok(JSONObject last) {
-                    node.cmd("txnexport id:" + txid, new NodeApi.Cb() {
-                        @Override public void onResult(JSONObject exported) {
-                            if (txnBytes(exported) > 60 * 1024) {
-                                inflight.keySet().removeAll(fundIds);
-                                node.cmd("txndelete id:" + txid, null);
-                                gated.onFailed("Transaction is too large — reduce pools/orders or consolidate wallet coins");
-                                return;
-                            }
-                            checkAndPost(txid, fundIds, gated);
-                        }
-                        @Override public void onError(String message) {
-                            inflight.keySet().removeAll(fundIds);
-                            node.cmd("txndelete id:" + txid, null);
-                            gated.onFailed(message);
-                        }
-                    });
-                }
-                @Override public void fail(String message) {
-                    inflight.keySet().removeAll(fundIds);
-                    gated.onFailed(message);
-                }
+                public void ok(JSONObject last) { checkAndPost(txid, gated); }
+                public void fail(String message) { gated.onFailed(message); }
             });
         });
     }
 
-    private void checkAndPost(String txid, List<String> fundIds, Result cb) {
+    private void checkAndPost(String txid, Result cb) {
         node.cmd("txncheck id:" + txid, new NodeApi.Cb() {
-            @Override public void onResult(JSONObject last) {
-                JSONObject resp = last == null ? null : last.optJSONObject("response");
-                JSONObject valid = resp == null ? null : resp.optJSONObject("valid");
-                // gate on the VERDICT object (top-level `scripts` is a COUNT); validamounts
-                // is read from whichever object carries it, defaulting true only when absent
-                boolean scripts = valid != null && valid.optBoolean("scripts", false);
-                boolean basic = valid != null && valid.optBoolean("basic", false);
-                boolean mmr = valid != null && valid.optBoolean("mmrproofs", false);
-                boolean amounts = true;
-                if (valid != null && valid.has("validamounts")) amounts = valid.optBoolean("validamounts", false);
-                else if (resp != null && resp.has("validamounts")) amounts = resp.optBoolean("validamounts", false);
-                // txncheck's script run only feeds the signature KEYS into SIGNEDBY — it does
-                // not verify the signatures themselves. Without this, an invalid or
-                // key-exhausted signature sails through valid.scripts and we post a txn that
-                // consensus silently drops (for a GTC relock that means we'd believe the order
-                // was renewed and suppress the retry while it marches toward expiry).
-                boolean sigs = resp == null || resp.optBoolean("allsignaturesvalid", true);
-                if (!scripts || !basic || !amounts || !mmr || !sigs) {
-                    inflight.keySet().removeAll(fundIds);
-                    node.cmd("txndelete id:" + txid, null);
-                    cb.onFailed("Transaction failed validation (scripts=" + scripts
-                            + " basic=" + basic + " amounts=" + amounts + " mmr=" + mmr
-                            + " sigs=" + sigs + ")");
-                    return;
+            public void onResult(JSONObject checked) {
+                String invalid = TxValidation.checkFailure(checked);
+                if (invalid != null) {
+                    node.cmd("txndelete id:" + txid, null); cb.onFailed(invalid); return;
                 }
+                if (!cb.beforePost()) {
+                    node.cmd("txndelete id:" + txid, null);
+                    cb.onFailed("Could not save submission intent. The transaction was not posted."); return;
+                }
+                // txnexport is NOT the serialized TxPoW, and returning its hex over IPC is costly.
+                // The stock node applies the chain's actual TxPoW size limit at txnpost.
                 node.cmd("txnpost id:" + txid, new NodeApi.Cb() {
-                    @Override public void onResult(JSONObject json) {
-                        node.cmd("txndelete id:" + txid, null);
-                        if (json.optBoolean("status", false) || json.optBoolean("pending", false)) {
-                            cb.onPosted(Util.extractTxpowid(json, txid));
-                        } else {
-                            inflight.keySet().removeAll(fundIds);
-                            cb.onFailed(json.optString("error", "txnpost failed"));
+                    public void onResult(JSONObject reply) {
+                        if (reply.optBoolean("pending", false)) {
+                            cb.onFailed("Awaiting node approval; this transaction has not been submitted."); return;
                         }
-                    }
-                    @Override public void onError(String message) {
-                        // every txn error path deletes the pending txn — safe even if the post
-                        // did land, since posting has already happened by this point
                         node.cmd("txndelete id:" + txid, null);
-                        inflight.keySet().removeAll(fundIds);
+                        if (reply.optBoolean("status", false)) cb.onPosted(Util.extractTxpowid(reply, txid));
+                        else cb.onFailed(TxValidation.postError(reply));
+                    }
+                    public void onError(String message) {
+                        if (!NodeApi.ERR_WRITE_UNCERTAIN.equals(message)) node.cmd("txndelete id:" + txid, null);
                         cb.onFailed(message);
                     }
                 });
             }
-            @Override public void onError(String message) {
-                inflight.keySet().removeAll(fundIds);
-                node.cmd("txndelete id:" + txid, null);
-                cb.onFailed(message);
+            public void onError(String message) {
+                node.cmd("txndelete id:" + txid, null); cb.onFailed(message);
             }
         });
     }
 
-    private static int txnBytes(JSONObject exported) {
-        JSONObject resp = exported == null ? null : exported.optJSONObject("response");
-        String data = resp == null ? "" : resp.optString("data", "");
-        if (data.startsWith("0x") || data.startsWith("0X")) data = data.substring(2);
-        return data.length() / 2;
+    static boolean amountOk(BigDecimal value) {
+        return value != null && value.signum() > 0 && value.compareTo(PriceMath.MAX_ORDER) <= 0
+                && Math.abs((long)value.scale()) <= 44 && value.precision() <= 44;
+    }
+
+    static boolean safeOrder(Order5 o) {
+        return o != null && FundingCoins.hex(o.coinid) && FundingCoins.hex(o.ownerPk)
+                && FundingCoins.hex(o.wantAddr) && FundingCoins.hex(o.wantTok)
+                && FundingCoins.hex(o.orderId) && FundingCoins.hex(o.lockedTok)
+                && amountOk(o.locked) && amountOk(o.wantAmt) && o.minRem != null
+                && o.minRem.signum() >= 0 && o.minRem.scale() <= 44 && o.minRem.precision() <= 44;
     }
 
     public interface CoinsCb { void found(List<JSONObject> coins); }
 
-    private static BigDecimal coinValue(JSONObject c) {
-        String tokenid = c.optString("tokenid", "0x00");
-        String amt = "0x00".equals(tokenid) ? c.optString("amount", "0")
-                : c.optString("tokenamount", c.optString("amount", "0"));
-        return Util.dec(amt);
-    }
+    private static BigDecimal coinValue(JSONObject c) { return FundingCoins.coinValue(c); }
 
-    /** Greedy largest-first selection of confirmed, stateless, un-reserved wallet coins.
-     *  `checkmempool:true` is what `send` itself uses — without it a coin already committed by
-     *  a pending order placement (or by the background service) is freely selectable, and one
-     *  of the two transactions dies silently while both report success. */
     public void findCoins(String tokenid, BigDecimal need, CoinsCb cb) {
-        findCoins(tokenid, need, java.util.Collections.emptySet(), Integer.MAX_VALUE, cb);
+        findCoins(tokenid, need, java.util.Collections.emptySet(), 8, cb);
     }
 
     public void findCoins(String tokenid, BigDecimal need, java.util.Set<String> excludeAddrsLower,
                           int maxInputs, CoinsCb cb) {
         lastFundError = null;
-        node.cmd("coins relevant:true sendable:true checkmempool:true tokenid:" + tokenid, new NodeApi.Cb() {
-            @Override public void onResult(JSONObject json) {
-                Object resp = json.opt("response");
-                FundingPick pick = selectFundingCoins(resp, need, excludeAddrsLower, maxInputs, inflight.keySet());
-                inflight.keySet().retainAll(pick.presentCoinIds);   // drop reservations for spent coins
-                if (pick.error != null) lastFundError = pick.error;
-                cb.found(pick.coins);
-            }
-            @Override public void onError(String message) {
-                // Distinguish "wallet too fragmented to enumerate" from "no funds" — this is
-                // the ONE query whose size scales with the user's coin count, and reporting it
-                // as "insufficient funds" on a fully funded wallet is undiagnosable.
-                lastFundError = NodeApi.ERR_TOO_LONG.equals(message)
-                        ? "Your wallet has too many coins to scan — consolidate them and retry."
-                        : null;
-                cb.found(null);
-            }
+        FundingCoins.select(node::cmd, tokenid, need, excludeAddrsLower, maxInputs, new FundingCoins.Done() {
+            public void ok(List<JSONObject> coins, BigDecimal sum) { cb.found(coins); }
+            public void fail(String message) { lastFundError = message; cb.found(null); }
         });
     }
 
@@ -698,6 +786,9 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             if (c == null) continue;
             String coinid = c.optString("coinid");
             present.add(coinid);
+            try { FundingCoins.fundingCoin(c); }
+            catch (IllegalArgumentException invalid) { return new FundingPick(null, present, invalid.getMessage()); }
+            if (c.optBoolean("spent", false)) continue;
             Object st = c.opt("state");
             boolean hasState = st instanceof org.json.JSONArray
                     ? ((org.json.JSONArray) st).length() > 0

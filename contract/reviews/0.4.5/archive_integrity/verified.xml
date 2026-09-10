@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.ArchiveIntegrityTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-10T17:29:02" hostname="ProMacBuddha.local" time="0.026">
+  <properties/>
+  <testcase name="fractionalOrOverflowVersionCannotMatchTakerIntent" classname="com.eurobuddha.pandadex.ArchiveIntegrityTest" time="0.008"/>
+  <testcase name="takerCaptureFreezesAdoptedProofAlongsideArchiveBytes" classname="com.eurobuddha.pandadex.ArchiveIntegrityTest" time="0.0"/>
+  <testcase name="damagedArchiveSuffixCannotAuthorizeTakerRepair" classname="com.eurobuddha.pandadex.ArchiveIntegrityTest" time="0.001"/>
+  <testcase name="fractionalInclusionCannotMatchArchiveIndex" classname="com.eurobuddha.pandadex.ArchiveIntegrityTest" time="0.002"/>
+  <testcase name="invalidArchiveDoesNotDispatchRecoveryOrMutateStore" classname="com.eurobuddha.pandadex.ArchiveIntegrityTest" time="0.001"/>
+  <testcase name="oversizedSavedArchiveCannotBeReusedForRepair" classname="com.eurobuddha.pandadex.ArchiveIntegrityTest" time="0.008"/>
+  <testcase name="ownerReplayRejectsFractionalVersionAndBlock" classname="com.eurobuddha.pandadex.ArchiveIntegrityTest" time="0.005"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

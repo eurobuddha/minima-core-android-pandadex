@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.PendingIntentConsistencyTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-10T16:39:38" hostname="ProMacBuddha.local" time="0.037">
+  <properties/>
+  <testcase name="savedOwnerSourceMustBeCompleteJsonAndMatchReceiptIdentity" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.02"/>
+  <testcase name="modernCancellationCannotForgetItsOriginalFundingExpectation" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.003"/>
+  <testcase name="missingModernEditFieldsCannotRetireForACompetingRefund" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.001"/>
+  <testcase name="invalidNewIntentCannotBeCommittedAsHealthy" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.003"/>
+  <testcase name="exactEditAmountAndSourceMustBePresentTogetherAndUsable" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.002"/>
+  <testcase name="originalLegacyOwnerReceiptsRetainTheirExistingProofPaths" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.001"/>
+  <testcase name="journalledCreationCannotBecomeAnOlderReceiptByLosingEvidence" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.001"/>
+  <testcase name="crossKindPayloadsAreNotValidIntentRecords" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.002"/>
+  <testcase name="eachSurvivingJournalMarkerPreventsLegacyDowngrade" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.001"/>
+  <testcase name="modernEditCannotUseRoundedLegacyPriceAfterExactFieldsDisappear" classname="com.eurobuddha.pandadex.PendingIntentConsistencyTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

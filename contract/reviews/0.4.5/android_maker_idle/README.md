@@ -1,0 +1,9 @@
+# Deferred maker work — audit28
+
+807 actual Android assertions pass:761 normal,16 before deliberate process death and30 after restart. Reuses audit27 and adds9 assertions running the production MakerEngine/SerialQueue on the actual Android main Looper. All production Java hashes match compilation/execution.
+
+Two maker hosts queue requests during a parked fixture cancellation. The first callback releases requests in arrival order; a request starts a second parked chain, and later work waits for its own completion. A duplicate old callback cannot release the new chain. Reentrant queued work waits until its submitting action returns. Two stopForCancelAll requests retain both ready callbacks. A throwing callback still leaves later queued work runnable and preserves existing exception propagation. The queue accepts further work afterward.
+
+APK `/private/tmp/pandadex-android-audit-build-28/pandadex-export-audit-28.apk`; SHA-256 `e3a02d3afacb7c8bce0a39643603c6ec2d2dcb89ef30b55322f66cfd55a5df36`. Package com.eurobuddha.pandadex.audit, versionCode28; unique output path. Earlier APKs preserved, production405 unbuilt, frozen404 unchanged.
+
+Disposable Android16/API36 arm64 emulator, exact owned QEMU/AVD/path verified, isolated ADB5049. No INTERNET permission, production MainActivity/NodeTransportService, user phone/node, signing or submission. The new maker transaction layer is a controlled callback fixture; the main Looper and engine execution are real. Existing SQLite/process-death checks rerun unchanged. This does not prove persistence of arbitrary deferred callbacks across death or real Samsung lifecycle/IPC. Temporary emulator/data/keys and isolated ADB cleaned up; APK/logs retained. Screenshots/fixture ZIP remain in temporary output; no new personal visual inspection claimed.

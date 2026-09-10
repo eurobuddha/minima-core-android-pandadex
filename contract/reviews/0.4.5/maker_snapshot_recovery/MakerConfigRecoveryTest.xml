@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MakerConfigRecoveryTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-10T09:18:31" hostname="ProMacBuddha.local" time="0.007">
+  <properties/>
+  <testcase name="malformedPreparedOutputCannotReplaceExistingEvidence" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.003"/>
+  <testcase name="staleHostCannotOverwriteNewlyUnreadableRecords" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.0"/>
+  <testcase name="corruptSnapshotsCannotBecomeEmptyArmedLaddersOrOverwriteEvidence" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.002"/>
+  <testcase name="wrongNativePreferenceTypePausesWithoutCrashing" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.0"/>
+  <testcase name="failedReloadKeepsPreviousCompleteTrackingInMemory" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.0"/>
+  <testcase name="legacyMigrationKeepsOrderAndCancelIdentities" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.0"/>
+  <testcase name="repairedReadableDataStillNeedsExplicitRecoveryAcknowledgement" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.0"/>
+  <testcase name="malformedFundingCannotFallBackToLegacySellSize" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.0"/>
+  <testcase name="invalidNumbersAndTimesAreRejectedWithoutChangingDisk" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.0"/>
+  <testcase name="incompleteOutgoingRowsNeverCommitPartialState" classname="com.eurobuddha.pandadex.MakerConfigRecoveryTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

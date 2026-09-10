@@ -1,0 +1,31 @@
+# Export lifecycle audit — build 15
+
+Executed 2026-09-10 in the disposable Android16/API36 arm64 emulator `PandaDexAudit14`, with isolated ADB5049, keys and userdata. Separate audit package version14 was built first; its APK and failed-test evidence were retained, then the corrected harness and second-owner guard were built as version15 and installed as an upgrade. No production APK was built or overwritten. Source remains0.4.5/405. No user phone, node, wallet or existing AVD was accessed. The emulator and its isolated ADB server are stopped and temporary userdata/keys removed.
+
+**55 Android assertions pass:**28 retained-owner/lifecycle checks,5 recovery checks after actual audit-process death, and22 previously retained streaming/WAL/local-provider checks rerun against this source. The deliberate crash phase returns the expected process-crashed marker. **427 JVM tests pass** with zero failures/errors/skips; release lint has zero errors/76 warnings. Raw outputs and exact runner, production Java and APK hashes accompany this file. The previous full212-assertion database recovery run is audit13; it was not redundantly rerun for these UI/session changes.
+
+## Behavior and reuse
+
+`TradeExportSession` uses AndroidX ViewModel, already available through the app's AndroidX dependencies, to retain prepared files, phase and result notices through Activity recreation. The Activity registers its CreateDocument callback on every creation and observes the retained state. Picker intent is claimed before launch, so recreated observers do not launch it twice. Only the matching active picker phase accepts a result. A process-wide owner prevents competing Activity instances from replacing active work. An existing idle second screen re-reads the journal before starting after the first owner exits.
+
+The worker reuses the streaming `TradeExportFiles` pipeline and document copy code. It captures application context and the UI's small immutable-by-convention snapshot, not an Activity. The SQLite helper is scoped to the background snapshot and closed before explorer/provider work. Prepared-file pinning still protects an in-progress provider write from Activity cleanup. No production caller retains the old Activity callback fields.
+
+The small private export journal reuses `Pending.Store`'s acknowledged `SharedPreferences.commit()` seam, with a separate preference file unrelated to financial receipts. It records BUILDING, PICKER and SAVING before dependent work. A failed commit blocks the dependent operation. Completion is recorded separately and remains until acknowledgement. After process death, unfinished intent becomes an explicit unknown outcome: the selected file may be empty, partial or complete, and no write is automatically repeated. The user checks the destination and explicitly exports again. ZIP restoration across process death is not implemented. A successful stream close is described as written/closed, with cloud upload verification left to the document provider.
+
+The inspected UTXO/NFT Wallet saved-instance handlers preserve form selection and tab state, but do not own asynchronous document work. They could not solve this ownership issue. AndroidX supplies the retained owner and lifecycle observation; the new code only coordinates existing export operations and their durable status. [Android ViewModel lifecycle](https://developer.android.com/topic/libraries/architecture/viewmodel), [Activity Result registration and state](https://developer.android.com/training/basics/intents/result).
+
+## Executed cases
+
+The node-free ComponentActivity is actually recreated during preparation, while the picker is pending, during saving and after completion. It retains the same ViewModel and ZIP, receives the result exactly once and shows the terminal notice after another recreation. Tests also cover cancellation, a second owner, failed journal commits before build/picker/provider, failed acknowledgement, forged file URI, partial-save messaging, and a late build completing after the original screen is fully destroyed. Actual process death with a persisted SAVING marker is followed by a fresh instrumentation process: no worker restarts, an unknown-outcome notice appears, and a stale picker result cannot write a lost artifact.
+
+Lifecycle tests use a controlled ActivityResultRegistry and fake build/save work to place recreation and failures at exact boundaries. They do not launch the system DocumentsUI or production MainActivity. The separate22-assertion suite runs actual SQLite/WAL and an actual local ContentProvider, including truncation and file-URI protection. These layers do not constitute end-to-end stock Samsung/cloud-provider testing.
+
+## Attempt 14
+
+Version14 passed22 document/WAL checks and25 lifecycle assertions, then its late-result test asserted cleanup immediately after `finish()`/`waitForIdleSync()`. Android had not yet delivered `onDestroy`. The corrected harness waits for an explicit destruction latch before delivering the late result. Version15 passes that case. During review a separate second-screen journal re-read guard was added and tested. Both APKs remain preserved; the failed result, original runner and source hashes are in `attempt14/`.
+
+## Remaining limits
+
+Stock S23/ZFold MinimaCore operation, system picker UI delivery, cloud-provider durability and indefinite provider stalls remain unverified. A stuck provider retains the single bounded worker/owner until it returns; elapsed time does not authorize replacement writes. Export session commits are small synchronous preference writes and may be delayed by low storage. Process-death recovery reports status and requires a new export; it does not recover the old ZIP. Existing stale-cache cleanup occurs on the next preparation. Large temporary disk/WAL growth, raw corrupt-data recovery and API28–34 snapshot latency remain open. This is evidence for the export fix, not production approval or a100%-security claim.
+
+Reproduce using `build_harness.py` with a fresh output directory and audit version16 or greater, then run `ExportAndroidAudit` and `ExportLifecycleAudit` phases normal/crash/recover on an explicitly isolated disposable emulator. Never use a user node or phone without the required authorization.

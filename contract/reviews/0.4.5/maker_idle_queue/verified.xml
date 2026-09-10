@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MakerIdleQueueTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-10T17:57:34" hostname="ProMacBuddha.local" time="0.015">
+  <properties/>
+  <testcase name="nextDeferredRequestWaitsForAsyncWorkStartedByPreviousRequest" classname="com.eurobuddha.pandadex.MakerIdleQueueTest" time="0.012"/>
+  <testcase name="differentMakerHostsShareDeferredOrder" classname="com.eurobuddha.pandadex.MakerIdleQueueTest" time="0.001"/>
+  <testcase name="throwingDeferredCallbackDoesNotConsumeFollowingRequests" classname="com.eurobuddha.pandadex.MakerIdleQueueTest" time="0.0"/>
+  <testcase name="twoStopRequestsRetainBothReadyCallbacks" classname="com.eurobuddha.pandadex.MakerIdleQueueTest" time="0.002"/>
+  <testcase name="nestedRequestRunsAfterItsSubmittingActionReturns" classname="com.eurobuddha.pandadex.MakerIdleQueueTest" time="0.0"/>
+  <testcase name="everyDeferredRequestRunsInArrivalOrder" classname="com.eurobuddha.pandadex.MakerIdleQueueTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

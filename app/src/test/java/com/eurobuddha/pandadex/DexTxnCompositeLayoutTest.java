@@ -26,7 +26,7 @@ public class DexTxnCompositeLayoutTest {
             c.put("tokenid", Util.MINIMA_TOKENID);
             c.put("created", 100);
             JSONObject st = new JSONObject();
-            st.put("0", "0xMAKER");
+            st.put("0", "0xAA");
             st.put("1", PAYOUT);
             st.put("2", m.multiply(p).toPlainString());
             st.put("3", DexContract.USDT_ID);

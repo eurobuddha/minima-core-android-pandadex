@@ -1,0 +1,16 @@
+{
+  "donor_root": "/Users/eurobuddha/Projects/minima/apks/base",
+  "donor_sha256": {
+    "minimaapi/src/main/java/org/minimarex/minimaapi/MinimaAPI.java": "fb92de01fabf503896ca4c6d0f533acaeb75820cc6b45b2afd2c42c7df91d04c",
+    "minimaapi/src/main/java/org/minimarex/minimaapi/MinimaAPIReceive.java": "d80c3fbbcf5369bcbef0a4f139dc90c991fd193faa9559ba558408fdfa6c5914",
+    "minimaapi/src/main/java/org/minimarex/minimaapi/MinimaAPIListener.java": "49fce8ac2e27c2fb2d1e6b4211461512c2f4885df3324a614942fb46a03e604c",
+    "minimaapi/src/main/java/org/minimarex/minimaapi/MinimaAPILogger.java": "4c5ff13563bcbd02129d5ea0e6a8bb21ef14c2d94f8bde5e964f0c3d4e78ed26",
+    "minimaapi/src/main/java/org/minimarex/minimaapi/MinimaAPIMessages.java": "b5315e6112417b63f955d4a67f44dfd6b26626f6c92c75baa22fd0a59818329d",
+    "app/src/androidTest/java/org/minimarex/minimaapi/ApiInputTest.java": "e2c29998c902db36fe5ced12611043cbb19dd8b4706a438fa65eb5cb174561cf",
+    "minimaapi/build.gradle": "14832e5ad271d507c0f4384539cf449985c8ece0808f298a2bb5ff749a956e04",
+    "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  "old_bundled_aar_sha256": "9a3d6df2e4ef6a7e6866f7b704f5b36aefb5748b821095ec4e82e6a8e0697e77",
+  "pure_byte_reader_reused_from": "app/src/main/java/com/eurobuddha/pandadex/NodeTransport.java",
+  "bounded_executor_pattern_reused_from": "app/src/main/java/com/eurobuddha/pandadex/ExportChecks.java"
+}

@@ -33,7 +33,9 @@ All of these must be true before marking composite liquidity complete:
    old reserve coin IDs spent and new reserve coin IDs unspent.
 6. PandaDEX records one aggregate personal trade for each execution and does not create a phantom
    public tape fill from the pool contribution.
-7. Any unfilled balance rests only after the consumed order/reserve coin IDs disappear on-chain.
+7. Any unfilled balance rests only after the submitted immutable transaction identity is matched
+   to an included TxPoW that spends every selected source and pays the exact expected proceeds.
+   Source disappearance alone is insufficient; a competing spend must not confirm this trade.
 
 ## Preflight
 

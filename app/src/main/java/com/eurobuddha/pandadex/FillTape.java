@@ -8,26 +8,18 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The decentralized market tape: classifies fills by DIFFING consecutive book scans
- * (GlobalFeed pattern, adapted to a limit book where the diff is EXACT for partials):
+ * Produces recovery candidates by comparing consecutive book scans. A successor-looking coin
+ * is only a hint: its public state can be copied. FillSettler verifies the actual spending
+ * transaction before recording a fill or retiring a confirmed refund/relock.
  *
- *  - PARTIAL fill  — the same orderId reappears under a NEW coinid with a SMALLER locked
- *    amount → fill size = delta, price = the ORDER's enforced price. Exact.
- *  - FULL fill     — an order coin disappears before expiry (and isn't a renewal/edit,
- *    which reappear under the same orderId, or one of MY cancels). For foreign orders a
- *    cancel is indistinguishable from a full fill by book-diff alone — counted as a fill
- *    (cancels are rare vs fills; honest limitation, documented).
- *  - RENEW/EDIT    — same orderId reappears with the SAME locked amount → NOT a trade.
- *
- * Flap guards ported from GlobalFeed: the first scan of a process SEEDS silently (no replay
- * storm), a truncated scan is never diffed, and disappearances need MISS_GRACE consecutive
- * absent scans (a coin can be absent for one scan mid-reorg).
+ * First/stale scans seed, truncated scans are not diffed, and unsupported disappearances need
+ * consecutive absent scans. These gates limit work; they do not establish transaction outcomes.
  */
 public final class FillTape {
 
     public interface Sink {
         /**
-         * A market fill was observed. spentCoin = the consumed order coin (exactly-once key).
+         * A possible order spend was observed. spentCoin is the original coin (exactly-once key).
          *
          * @param sinceBlock the last chain height at which this order was seen RESTING. Evidence
          *                   older than that cannot explain its disappearance, so it is the
@@ -97,6 +89,11 @@ public final class FillTape {
     public void noteMyCancel(String coinid) { if (cancels != null) cancels.note(coinid); }
 
     public void ingest(Map<String, Order5> book, boolean truncated, long chainBlock, Sink sink) {
+        try { ingestBook(book, truncated, chainBlock, sink); }
+        finally { sink.onScanComplete(); } // Retry durable candidates even when this scan only seeds.
+    }
+
+    private void ingestBook(Map<String, Order5> book, boolean truncated, long chainBlock, Sink sink) {
         if (truncated) return;                           // never diff a failed scan
         if (chainBlock <= 0) return;                     // no chain height = age guards are blind
         long now = System.currentTimeMillis();
@@ -196,11 +193,10 @@ public final class FillTape {
             if (successor != null) {
                 missing.remove(coinid);
                 int cmp = successor.locked.compareTo(old.locked);
-                if (cmp < 0) {
-                    // PARTIAL: exact delta at the order's enforced price
-                    BigDecimal size = minimaDelta(old, successor);
-                    sink.onFill(coinid, old, size, old.price(), old.sell, true, seenAt(coinid));
-                }                                        // same amount = renewal/edit, not a trade
+                // Even equal/larger copied amounts cannot suppress a real fill. The spender,
+                // not a lookalike currently on the book, determines whether this was a relock.
+                BigDecimal size = cmp < 0 ? minimaDelta(old, successor) : old.minimaAmount();
+                sink.onFill(coinid, old, size, old.price(), old.sell, cmp < 0, seenAt(coinid));
                 continue;
             }
 
@@ -225,7 +221,7 @@ public final class FillTape {
                 continue;
             }
             emitted++;
-            // FULL fill (or a foreign cancel — indistinguishable; counted as fill)
+            // Unknown disappearance: the included spender must establish its outcome.
             sink.onFill(coinid, old, old.minimaAmount(), old.price(), old.sell, false, seenAt(coinid));
         }
 
@@ -234,8 +230,6 @@ public final class FillTape {
         for (String coinid : book.keySet()) lastSeen.put(coinid, chainBlock);
         prev = mergePrev(book, prev);
         prevAtMs = now;
-        // Everything this diff had to say. The sink settles its batch now — see Sink.onScanComplete.
-        sink.onScanComplete();
         // A coin that is neither resting nor mid-grace can never be asked about again.
         lastSeen.keySet().retainAll(prev.keySet());
     }

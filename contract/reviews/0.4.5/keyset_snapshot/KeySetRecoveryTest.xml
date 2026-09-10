@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.KeySetRecoveryTest" tests="12" skipped="0" failures="0" errors="0" timestamp="2026-09-10T10:12:51" hostname="ProMacBuddha.local" time="0.007">
+  <properties/>
+  <testcase name="watcherCannotResumeAfterForegroundHandoffOrDisconnect" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.001"/>
+  <testcase name="invalidationRejectsOldKeysReplyBeforeDerivation" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.004"/>
+  <testcase name="cachedKeysCannotAuthorizeAndCompleteLoadPublishesBothFactorsTogether" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.001"/>
+  <testcase name="repeatedDerivationFailuresUseTheFullBackoffInsteadOfResettingAtKeys" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.0"/>
+  <testcase name="cancelledRetryCannotStartAnotherLoadAfterManualRefreshOrInvalidation" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.0"/>
+  <testcase name="closeRejectsPendingCallbacksAndAlreadyQueuedRetries" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.0"/>
+  <testcase name="failedSecondAddressRetainsCompleteOldCacheAndCannotPublishLateSuccess" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.0"/>
+  <testcase name="unchangedVerifiedKeysCanReuseAddressesButInvalidatedKeysMustRederive" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.0"/>
+  <testcase name="invalidationRejectsOldAddressReplyAndAllowsFreshLoad" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.0"/>
+  <testcase name="watcherResumesExactlyOnceAfterTheLastDerivedAddress" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.0"/>
+  <testcase name="malformedOrEmptyKeyRepliesPreserveCacheAndNeverAuthorize" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.0"/>
+  <testcase name="obsoleteErrorCannotCancelOrScheduleRetryOverANewerLoad" classname="com.eurobuddha.pandadex.KeySetRecoveryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,2 @@
+PASS 22 assertions
+WAL/FULL, coherent concurrent snapshot, streamed archive, failure release, safe document writes

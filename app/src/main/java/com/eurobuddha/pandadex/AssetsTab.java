@@ -55,6 +55,23 @@ public final class AssetsTab extends LinearLayout {
     public void render() {
         body.removeAllViews();
 
+        if (act.interruptedWrite()) {
+            LinearLayout pause = card();
+            pause.addView(t("SIGNING PAUSED", Design.ACCENT(), 12f, Design.sansBold()));
+            pause.addView(t("A node write lost its reply. It may have completed.", Design.TEXT(), 12f, Design.sans()));
+            TextView resolve = t("Resolve interrupted write", Design.ACCENT(), 14f, Design.sansBold());
+            resolve.setPadding(0, Design.dp(getContext(), 16), 0, Design.dp(getContext(), 16));
+            resolve.setOnClickListener(v -> act.resolveInterruptedWrite()); pause.addView(resolve);
+        }
+
+        if (act.hasUnresolvedTrade()) {
+            LinearLayout receipt = card();
+            receipt.addView(t("TRADE STILL BEING CHECKED", Design.ACCENT(), 12f, Design.sansBold()));
+            TextView review = t("View submitted receipt and check again", Design.TEXT(), 13f, Design.sans());
+            review.setPadding(0, Design.dp(getContext(), 16), 0, Design.dp(getContext(), 16));
+            review.setOnClickListener(v -> act.reviewUnresolvedTrade()); receipt.addView(review);
+        }
+
         // locked in my resting orders
         BigDecimal lockedMinima = BigDecimal.ZERO, lockedUsdt = BigDecimal.ZERO;
         for (Order5 o : act.book().values()) {

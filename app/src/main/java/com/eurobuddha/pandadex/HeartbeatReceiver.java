@@ -38,13 +38,13 @@ public class HeartbeatReceiver extends BroadcastReceiver {
             PendingIntent pi = PendingIntent.getBroadcast(ctx, REQUEST_CODE,
                     new Intent(ctx, HeartbeatReceiver.class),
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            long at = System.currentTimeMillis() + INTERVAL_MS;
+            long at = android.os.SystemClock.elapsedRealtime() + INTERVAL_MS;
             // USE_EXACT_ALARM (API 33+) is auto-granted, so canScheduleExactAlarms() is normally true; fall back to
             // inexact allow-while-idle (still fires under Doze, just batched) if not.
             if (Build.VERSION.SDK_INT >= 31 && !am.canScheduleExactAlarms()) {
-                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
+                am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi);
             } else {
-                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
+                am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi);
             }
         } catch (Exception ignored) {}
     }

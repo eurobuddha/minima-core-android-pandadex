@@ -61,7 +61,11 @@ public class MainActivity extends AppCompatActivity {
     private Pending pending;
     private DexProcessor processor;
     private boolean keepAliveAsked = false;
-    private boolean scriptReady = true;   // covenant verified+registered on this node
+    private boolean scriptReady = false;   // covenant verified+registered on this node
+    private DexHistory.Spend verifiedTakerSpend;
+    private java.util.Map<String,DexHistory.Spend> verifiedTakerSpends=java.util.Collections.emptyMap();
+    private String awaitingPayout = "";
+    private String awaitingIntent = "";
     private volatile boolean busy = false;          // a spend is in flight — lock the CTA
     /** Cancels posted but not yet confirmed, so the "funds are back" line waits for the coins
      *  to actually leave the book rather than for the transactions to be sent. */
@@ -69,11 +73,11 @@ public class MainActivity extends AppCompatActivity {
     private Runnable restQueue;                     // limit balance to place once a sweep lands
     private java.util.List<String> restQueueCoins;  // the swept coins we're waiting to vanish
     private long restQueueBlock = 0;                // when we started waiting
-    /** A sweep that hasn't consumed its coins by now is never going to — see reconcileSweep. */
+    /** After this delay, stop the dependent resting order; keep checking the unresolved trade. */
     private static final int SWEEP_DEADLINE_BLOCKS = 6;
     /** Order coins this device is currently taking — shown as FILLING on the ladder. */
     private final java.util.Set<String> filling = new java.util.HashSet<>();
-    private java.util.List<String> awaitingFill;    // coins whose disappearance = our fill landed
+    private java.util.List<String> awaitingFill;    // selected source coins; confirmation also requires exact transaction and payout evidence
     private boolean awaitingBuy;
     private BigDecimal awaitingMinima = BigDecimal.ZERO, awaitingPrice = BigDecimal.ZERO;
     private BigDecimal awaitingProceeds = BigDecimal.ZERO;
@@ -85,7 +89,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean checkingRestQueue = false;
     private BroadcastReceiver notifyReceiver;
     private ActivityResultLauncher<String> saveTradeExportLauncher;
-    private java.util.function.Consumer<android.net.Uri> pendingTradeExportSave;
+    private TradeExportSession tradeExportSession;
+    private boolean exportNoticeShowing;
 
     private TradeView trade;
     private ChartTab chartTab;
@@ -133,53 +138,74 @@ public class MainActivity extends AppCompatActivity {
         Design.load(this);
         db = new DexDb(this);
         stats = new DexStats(db);
-        pending = new Pending(this);
+        pending = db.pendingReceipts();
+        restoreAwaitingFill();
         keySet = new KeySet(this, this::repaint);
+        tradeExportSession = new androidx.lifecycle.ViewModelProvider(this).get(TradeExportSession.class);
         saveTradeExportLauncher = registerForActivityResult(
-                new ActivityResultContracts.CreateDocument("application/zip"), uri -> {
-                    java.util.function.Consumer<android.net.Uri> cb = pendingTradeExportSave;
-                    pendingTradeExportSave = null;
-                    if (cb != null) cb.accept(uri);
-                });
+                new ActivityResultContracts.CreateDocument("application/zip"), tradeExportSession::selected);
 
         setContentView(buildChrome());
+        tradeExportSession.state.observe(this, phase -> renderExportSession());
 
         // node wiring AFTER first paint (local-first)
         node = new NodeApi(this, enabled -> {
             paired = enabled;
+            scriptReady = false;
+            if (!enabled) keySet.invalidate();
             repaint();
             if (enabled) onPaired();
         });
         repo = new BookRepository(node, db);
         poolRepo = new PoolLiquidityRepository(node);
         verifier = new FillVerifier(node);
-        history = new DexHistory(node);
+        history = new DexHistory(node, db);
         txn = new DexTxn(node, db);
         processor = new DexProcessor(this, txn);
-        maker = new MakerEngine(makerCfg, txn);
+        maker = new MakerEngine(makerCfg, txn, o -> keySet.ready() && keySet.owns(o));
         // History first, then EXCLUSIVE payout evidence over the whole scan at once — a payout
         // coin can only be evidence for one order, which cannot be decided one order at a time.
-        settler = new FillSettler(history, verifier, () -> chainBlock, new FillSettler.Outcome() {
+        settler = new FillSettler(history, () -> keySet.ready() ? chainBlock : 0, new FillSettler.Outcome() {
             @Override public void record(String spentCoin, Order5 order, BigDecimal size,
                                          BigDecimal price, boolean takerBuy, boolean partial,
                                          String txpowid, String evidence, String note) {
                 recordFill(spentCoin, order, size, price, takerBuy, partial, txpowid, evidence, note);
             }
+            @Override public void recordAt(String spentCoin, Order5 order, BigDecimal size,
+                                           BigDecimal price, boolean takerBuy, boolean partial,
+                                           String txpowid, String evidence, String note, long timeMs, long block) {
+                recordFill(spentCoin, order, size, price, takerBuy, partial, txpowid, evidence, note, timeMs, block);
+            }
+            @Override public void recordVerified(FillSettler.Entry entry, DexHistory.Spend spend, Order5 order,
+                                                  BigDecimal size, BigDecimal price, boolean takerBuy, boolean partial,
+                                                  String note, long timeMs, long block) {
+                recordFill(entry.coinid, order, size, price, takerBuy, partial, spend.txpowid,
+                        FillSettler.CHAIN_VERIFIED, note, timeMs, block, entry, spend);
+            }
+            @Override public void cancelledVerified(FillSettler.Entry entry, DexHistory.Spend spend) {
+                db.completeNonTrade(entry, spend);
+                stats.invalidate();
+            }
             @Override public void cancelled(String spentCoin) { db.noteCancelled(spentCoin); }
-        });
+            @Override public void recoveryError(String message) { setStage(message); }
+            @Override public void receiptsRepaired() {stats.invalidate();repaint();}
+        }, db);
         repo.setFillSink(settler);
         repo.subscribe((orders, syncing) -> {
-            pending.resolve(orders, chainBlock, new Pending.Listener() {
+            if (isFinishing() || isDestroyed()) return;
+            if (syncing || !paired || !keySet.ready()) { repaint(); return; }
+            pending.reconcile(history, orders, chainBlock, o -> keySet.ready() && keySet.owns(o), new Pending.Listener() {
+                @Override public void onRecoveryError(String message) { setStage(message); }
                 @Override public void onLive(Pending.Row r) {
-                    // The order is on the book — fillable and cancellable from this instant.
+                    // Creation proof does not imply that the output is still unspent.
                     String what = (r.buy ? "Buy " : "Sell ") + PriceMath.fmt(r.minima)
                             + " MINIMA @ " + PriceMath.fmtPrice(r.price);
-                    setStage(what + " is LIVE on the book");
-                    Notifier.alert(MainActivity.this, "Order live", what + " is on the order book");
+                    setStage(what + " — creation verified on-chain. Check Orders for its current status.");
+                    Notifier.alert(MainActivity.this, "Order creation verified", what + " was created on-chain");
                 }
                 @Override public void onSettled(Pending.Row r) {
-                    if (!Pending.CANCEL.equals(r.kind)) { setStage("New price is live on the book"); return; }
-                    // the coin has actually left the book — THIS is when a cancel is real
+                    if (!Pending.CANCEL.equals(r.kind)) { setStage(r.isRenewal()?"Order renewal verified on-chain":"Price update verified on-chain"); return; }
+                    // Pending has matched the included spending transaction and its refund
                     if (awaitingCancels > 1 && --awaitingCancels > 0) {
                         setStage(awaitingCancels + " cancel" + (awaitingCancels == 1 ? "" : "s")
                                 + " still confirming…");
@@ -188,10 +214,17 @@ public class MainActivity extends AppCompatActivity {
                     awaitingCancels = 0;
                     setStage("Order cancelled — funds back in your wallet");
                 }
+                @Override public void onCancelledInstead(Pending.Row r) {
+                    setStage((r.isRenewal()?"The renewal":"The price edit")+" did not take effect: the source order was refunded on-chain.");
+                    repaint();
+                }
+                @Override public void onFilledInstead(Pending.Row r) {
+                    setStage("That order filled before the requested change. The spending transaction contains the expected maker payment. Check the trade records for its receipt.");
+                    repaint();
+                }
                 @Override public void onGaveUp(Pending.Row r) {
                     setStage(Pending.PLACE.equals(r.kind)
-                            ? "Never saw that order rest on the book — it may have been taken "
-                              + "immediately. Check Orders and your balance."
+                            ? "Order creation is still unresolved. Its receipt is retained while historical transactions are checked."
                             : "Still no confirmation for that request — check Orders.");
                 }
             });
@@ -202,7 +235,7 @@ public class MainActivity extends AppCompatActivity {
             // FOREGROUND gate: while we are paused the background service drives the maker, and
             // two actors posting from the same slot map would duplicate rungs — the same
             // single-actor discipline DexProcessor uses for renewals.
-            if (paired && keySet.ready() && chainBlock > 0 && !busy && FOREGROUND) {
+            if (paired && scriptReady && keySet.ready() && chainBlock > 0 && !busy && FOREGROUND) {
                 // tombstone sweep runs ARMED OR NOT: cancelled-but-unconfirmed orders and
                 // late-confirming orphans must be chased even after a withdraw disarmed us
                 maker.sweepTombstones(orders, keySet.keys(), chainBlock, makerListener);
@@ -214,12 +247,13 @@ public class MainActivity extends AppCompatActivity {
             // anyway. Writing it on every book callback was a main-thread SQLite insert per
             // order per poll for nothing. Left OFF deliberately; wire the reader first.
             // the foreground Activity owns renewals while it's up (the service stands down)
-            if (paired && keySet.ready() && chainBlock > 0) {
+            if (paired && scriptReady && keySet.ready() && chainBlock > 0 && FOREGROUND) {
                 processor.process(orders, keySet.keys(), keySet.addrs(),
                         maker.ownedOrderIds(), chainBlock, new DexProcessor.Listener() {
+                    @Override public void onPaused(String why) { setStage(why); }
                     @Override public void onRenewed(Order5 o) {}
                     @Override public void onRenewFailed(Order5 o, String why) {
-                        toast("Renewal failed for order @ " + PriceMath.fmtPrice(o.price()) + " — will retry");
+                        toast("Order upkeep needs checking @ " + PriceMath.fmtPrice(o.price()) + " — " + why);
                     }
                 });
             }
@@ -229,17 +263,12 @@ public class MainActivity extends AppCompatActivity {
 
         notifyReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context c, Intent intent) {
-                if (!MinimaAPI.checkMinimaID(MainActivity.this, intent)) return;
-                String data = intent.getStringExtra(MinimaAPIMessages.MINIMA_API_NOTIFY_DATA);
-                if (data == null) return;
-                try {
-                    String event = new JSONObject(data).optString("event", "");
-                    if ("NEWBLOCK".equals(event) || "NEWBALANCE".equals(event)) poll(eventRefreshesPools(event));
-                } catch (Exception ignored) {}
+                String event = intent.getStringExtra("event");
+                if ("NEWBLOCK".equals(event) || "NEWBALANCE".equals(event)) poll(eventRefreshesPools(event));
             }
         };
         ContextCompat.registerReceiver(this, notifyReceiver,
-                new IntentFilter(MinimaAPIMessages.MINIMA_API_NOTIFY), ContextCompat.RECEIVER_EXPORTED);
+                new IntentFilter(NodeTransportService.EVENT_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
 
         // Reveal exactly one tab. MUST run — the tab views are added GONE above.
         if (savedInstanceState != null) tab = savedInstanceState.getInt(KEY_TAB, TAB_TRADE);
@@ -254,11 +283,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void onPaired() {
+        scriptReady = false;
         keySet.refresh(node);
         node.cmd("getaddress", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 JSONObject r = json.optJSONObject("response");
-                if (r == null) return;
+                if (!TxValidation.truthy(json, "status") || r == null) return;
                 keySet.addExtra(r.optString("publickey", ""));
                 keySet.addExtraAddr(r.optString("address", ""));
                 txn.setIdentity(r.optString("publickey", ""), r.optString("address", ""));
@@ -463,7 +493,7 @@ public class MainActivity extends AppCompatActivity {
 
     /** Repaint the VISIBLE tab only. */
     private void repaint() {
-        if (pairPill == null) return;
+        if (pairPill == null || isFinishing() || isDestroyed()) return;
         pairPill.setText(paired ? "NODE ✓" : "PAIR IN MINIMA → APPS");
         pairPill.setTextColor(paired ? Design.IN() : Design.ACCENT());
         blockPill.setText("# " + (chainBlock > 0 ? chainBlock : "—"));
@@ -474,7 +504,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (repo == null) return;
         switch (tab) {
-            case TAB_TRADE:  trade.render(repo.book(), !paired, chainBlock, pending.rows()); break;
+            case TAB_TRADE:  trade.render(repo.book(), !paired || !repo.current(), chainBlock, pending.rows()); break;
             case TAB_CHART:  chartTab.render(); break;
             case TAB_TAPE:   tapeTab.render(); break;
             case TAB_ORDERS: ordersTab.render(); break;
@@ -485,11 +515,16 @@ public class MainActivity extends AppCompatActivity {
 
     /** Every precondition for spending funds: paired, identity read, covenant registered. */
     private boolean ready() {
+        if (isFinishing() || isDestroyed()) return false;
+        if (busy) { toast("A transaction is already in progress"); return false; }
+        if (pending != null && !pending.healthy()) { toast("Receipt storage needs recovery. Preserve app data; do not retry trades."); return false; }
         if (!paired) { toast("Pair with your node first"); return false; }
         if (txn == null || txn.pubkey().isEmpty() || txn.hexAddr().isEmpty()) {
             toast("Still reading your wallet identity — try again in a moment");
             return false;
         }
+        if (!keySet.ready()) { toast("Verifying wallet ownership — please wait"); return false; }
+        if (node.hasInterruptedWrite()) { toast(NodeApi.ERR_WRITE_UNCERTAIN); return false; }
         if (!scriptReady) {
             toast("The order-book contract isn't registered on your node yet");
             return false;
@@ -565,7 +600,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void poll(boolean includePools) {
-        if (node == null) return;
+        if (node == null || isFinishing() || isDestroyed()) return;
+        if (awaitingFill == null) restoreAwaitingFill();
         if (!node.isEnabled()) { node.reRegister(); return; }
         // NOTE: polling must NEVER be gated on input focus. It used to be — inherited from an
         // app whose refresh rebuilt the whole form and ate in-progress typing — but this
@@ -633,7 +669,7 @@ public class MainActivity extends AppCompatActivity {
 
     static BalanceMeta balanceMeta(JSONObject json) {
         BalanceMeta out = new BalanceMeta();
-        if (json == null) return out;
+        if (json == null || !TxValidation.truthy(json, "status")) return out;
         Object resp = json.opt("response");
         JSONObject row = null;
         if (resp instanceof JSONArray && ((JSONArray) resp).length() > 0) {
@@ -641,10 +677,10 @@ public class MainActivity extends AppCompatActivity {
         } else if (resp instanceof JSONObject) {
             row = (JSONObject) resp;
         }
-        if (row == null) return out;
+        if (row == null || !row.has("sendable") || !row.has("confirmed")) return out;
         // `balance` reports TOKEN units in sendable/confirmed for both native and tokens
         out.confirmed = Util.dec(row.optString("confirmed", "0"));
-        out.sendable = Util.dec(row.optString("sendable", out.confirmed.toPlainString()));
+        out.sendable = Util.dec(row.optString("sendable", "0"));
         out.unconfirmed = Util.dec(row.optString("unconfirmed", "0"));
         out.coins = row.optInt("coins", row.optInt("coinamount", 0));
         out.atMs = System.currentTimeMillis();
@@ -666,36 +702,21 @@ public class MainActivity extends AppCompatActivity {
 
     public void placeOrder(boolean buy, BigDecimal minima, BigDecimal price, boolean gtc, BigDecimal minRem) {
         if (!ready()) return;
-        // optimistic row FIRST — the UI moves instantly
-        Pending.Row row = new Pending.Row();
-        row.kind = Pending.PLACE;
-        row.buy = buy;
-        row.minima = minima;
-        row.price = price;
-        row.submitMs = System.currentTimeMillis();
-        row.submitBlock = chainBlock;
-        row.orderId = "";
         busy = true;
         String orderId = txn.createOrder(buy, minima, price, gtc, minRem, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) {
                 busy = false;
-                row.submitMs = System.currentTimeMillis();
-                row.submitBlock = chainBlock;
-                pending.add(row);
-                toast("Order posted");
+                toast("Order posted; checking its creation on-chain");
                 repo.refresh();
                 repaint();
             }
             @Override public void onFailed(String message) {
                 busy = false;
-                toast("Order failed: " + message);
+                toast("Order status: " + message);
                 repaint();
             }
         });
-        // Carry the REAL order id into the asynchronous acceptance callback. A local id only
-        // means the request is well-formed; it does not mean the node accepted the send.
         if (orderId == null) { busy = false; repaint(); return; }
-        row.orderId = orderId;
         repaint();
     }
 
@@ -725,12 +746,33 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle(buy ? "Confirm buy" : "Confirm sell")
                 .setMessage(sb.toString())
                 .setPositiveButton("Execute", (d, w) -> {
+                    if (!ready() || awaitingFill != null) {
+                        if (awaitingFill != null) toast("A trade is still being checked. Review ASSETS first.");
+                        return;
+                    }
+                    final String tradePayout = txn.hexAddr();
                     busy = true;
                     // mark the rows we're taking so the ladder shows them as in-flight
                     filling.clear();
                     for (SweepPlanner.Take t : plan.takes) filling.add(t.order.coinid);
                     setStage("Building transaction… selecting coins and signing");
                     txn.fillSweep(plan, new DexTxn.Result() {
+                        @Override public boolean onPrepared(String handle) {
+                            if (!getSharedPreferences("pandadex_taker", MODE_PRIVATE).getString("pending", "").isEmpty()) return false;
+                            awaitingIntent = handle;
+                            awaitingFill = new java.util.ArrayList<>(filling);
+                            awaitingBuy = buy;
+                            awaitingMinima = plan.totalMinima;
+                            awaitingPrice = SweepPlanner.avgPrice(plan);
+                            awaitingProceeds = buy ? plan.totalMinima : plan.totalUsdt;
+                            awaitingProceedsTok = buy ? Util.MINIMA_TOKENID : DexContract.USDT_ID;
+                            awaitingFillBlock = chainBlock;
+                            awaitingTxpowid = handle;
+                            awaitingPayout = tradePayout;
+                            awaitingSourceKind = "BOOK";
+                            return saveAwaitingFill();
+                        }
+
                         @Override public void onPosted(String txpowid) {
                             busy = false;
                             setStage("Posted — waiting for a block to confirm your "
@@ -744,12 +786,14 @@ public class MainActivity extends AppCompatActivity {
                             awaitingProceedsTok = buy ? Util.MINIMA_TOKENID : DexContract.USDT_ID;
                             awaitingFillBlock = chainBlock;
                             awaitingTxpowid = txpowid;
+                            awaitingPayout = tradePayout;
                             awaitingSourceKind = "BOOK";
+                            if(!saveAwaitingFill()) setStage("Node accepted the trade · updated receipt details could not be saved; recovery record retained");
                             repo.refresh();
                             // The resting balance is queued, NOT placed now: the sweep has
                             // already committed these funds, so an immediate `send` would
-                            // fail "insufficient funds". The queue fires once the swept order
-                            // coins are actually gone from the book.
+                            // fail "insufficient funds". The queue fires only after the exact included transaction
+                            // and its expected payout have been matched.
                             if (rest.signum() > 0) {
                                 restQueue = new Runnable() {
                                     @Override public void run() { placeOrder(buy, rest, price, gtc, minRem); }
@@ -762,8 +806,13 @@ public class MainActivity extends AppCompatActivity {
                         @Override public void onFailed(String message) {
                             busy = false;
                             filling.clear();
-                            setStage("Trade failed — " + message);
-                            toast("Trade failed: " + message);
+                            if (NodeApi.ERR_WRITE_UNCERTAIN.equals(message)) {
+                                setStage("Trade outcome unknown — receipt retained. Review ASSETS.");
+                            } else {
+                                if (clearAwaitingFillState(true)) setStage("Trade failed — " + message);
+                                else setStage("Trade failed; pending-state update failed, so trading remains paused");
+                            }
+                            toast(message);
                             repaint();
                         }
                     });
@@ -813,11 +862,33 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle(buy ? "Confirm buy" : "Confirm sell")
                 .setMessage(sb.toString())
                 .setPositiveButton("Execute", (d, w) -> {
+                    if (!ready() || awaitingFill != null) {
+                        if (awaitingFill != null) toast("A trade is still being checked. Review ASSETS first.");
+                        return;
+                    }
+                    final String tradePayout = txn.hexAddr();
                     busy = true;
                     filling.clear();
                     for (SweepPlanner.Take t : plan.orderTakes) filling.add(t.order.coinid);
                     setStage("Building blended transaction… selecting coins and signing");
                     txn.fillComposite(plan, buy, new DexTxn.Result() {
+                        @Override public boolean onPrepared(String handle) {
+                            if (!getSharedPreferences("pandadex_taker", MODE_PRIVATE).getString("pending", "").isEmpty()) return false;
+                            awaitingIntent = handle;
+                            awaitingFill = new java.util.ArrayList<>(plan.sourceCoinIds);
+                            awaitingBuy = buy;
+                            awaitingMinima = plan.totalMinima;
+                            awaitingPrice = plan.effectivePrice;
+                            awaitingProceeds = buy ? plan.totalMinima : plan.totalUsdt;
+                            awaitingProceedsTok = buy ? Util.MINIMA_TOKENID : DexContract.USDT_ID;
+                            awaitingFillBlock = chainBlock;
+                            awaitingTxpowid = handle;
+                            awaitingPayout = tradePayout;
+                            awaitingSourceKind = plan.poolCount() > 0 && !plan.orderTakes.isEmpty()
+                                    ? "BOOK+POOL" : (plan.poolCount() > 0 ? "POOL" : "BOOK");
+                            return saveAwaitingFill();
+                        }
+
                         @Override public void onPosted(String txpowid) {
                             busy = false;
                             setStage("Posted — waiting for a block to confirm your "
@@ -831,8 +902,10 @@ public class MainActivity extends AppCompatActivity {
                             awaitingProceedsTok = buy ? Util.MINIMA_TOKENID : DexContract.USDT_ID;
                             awaitingFillBlock = chainBlock;
                             awaitingTxpowid = txpowid;
+                            awaitingPayout = tradePayout;
                             awaitingSourceKind = plan.poolCount() > 0 && !plan.orderTakes.isEmpty()
                                     ? "BOOK+POOL" : (plan.poolCount() > 0 ? "POOL" : "BOOK");
+                            if(!saveAwaitingFill()) setStage("Node accepted the trade · updated receipt details could not be saved; recovery record retained");
                             repo.refresh();
                             if (poolRepo != null) poolRepo.refresh();
                             if (rest.signum() > 0) {
@@ -846,8 +919,13 @@ public class MainActivity extends AppCompatActivity {
                         @Override public void onFailed(String message) {
                             busy = false;
                             filling.clear();
-                            setStage("Trade failed — " + message);
-                            toast("Trade failed: " + message);
+                            if (NodeApi.ERR_WRITE_UNCERTAIN.equals(message)) {
+                                setStage("Trade outcome unknown — receipt retained. Review ASSETS.");
+                            } else {
+                                if (clearAwaitingFillState(true)) setStage("Trade failed — " + message);
+                                else setStage("Trade failed; pending-state update failed, so trading remains paused");
+                            }
+                            toast(message);
                             repaint();
                         }
                     });
@@ -908,104 +986,118 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void completeTakerFill(java.util.List<String> done) {
-        boolean buy = awaitingBuy;
-        BigDecimal minima = awaitingMinima;
-        BigDecimal price = awaitingPrice;
-        String txpowid = awaitingTxpowid;
-        String sourceKind = awaitingSourceKind;
-        clearAwaitingFillState(false);
-        filling.removeAll(done);
-        String msg = (buy ? "Bought " : "Sold ") + PriceMath.fmt(minima)
-                + " MINIMA @ " + PriceMath.fmtPrice(price);
-        // Say where the money is. The proceeds are on-chain the moment the trade mines, but
-        // they are not SPENDABLE until the node has confirmed them, and that gap previously
-        // read as "the trade completed but I wasn't paid".
-        setStage("✓ " + msg + " — proceeds are confirming, see ASSETS");
-        Notifier.alert(this, "Trade complete", msg + ". Funds are confirming and will show as "
-                + "available shortly.");
-        // A sweep is ONE taker trade. Key it by its first consumed order coin for exactly-once
-        // storage; writing the aggregate once per leg multiplied personal volume and P&L.
-        if (!done.isEmpty()) {
-            db.addMyTrade(done.get(0), System.currentTimeMillis(), chainBlock, price,
-                    minima, buy, false, "", txpowid, sourceKind,
-                    joinIds(done), "", "LOCAL_VERIFIED",
-                    "Source coins spent and expected proceeds output found", chainBlock);
+        DexHistory.Spend proof=verifiedTakerSpend;
+        if(done.isEmpty() || !TakerEvidence.readyToRecord(proof,done.get(0))) {
+            setStage("Trade found · verifying its inclusion block time before saving the receipt"); return;
         }
+        boolean buy=awaitingBuy; BigDecimal minima=awaitingMinima, price=awaitingPrice;
+        final boolean newlyRecorded;
+        try {
+            JSONObject expected=awaitingFillJson().put("transactionid",proof.transactionId);
+            newlyRecorded=db.recordTakerFill(TakerReceipt.capture(expected,verifiedTakerSpends));
+            stats.invalidate();
+            if(!clearAwaitingFillState(false)) {
+                setStage("Trade receipt saved · pending-state update failed; trading remains paused"); return;
+            }
+        } catch(Exception failure) {
+            setStage("Trade receipt could not be saved safely · pending evidence retained; trading remains paused"); return;
+        }
+        filling.removeAll(done);
+        String msg=(buy ? "Bought " : "Sold ")+PriceMath.fmt(minima)+" MINIMA @ "+PriceMath.fmtPrice(price);
+        setStage("✓ "+msg+" — proceeds are confirming, see ASSETS");
+        if(newlyRecorded) Notifier.alert(this,"Trade complete",msg+". Funds are confirming and will show as available shortly.");
         stats.invalidate();
+        // All dependent actions happen only after the row and receipt cleanup are acknowledged.
+        if(restQueue!=null) placeRestQueue();
+    }
+
+    private JSONObject awaitingFillJson() throws org.json.JSONException {
+            JSONObject row = new JSONObject();
+            JSONArray ids = new JSONArray();
+            if (awaitingFill != null) for (String id : awaitingFill) ids.put(id);
+            row.put("sources", ids).put("buy", awaitingBuy).put("minima", awaitingMinima.toPlainString())
+                    .put("price", awaitingPrice.toPlainString()).put("proceeds", awaitingProceeds.toPlainString())
+                    .put("token", awaitingProceedsTok).put("block", awaitingFillBlock)
+                    .put("txpowid", awaitingTxpowid).put("payout", awaitingPayout).put("source", awaitingSourceKind)
+                    .put("intent", awaitingIntent);
+            return row;
+    }
+
+    private boolean saveAwaitingFill() {
+        try { return SubmissionIds.savePending(this,awaitingFillJson()); }
+        catch(Exception invalid) {return false;}
+    }
+
+    private void restoreAwaitingFill() {
+        try {
+            String saved = getSharedPreferences("pandadex_taker", MODE_PRIVATE).getString("pending", "");
+            if (saved.isEmpty()) return;
+            JSONObject row = new JSONObject(saved);
+            JSONArray ids = row.getJSONArray("sources");
+            java.util.List<String> sources = new java.util.ArrayList<>();
+            if (ids.length() == 0 || ids.length() > 20) return;
+            for (int i = 0; i < ids.length(); i++) {
+                String id = ids.getString(i); if (!FundingCoins.hex(id)) return; sources.add(id);
+            }
+            awaitingFill = sources;
+            awaitingBuy = row.optBoolean("buy");
+            awaitingMinima = Util.dec(row.optString("minima"));
+            awaitingPrice = Util.dec(row.optString("price"));
+            awaitingProceeds = Util.dec(row.optString("proceeds"));
+            awaitingProceedsTok = row.optString("token");
+            awaitingFillBlock = row.optLong("block");
+            awaitingTxpowid = row.optString("txpowid");
+            awaitingIntent = row.optString("intent", "");
+            awaitingPayout = row.optString("payout");
+            awaitingSourceKind = row.optString("source");
+            filling.addAll(sources);
+        } catch (Exception invalid) { android.util.Log.w("PandaDexChain", "Stored trade receipt could not be loaded"); }
+    }
+
+    public boolean hasUnresolvedTrade() { return awaitingFill != null; }
+    public void reviewUnresolvedTrade() {
+        if (awaitingFill == null) return;
+        new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Trade still being checked")
+                .setMessage("Transaction reference: " + awaitingTxpowid
+                        + "\n\nThe app has not yet matched this trade to a confirmed transaction and its payout. "
+                        + "It will keep checking; a saved intent does not by itself prove submission. Any remaining limit order is not restored after an app restart.")
+                .setPositiveButton("Check now", (d, w) -> { if (repo != null) repo.refresh(); })
+                .setNegativeButton("Close", null).show();
     }
 
     private void failAwaitingFill() {
-        clearAwaitingFillState(true);
-        setStage("That trade never confirmed — no trade was recorded. Nothing was spent by PandaDEX; try again.");
-        toast("Trade didn't confirm — no trade recorded");
-        repaint();
+        // A deadline is not rejection evidence. Keep the receipt and keep checking it.
+        setStage("Trade outcome unresolved — checking the chain. Review ASSETS before retrying.");
+        if (restQueue != null) failRestQueue();
     }
 
-    private void clearAwaitingFillState(boolean clearFilling) {
+    private boolean clearAwaitingFillState(boolean clearFilling) {
+        try {
+            String saved = getSharedPreferences("pandadex_taker", MODE_PRIVATE).getString("pending", "");
+            if (!saved.isEmpty()) {
+                if (awaitingFill == null || !awaitingIntent.equals(new JSONObject(saved).optString("intent"))) return false;
+            }
+            // A failed commit may already have changed SharedPreferences' in-memory map.
+            // Retry the disk acknowledgement even when that map now appears empty.
+            if (!getSharedPreferences("pandadex_taker", MODE_PRIVATE).edit().remove("pending").commit()) return false;
+        } catch (Exception invalid) { return false; }
+        awaitingIntent = "";
         awaitingFill = null;
         awaitingFillBlock = 0;
         awaitingProceeds = BigDecimal.ZERO;
         awaitingProceedsTok = "";
         awaitingTxpowid = "";
+        awaitingPayout = "";
         awaitingSourceKind = "";
+        verifiedTakerSpend = null;
+        verifiedTakerSpends = java.util.Collections.emptyMap();
         if (clearFilling) filling.clear();
+        return true;
     }
 
     private void reconcileSweep(Map<String, Order5> book) {
-        if (restQueueCoins == null) return;
-        for (String coinid : restQueueCoins) {
-            if (sourceStillLive(book, coinid)) {
-                // A consensus-rejected sweep posts without error and simply never mines, so
-                // "wait for the coins to vanish" can wait forever — and the resting balance
-                // the user was PROMISED would be placed just never is, silently. Give up out
-                // loud once the coins have clearly outlived the trade.
-                if (restQueueBlock > 0 && chainBlock - restQueueBlock > SWEEP_DEADLINE_BLOCKS) {
-                    restQueue = null;
-                    restQueueCoins = null;
-                    restQueueBlock = 0;
-                    filling.clear();
-                    awaitingFill = null;
-                    setStage("That trade never confirmed — your resting limit order was NOT "
-                            + "placed. Nothing was spent; try again.");
-                    toast("Trade didn't confirm — resting order not placed");
-                    repaint();
-                }
-                return;                                   // sweep hasn't landed yet
-            }
-        }
-        if (checkingRestQueue) return;
-        java.util.List<String> done = new java.util.ArrayList<>(restQueueCoins);
-        checkingRestQueue = true;
-        allSourcesSpent(done, spent -> {
-            if (restQueueCoins == null || !restQueueCoins.equals(done)) {
-                checkingRestQueue = false;
-                return;
-            }
-            if (!spent) {
-                checkingRestQueue = false;
-                if (restQueueBlock > 0 && chainBlock - restQueueBlock > SWEEP_DEADLINE_BLOCKS) {
-                    failRestQueue();
-                } else {
-                    repo.refresh();
-                    if (poolRepo != null) poolRepo.refresh();
-                }
-                return;
-            }
-            takerProceedsPresent(paid -> {
-                checkingRestQueue = false;
-                if (restQueueCoins == null || !restQueueCoins.equals(done)) return;
-                if (!paid) {
-                    if (restQueueBlock > 0 && chainBlock - restQueueBlock > SWEEP_DEADLINE_BLOCKS) {
-                        failRestQueue();
-                    } else {
-                        repo.refresh();
-                        if (poolRepo != null) poolRepo.refresh();
-                    }
-                    return;
-                }
-                placeRestQueue();
-            });
-        });
+        if (restQueue != null && restQueueBlock > 0 && chainBlock - restQueueBlock > SWEEP_DEADLINE_BLOCKS)
+            failRestQueue();
     }
 
     private void placeRestQueue() {
@@ -1020,10 +1112,8 @@ public class MainActivity extends AppCompatActivity {
         restQueue = null;
         restQueueCoins = null;
         restQueueBlock = 0;
-        clearAwaitingFillState(true);
-        setStage("That trade never confirmed — your resting limit order was NOT "
-                + "placed. Nothing was spent; try again.");
-        toast("Trade didn't confirm — resting order not placed");
+        setStage("Trade outcome unresolved. The remaining limit order was not placed; the trade is still being checked.");
+        toast("Remaining limit order not placed — review the trade first");
         repaint();
     }
 
@@ -1069,19 +1159,27 @@ public class MainActivity extends AppCompatActivity {
     private interface PaidCb { void done(boolean paid); }
 
     private void takerProceedsPresent(PaidCb cb) {
-        String payAddr = txn == null ? "" : txn.hexAddr();
+        String payAddr = awaitingPayout;
         if (node == null || payAddr == null || payAddr.isEmpty()
                 || awaitingProceeds == null || awaitingProceeds.signum() <= 0
                 || awaitingProceedsTok == null || awaitingProceedsTok.isEmpty()) {
             cb.done(false);
             return;
         }
-        node.cmd("coins simplestate:true address:" + payAddr + " tokenid:" + awaitingProceedsTok
-                + " coinage:0 depth:" + Math.max(12, SWEEP_DEADLINE_BLOCKS + 6), new NodeApi.Cb() {
-            @Override public void onResult(JSONObject json) {
-                cb.done(proceedsPresent(json, awaitingProceedsTok, awaitingProceeds, awaitingFillBlock));
+        final java.util.List<String> sources = awaitingFill == null ? null : new java.util.ArrayList<>(awaitingFill);
+        final String submitted = awaitingTxpowid;
+        final String immutable = SubmissionIds.transactionFor(this, submitted);
+        final String token = awaitingProceedsTok;
+        final BigDecimal amount = awaitingProceeds;
+        if (sources == null || immutable.isEmpty()) { cb.done(false); return; }
+        history.findSpends(sources, found -> {
+            if (awaitingFill == null || !awaitingFill.equals(sources) || !submitted.equals(awaitingTxpowid)) {
+                cb.done(false); return;
             }
-            @Override public void onError(String message) { cb.done(false); }
+            DexHistory.Spend match = TakerEvidence.match(found, sources, immutable, payAddr, token, amount);
+            verifiedTakerSpend = match;
+            verifiedTakerSpends = match==null ? java.util.Collections.emptyMap() : new java.util.HashMap<>(found);
+            cb.done(match != null);
         });
     }
 
@@ -1131,7 +1229,9 @@ public class MainActivity extends AppCompatActivity {
         if (!ready()) return;
         java.util.List<Order5> mine = new java.util.ArrayList<>();
         for (Order5 o : book().values()) if (o.isMine(keySet.keys(), keySet.addrs())) mine.add(o);
-        if (mine.isEmpty()) { toast("No open orders"); if (onDone != null) onDone.run(); return; }
+        makerCfg.reload();
+        boolean makerWork=makerCfg.armed||makerCfg.hasRecordedOrders()||(maker!=null&&maker.isWorking());
+        if (mine.isEmpty()&&!makerWork) { toast("No open orders in this snapshot"); if (onDone != null) onDone.run(); return; }
 
         BigDecimal totalMinima = BigDecimal.ZERO, totalUsdt = BigDecimal.ZERO;
         for (Order5 o : mine) {
@@ -1146,30 +1246,33 @@ public class MainActivity extends AppCompatActivity {
             java.util.Set<String> owned = maker.ownedOrderIds();
             for (Order5 o : mine) if (owned.contains(o.orderId)) rungs++;
         }
-        final boolean stopMaker = makerCfg.armed;
+        final boolean stopMaker = makerWork;
 
-        String msg = "Cancel all " + mine.size() + " open order" + (mine.size() == 1 ? "" : "s")
-                + "?\n\nThis returns " + PriceMath.fmt(totalMinima) + " MINIMA and "
-                + PriceMath.fmt(totalUsdt) + " mxUSDT to your wallet.\n\nEach cancel is a "
-                + "separate transaction, so this takes a moment — the orders stay on the book, "
-                + "and stay fillable, until each one confirms."
-                + (stopMaker ? "\n\nThe market maker is PUBLISHING"
-                        + (rungs > 0 ? " and " + rungs + " of these are its rungs" : "")
-                        + ". It will be stopped too, so the ladder is not rebuilt." : "");
+        String msg = mine.isEmpty()
+                ? "Stop the maker and request withdrawal of its recorded orders? No open orders are visible in this snapshot, but a submission may still be in progress."
+                : "Request cancellation of all " + mine.size() + " visible order" + (mine.size()==1?"":"s")
+                    + "?\n\nThese orders lock " + PriceMath.fmt(totalMinima) + " MINIMA and "
+                    + PriceMath.fmt(totalUsdt) + " mxUSDT. Funds return after successful cancellation. "
+                    + "Cancellations are submitted in batches; orders can still fill until their cancellation confirms.";
+        if(stopMaker)msg+="\n\nThe maker will be paused too"
+                +(rungs>0?" ("+rungs+" visible maker orders)":"")
+                +". Orders still being submitted will remain tracked for cancellation when they appear. Check Orders for confirmed outcomes.";
         new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle("Cancel all orders")
                 .setMessage(msg)
                 .setPositiveButton(stopMaker ? "Cancel all & stop" : "Cancel them", (d, w) -> {
-                    if (stopMaker) {
-                        // Disarm BEFORE posting: onBook returns immediately once disarmed, so
-                        // no maker cycle can interleave with the cancel run.
-                        makerCfg.armed = false;
-                        makerCfg.clearSlots();       // no memory of a ladder left to restore
-                        makerCfg.save();
-                        setStage("Market maker stopped — cancelling every order");
+                    Runnable start=() -> {
                         repaint();
-                    }
-                    cancelSequentially(mine, 0, 0, 0, onDone);
+                        if(mine.isEmpty()) {
+                            String status="Maker withdrawal instructions retained. No orders were visible in this snapshot; check Orders for on-chain outcomes.";
+                            setStage(status);toast(status);repo.refresh();
+                            if(onDone!=null)onDone.run();return;
+                        }
+                        cancelSequentially(mine,0,0,0,onDone);
+                    };
+                    // Re-check on confirmation; a maker may have started since the dialog opened.
+                    if(maker!=null)maker.stopForCancelAll(chainBlock,makerListener,start);
+                    else start.run();
                 })
                 .setNegativeButton("Keep them", null)
                 .show();
@@ -1189,8 +1292,7 @@ public class MainActivity extends AppCompatActivity {
                     ? "Cancel sent for " + ok + " order" + (ok == 1 ? "" : "s")
                             + " — each leaves the book when a block confirms it, and can still "
                             + "be filled until then"
-                    : "Cancel sent for " + ok + "; " + failed + " could not be cancelled — they "
-                            + "may have just been filled. Check your open orders.";
+                    : "Cancel requests accepted for " + ok + "; " + failed + " requests failed or have unknown outcomes. Check Orders and retained receipts.";
             setStage(summary);
             toast(summary);
             repo.refresh();
@@ -1207,10 +1309,8 @@ public class MainActivity extends AppCompatActivity {
         setStage("Cancelling " + next + " of " + list.size() + "…");
         txn.cancelBatch(chunk, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) {
-                for (Order5 o : chunk) {
-                    pending.add(cancelPending(o));
-                    db.forgetMyOrder(o.coinid);
-                }
+                // Pending already retained the submission. No legacy-table write may
+                // interrupt this batch continuation after the node accepted it.
                 cancelSequentially(list, next, ok + chunk.size(), failed, onDone);
             }
             @Override public void onFailed(String message) {
@@ -1220,66 +1320,23 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    /** A pending cancel starts only after the node has accepted the transaction for posting.
-     *  Before that point it is not an on-chain action and must not outlive a failure callback. */
-    private Pending.Row cancelPending(Order5 o) {
-        Pending.Row row = new Pending.Row();
-        row.kind = Pending.CANCEL;
-        row.orderId = o.orderId;
-        row.coinid = o.coinid;
-        row.buy = !o.sell;
-        row.minima = o.minimaAmount();
-        row.price = o.price();
-        row.submitMs = System.currentTimeMillis();
-        row.submitBlock = chainBlock;
-        return row;
-    }
-
-    /** Maker events → the stage line AND optimistic Pending rows, so every rung's journey
-     *  (mining → live, cancelling → gone) is visible on the Trade/Orders/Maker surfaces —
-     *  0.2.6 routed everything into one 45s status line only the Trade tab rendered. */
+    /** Maker events refresh the visible status; DexTxn owns the durable pre-submission
+     * receipts shared by foreground and background hosts. */
     private final MakerEngine.Listener makerListener = new MakerEngine.Listener() {
         @Override public void onMakerState(String message) { setStage(message); }
 
         @Override public void onCreateSent(MakerLadder.Slot slot, String orderId) {
-            Pending.Row row = new Pending.Row();
-            row.kind = Pending.PLACE;
-            row.orderId = orderId;
-            row.buy = !slot.sell;
-            row.minima = slot.sizeMinima;
-            row.price = slot.price;
-            row.submitMs = System.currentTimeMillis();
-            row.submitBlock = chainBlock;
-            pending.add(row);
+            // DexTxn saved the exact creation receipt before signing, including in the service.
             repaint();
         }
 
         @Override public void onCancelSent(Order5 o) {
-            Pending.Row row = new Pending.Row();
-            row.kind = Pending.CANCEL;
-            row.orderId = o.orderId;
-            row.coinid = o.coinid;
-            row.buy = !o.sell;
-            row.minima = o.minimaAmount();
-            row.price = o.price();
-            row.submitMs = System.currentTimeMillis();
-            row.submitBlock = chainBlock;
-            pending.add(row);
-            db.forgetMyOrder(o.coinid);
+            // DexTxn journalled all cancellation sources before signing, including service calls.
             repaint();
         }
 
         @Override public void onRelockSent(Order5 o, BigDecimal newPrice) {
-            Pending.Row row = new Pending.Row();
-            row.kind = Pending.EDIT;
-            row.orderId = o.orderId;
-            row.coinid = o.coinid;
-            row.buy = !o.sell;
-            row.minima = o.minimaAmount();
-            row.price = newPrice;
-            row.submitMs = System.currentTimeMillis();
-            row.submitBlock = chainBlock;
-            pending.add(row);
+            // DexTxn retained the exact replacement amount before signing.
             repaint();
         }
     };
@@ -1342,7 +1399,7 @@ public class MainActivity extends AppCompatActivity {
                         + (pegged
                         ? "PEGGED: prices track the MEXC mid and reprice when it moves past your "
                         + "threshold; your per-rung sizes are kept. If the feed goes stale the "
-                        + "ladder quotes wider, then withdraws."
+                        + "app widens its quotes, then requests withdrawal. Existing orders remain tradeable until cancellation confirms."
                         : "NOT pegged: the book gets YOUR exact prices — never repriced, never "
                         + "withdrawn, even if the price feed dies.")
                         + "\n\nRungs post ONE PER SIDE per cycle — each is an on-chain "
@@ -1350,14 +1407,17 @@ public class MainActivity extends AppCompatActivity {
                         + "has to confirm before the next on that side can be funded — so a full "
                         + "ladder takes a few minutes to build and a rung may retry before it "
                         + "sticks. The Maker tab shows each rung's progress.\n\n"
-                        + "With the app CLOSED the ladder is still maintained, but only every "
-                        + "few minutes — so it builds slower and a stale-feed withdrawal can "
-                        + "lag by that much. Keep the app open while it builds."
+                        + "Background checks are normally requested every 15 minutes. Android may delay or stop them, "
+                        + "so automatic withdrawal is not a guaranteed price limit. Keep PandaDEX and MinimaCore "
+                        + "running while monitoring the ladder; check Orders for confirmed cancellations."
                         + (fundingHint.isEmpty() ? "" : "\n\n" + fundingHint))
                 .setPositiveButton("Publish", (d, w) -> {
                     makerCfg.armed = true;
                     makerCfg.lastActedMid = null;      // act on the next cycle
-                    makerCfg.save();
+                    if(!makerCfg.saveUserAction()) {
+                        makerCfg.armed=false;
+                        toast(MakerConfig.storageFailureMessage()+" Publishing was not started.");repaint();return;
+                    }
                     setStage("Ladder publishing — posting the first rungs");
                     repo.refresh();
                     repaint();
@@ -1447,42 +1507,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void postMakerSelfSplit(String tokenid, String label, BigDecimal amount, String address) {
-        final String cmd;
-        try {
-            cmd = SelfSplit.command(address, tokenid, amount);
-        } catch (Throwable t) {
-            busy = false;
-            toast("Could not build split command");
-            return;
-        }
         busy = true;
-        setStage("Splitting " + PriceMath.fmt(amount) + " " + label + " into "
-                + SelfSplit.COUNT + " wallet coins...");
-        SignGate.submit(gate -> node.cmd(cmd, new NodeApi.Cb() {
-            @Override public void onResult(JSONObject json) {
-                gate.free();
-                if (json.optBoolean("status", false) || json.optBoolean("pending", false)) {
-                    makerSplitPending = true;
-                    makerSplitPendingToken = tokenid;
-                    makerSplitPendingBlock = chainBlock;
-                    busy = false;
-                    setStage(label + " split posted - wait for the next block, then publish.");
-                    toast(label + " split posted");
-                    poll(false);
-                } else {
-                    busy = false;
-                    String msg = nodeReplyMessage(json, "split failed");
-                    setStage("Split failed - " + msg);
-                    toast("Split failed: " + msg);
-                }
-            }
-            @Override public void onError(String message) {
-                gate.free();
+        setStage("Splitting " + PriceMath.fmt(amount) + " " + label + " into " + SelfSplit.COUNT + " wallet coins…");
+        txn.splitFunding(tokenid, amount, new DexTxn.Result() {
+            public void onPosted(String txpowid) {
+                makerSplitPending = true;
+                makerSplitPendingToken = tokenid;
+                makerSplitPendingBlock = chainBlock;
                 busy = false;
-                setStage("Split failed - " + message);
-                toast("Split failed: " + message);
+                setStage("Split submitted — waiting for spendable wallet coins");
+                poll();
             }
-        }));
+            public void onFailed(String message) {
+                busy = false;
+                setStage(NodeApi.ERR_WRITE_UNCERTAIN.equals(message) ? "Split outcome unknown — review Assets" : "Split failed — " + message);
+                toast(message); repaint();
+            }
+        });
         repaint();
     }
 
@@ -1503,7 +1544,7 @@ public class MainActivity extends AppCompatActivity {
         int[] p = maker.previewEdits(book(), keys(), chainBlock, mid);
         int relocks = p[0], reposts = p[1], creates = p[2], cancels = p[3];
         if (relocks + reposts + creates + cancels == 0) {
-            toast("The live ladder already matches these settings");
+            toast("No automatic edits available — review the rung statuses for positions that need attention");
             return;
         }
         StringBuilder sb = new StringBuilder();
@@ -1540,16 +1581,19 @@ public class MainActivity extends AppCompatActivity {
         // engine is built on, and a reprice completing after we cleared the slot map would
         // leave a live order the ladder no longer knows about.
         makerCfg.armed = false;
-        makerCfg.save();
+        if(!makerCfg.saveUserAction()) {
+            toast(MakerConfig.storageFailureMessage()+" No cancellation started; saved settings may still be enabled.");
+            repaint();return;
+        }
         repaint();
         if (maker.isWorking()) {
             // queue it: once disarmed, onBook stops running, so nothing else would ever come
             // back to finish this and the ladder would sit on the book despite the request
-            toast("Finishing the current adjustment — the ladder comes off right after");
+            toast("Finishing the current adjustment; withdrawal will then be attempted. Check Orders for confirmation.");
             maker.runWhenIdle(this::withdrawLadder);
             return;
         }
-        if (makerCfg.slots.isEmpty() && makerCfg.cancelTombstones.isEmpty()) {
+        if (!makerCfg.hasRecordedOrders()) {
             toast("No ladder orders to withdraw");
             return;
         }
@@ -1558,10 +1602,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void cancelOrder(Order5 o) {
+        if (!ready() || !keySet.owns(o)) return;
         txn.cancel(o, new DexTxn.Result() {
             @Override public void onPosted(String txpowid) {
-                pending.add(cancelPending(o));
-                db.forgetMyOrder(o.coinid);
                 toast("Cancel sent — the order leaves the book when a block confirms it");
                 repo.refresh();
                 repaint();
@@ -1572,10 +1615,15 @@ public class MainActivity extends AppCompatActivity {
 
     /** Atomic in-place reprice — ONE transaction, the order never leaves the book. */
     public void editOrder(Order5 o) {
+        if (!ready() || !keySet.owns(o)) return;
         EditText in = new EditText(this);
         in.setHint("New price (mxUSDT per MINIMA)");
-        in.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        in.setKeyListener(android.text.method.DigitsKeyListener.getInstance(java.util.Locale.US, false, true));
+        in.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        in.setTransformationMethod(null);
+        in.setFilters(new android.text.InputFilter[]{(src, start, end, dest, dstart, dend) -> {
+            String value = dest.toString().substring(0, dstart) + src.subSequence(start, end) + dest.toString().substring(dend);
+            return value.length() <= 44 && (value.isEmpty() || value.matches("[0-9]*\\.?[0-9]*")) ? null : "";
+        }});
         in.setText(o.price().stripTrailingZeros().toPlainString());
         new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle("Edit order price")
@@ -1587,18 +1635,8 @@ public class MainActivity extends AppCompatActivity {
                             ? PriceMath.up(o.locked.multiply(np, PriceMath.MC), PriceMath.USDT_DP)
                             : PriceMath.down(o.locked.divide(np, PriceMath.MINIMA_DP, java.math.RoundingMode.DOWN),
                                     PriceMath.MINIMA_DP);
-                    Pending.Row row = new Pending.Row();
-                    row.kind = Pending.EDIT;
-                    row.orderId = o.orderId;
-                    row.coinid = o.coinid;
-                    row.buy = !o.sell;
-                    row.minima = o.minimaAmount();
-                    row.price = np;
-                    row.submitMs = System.currentTimeMillis();
-                    row.submitBlock = chainBlock;
                     txn.relock(o, newWant, new DexTxn.Result() {
                         @Override public void onPosted(String txpowid) {
-                            pending.add(row);
                             toast("Reprice posted");
                             repo.refresh();
                             repaint();
@@ -1612,18 +1650,29 @@ public class MainActivity extends AppCompatActivity {
 
     private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
                             boolean takerBuy, boolean partial, String txpowid, String evidence, String note) {
+        recordFill(spentCoin, order, size, price, takerBuy, partial, txpowid, evidence,
+                note + ChainEvidence.OBSERVED_TIME_NOTE, System.currentTimeMillis(), chainBlock);
+    }
+
+    private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
+                            boolean takerBuy, boolean partial, String txpowid, String evidence, String note,
+                            long timeMs, long block) {
+        recordFill(spentCoin,order,size,price,takerBuy,partial,txpowid,evidence,note,timeMs,block,null,null);
+    }
+
+    private void recordFill(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
+                            boolean takerBuy, boolean partial, String txpowid, String evidence, String note,
+                            long timeMs, long block, FillSettler.Entry entry, DexHistory.Spend spend) {
         boolean mine = order.isMine(keys(), addrs());
-        boolean isNew = db.addFill(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
-                takerBuy, partial, mine);
-        if (isNew && mine) {
-            db.addMyTrade(spentCoin, System.currentTimeMillis(), chainBlock, price, size,
-                    !order.sell, true, order.orderId, txpowid, "BOOK", spentCoin, "",
-                    evidence, note, chainBlock);
+        boolean isNew = entry == null
+                ? db.recordVerifiedFill(spentCoin, timeMs, block, price, size, takerBuy, partial, mine, order, txpowid, evidence, note)
+                : db.completeFill(entry, spend, order, timeMs, block, price, size, takerBuy, partial, mine, evidence, note);
+        if (isNew && mine && FillSettler.recentForNotification(timeMs, System.currentTimeMillis())) {
             toast((partial ? "Partial fill: " : "Filled: ") + PriceMath.fmt(size) + " MINIMA @ "
                     + PriceMath.fmtPrice(price));
             Notifier.fill(this, order.sell, size, price, partial);
         }
-        if (isNew) stats.invalidate();
+        stats.invalidate();
     }
 
     private static String joinIds(java.util.List<String> ids) {
@@ -1644,7 +1693,11 @@ public class MainActivity extends AppCompatActivity {
     /** My wallet addresses — the second ownership factor; see {@link KeySet#owns}. */
     public Set<String> addrs() { return keySet.addrs(); }
     public Map<String, Order5> book() { return repo == null ? new java.util.LinkedHashMap<>() : repo.book(); }
-    public java.util.List<Pool> pools() { return poolRepo == null ? java.util.Collections.emptyList() : poolRepo.pools(); }
+    public java.util.List<Pool> pools() { return poolRepo == null || !poolRepo.current() ? java.util.Collections.emptyList() : poolRepo.pools(); }
+    /** Observation status only; a book snapshot is not transaction-inclusion proof. */
+    public boolean makerBookReady() {
+        return paired && keySet != null && keySet.ready() && repo != null && repo.current() && chainBlock > 0;
+    }
     public long chainBlock() { return chainBlock; }
     public java.util.List<Pending.Row> pendingRows() { return pending.rows(); }
 
@@ -1678,27 +1731,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void exportTradeReconciliation() {
-        if (saveTradeExportLauncher == null) {
-            toast("Export is not ready yet");
-            return;
-        }
-        setStage("Building confirmed trade export…");
-        TradeExportWriter.run(this, new TradeExportWriter.Cb() {
-            @Override public void onDone(byte[] zip, String filename, TradeExport.Report report) {
-                setStage("");
-                pendingTradeExportSave = uri -> {
-                    if (uri == null) return;
-                    boolean ok = TradeExportWriter.writeTo(MainActivity.this, uri, zip);
-                    toast(ok ? "Saved · " + TradeExportWriter.describe(report) : "Could not write export");
-                };
-                saveTradeExportLauncher.launch(filename);
+        if(tradeExportSession==null||saveTradeExportLauncher==null){toast("Export is not ready yet");return;}
+        try {
+            if(!tradeExportSession.start(TradeExportWriter.snapshotFromUi(this))) {
+                if(tradeExportSession.phase()==TradeExportSession.Phase.NOTICE)renderExportSession();
+                else toast("An export is already being prepared or saved");
             }
+        }catch(RuntimeException failure){toast("Could not read the export snapshot; please try again");}
+    }
 
-            @Override public void onError(String message) {
-                setStage("");
-                toast("Export failed: " + message);
-            }
-        });
+    private void renderExportSession() {
+        TradeExportSession.Phase phase=tradeExportSession.phase();
+        if(phase==TradeExportSession.Phase.BUILDING)setStage("Building export · optional explorer checks take up to 30 seconds…");
+        else if(phase==TradeExportSession.Phase.SAVING)setStage("Saving trade export…");
+        else setStage("");
+        if(phase==TradeExportSession.Phase.READY) {
+            String filename=tradeExportSession.claimPicker();
+            if(filename!=null)try{saveTradeExportLauncher.launch(filename);}
+            catch(RuntimeException failure){tradeExportSession.pickerFailed();}
+        }else if(phase==TradeExportSession.Phase.NOTICE&&!exportNoticeShowing) {
+            exportNoticeShowing=true;
+            new AlertDialog.Builder(this,Design.dialogTheme()).setTitle("Trade export")
+                    .setMessage(tradeExportSession.notice()).setCancelable(false)
+                    .setPositiveButton("OK",(dialog,which)->{
+                        exportNoticeShowing=false;
+                        if(!tradeExportSession.acknowledge()) {
+                            toast(tradeExportSession.notice());
+                        }
+                    }).show();
+        }
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -1725,9 +1786,33 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onDestroy() {
         super.onDestroy();
-        ui.removeCallbacks(pollTask);
+        ui.removeCallbacksAndMessages(null);
+        if (repo != null) repo.close();
         if (notifyReceiver != null) try { unregisterReceiver(notifyReceiver); } catch (Exception ignored) {}
+        if (keySet != null) keySet.close();
         if (node != null) node.onDestroy();
+    }
+
+    public boolean interruptedWrite() { return node != null && node.hasInterruptedWrite(); }
+
+    /** Same explicit restart-and-reconcile recovery as PandaPools WalletTools. */
+    public void resolveInterruptedWrite() {
+        if (!interruptedWrite()) { toast("No interrupted write to resolve"); return; }
+        new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Resolve interrupted write")
+                .setMessage("A node write lost its reply and may have completed. First restart MinimaCore to stop old commands, "
+                        + "then check Orders, Tape and your balances. Clearing this pause neither undoes nor retries a transaction. "
+                        + "The maker will stay disarmed until you review and publish it again."
+                        + "\n\nInterrupted command:\n" + node.interruptedWriteDetails())
+                .setNegativeButton("Keep paused", null)
+                .setNeutralButton("Copy details", (d, w) -> {
+                    android.content.ClipboardManager clipboard = (android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                    if (clipboard != null) clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Interrupted PandaDEX write", node.interruptedWriteDetails()));
+                })
+                .setPositiveButton("I restarted and checked", (dialog, which) -> {
+                    makerCfg.reload(); makerCfg.armed = false; makerCfg.save();
+                    toast(node.acknowledgeInterruptedWrite() ? "Safety pause cleared. Review your orders and balances." : "A write is still active. Keep paused.");
+                    repaint();
+                }).show();
     }
 
     private static void appendUnavailable(StringBuilder sb, BigDecimal locked, BigDecimal unconfirmed) {

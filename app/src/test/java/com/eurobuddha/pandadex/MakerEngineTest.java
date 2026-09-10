@@ -32,9 +32,10 @@ import java.util.Set;
 public class MakerEngineTest {
 
     /** Records what was asked of it and lets each test choose how the node "responds". */
-    private static final class StubTxn extends DexTxn {
+    static final class StubTxn extends DexTxn {
         final List<String> calls = new ArrayList<>();
         boolean failCreates = false;
+        boolean deferCreates = false;
         /** mimic DexTxn's real contract: validation failures call onFailed AND return null */
         boolean rejectSynchronously = false;
         int nextId = 1;
@@ -49,6 +50,7 @@ public class MakerEngineTest {
                 cb.onFailed("rejected before posting");
                 return null;
             }
+            if(deferCreates){parked=cb;return orderId;}
             nextId++;
             // mimics the real contract: the id comes BACK even when the node rejects the send
             // asynchronously, which is exactly why the engine records only in onPosted
@@ -94,6 +96,7 @@ public class MakerEngineTest {
     private MakerEngine engine;
 
     @Before public void setUp() {
+        MarketPrice.testSnapshot(0.05,System.currentTimeMillis());
         cfg = new MakerConfig();
         txn = new StubTxn();
         engine = new MakerEngine(cfg, txn);
@@ -262,7 +265,7 @@ public class MakerEngineTest {
         assertTrue("gone but still recent — keep watching", cfg.cancelTombstones.containsKey("0xORDER1"));
         engine.sweepTombstones(new HashMap<>(), MY_KEYS,
                 100 + MakerEngine.TOMBSTONE_EXPIRE_BLOCKS, m -> {});
-        assertTrue("finished business", cfg.cancelTombstones.isEmpty());
+        assertTrue("absence cannot prove that a delayed order will never surface", cfg.cancelTombstones.containsKey("0xORDER1"));
     }
 
     @Test public void retryingACancelNeverShortensTheProtectionWindow() {
@@ -352,7 +355,7 @@ public class MakerEngineTest {
         assertTrue(cfg.slots.isEmpty());
     }
 
-    @Test public void aPublishedLadderStillRebuildsARungThatVanishesOnItsOwn() {
+    @Test public void aPublishedLadderDoesNotTreatDisappearanceAsPermissionToRebuild() {
         // the other side of that coin: while PUBLISHED, a rung that disappears (taken, or
         // cancelled behind the maker's back) is still the maker's job to restore
         MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
@@ -364,7 +367,9 @@ public class MakerEngineTest {
 
         forceNextCycle();
         engine.onBook(new HashMap<>(), MY_KEYS, 100 + MakerEngine.PATIENCE_BLOCKS, m -> {});
-        assertEquals("a published ladder heals itself", 1, txn.calls.size());
+        assertTrue("unexplained disappearance must not spend more funds", txn.calls.isEmpty());
+        assertEquals("0xGONE", cfg.orderIdFor("B1"));
+        assertFalse(cfg.armed);
     }
 
     @Test public void theStaleFeedWithdrawAlsoChasesUnconfirmedRungs() {
@@ -467,7 +472,7 @@ public class MakerEngineTest {
         assertEquals("and must not overwrite the record", firstId, cfg.orderIdFor("B1"));
     }
 
-    @Test public void aSlotThatNeverSurfacesIsRetriedAfterThePatienceWindow() {
+    @Test public void anAbsentAcceptedSlotIsRetainedAndPausesRatherThanDuplicatingFunds() {
         MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
         cfg.armed = true;
         cfg.pegged = true;
@@ -477,8 +482,9 @@ public class MakerEngineTest {
 
         forceNextCycle();
         engine.onBook(new HashMap<>(), MY_KEYS, 100 + MakerEngine.PATIENCE_BLOCKS, m -> {});
-        assertEquals("patience expired — the rung is re-created", 1, txn.calls.size());
-        assertNotEquals("with a fresh id, the dead one dropped", "0xLOST", cfg.orderIdFor("B1"));
+        assertTrue("elapsed time is not permission to submit another order", txn.calls.isEmpty());
+        assertEquals("0xLOST", cfg.orderIdFor("B1"));
+        assertFalse(cfg.armed);
     }
 
     @Test public void theRepriceGateOnlyGuardsACompleteLadder() {
@@ -571,6 +577,131 @@ public class MakerEngineTest {
         assertEquals("still settling — no second relock", 1, txn.calls.size());
     }
 
+    private void startDeferredPeg() {
+        cfg.armed=true;cfg.pegged=true;
+        seedRungs(cfg.asks,1,"100");seedRungs(cfg.bids,1,"100");
+        txn.deferCreates=true;
+        engine.onBook(new HashMap<>(),MY_KEYS,100,m->{});
+        assertEquals(1,txn.calls.size());assertNotNull(txn.parked);
+        assertTrue("unchanged quote may post",txn.parked.beforePost());
+    }
+    private void finishDeferred() {cfg.armed=false;txn.parked.onFailed("test ends before posting");}
+    @Test public void staleFeedWhileQueuedBlocksPostingAndRemainingActions() {
+        startDeferredPeg();MarketPrice.testSnapshot(0.05,1);
+        assertFalse(txn.parked.beforePost());
+        txn.parked.onFailed("quote expired before posting");
+        assertEquals(1,txn.calls.size());assertTrue(cfg.slots.isEmpty());assertFalse(engine.isWorking());
+    }
+    @Test public void changedMidWhileQueuedBlocksOldQuote() {
+        startDeferredPeg();MarketPrice.testSnapshot(0.06,System.currentTimeMillis());
+        assertFalse(txn.parked.beforePost());finishDeferred();
+    }
+    @Test public void SmallMoveInsideExistingThresholdDoesNotStarveQueue() {
+        startDeferredPeg();MarketPrice.testSnapshot(0.05001,System.currentTimeMillis());
+        assertTrue(txn.parked.beforePost());finishDeferred();
+    }
+    @Test public void wideningWhileQueuedBlocksPreviouslyTightPrices() {
+        startDeferredPeg();MarketPrice.testSnapshot(0.05,System.currentTimeMillis()-19*60_000L);
+        assertFalse("unchanged midpoint cannot conceal stale narrow spread",txn.parked.beforePost());finishDeferred();
+    }
+    @Test public void disarmingWhileQueuedBlocksPosting() {
+        startDeferredPeg();cfg.armed=false;
+        assertFalse(txn.parked.beforePost());finishDeferred();
+    }
+    @Test public void editedSizesWhileQueuedBlockPosting() {
+        startDeferredPeg();seedRungs(cfg.asks,1,"200");
+        assertFalse(txn.parked.beforePost());finishDeferred();
+    }
+    @Test public void changedFeedAfterAcceptedActionDoesNotLoseItOrPostRemainder() {
+        startDeferredPeg();MarketPrice.testSnapshot(0.06,System.currentTimeMillis());
+        txn.parked.onPosted("0xaabb");
+        assertEquals(1,txn.calls.size());assertEquals(1,cfg.slots.size());assertFalse(engine.isWorking());
+    }
+
+    @Test public void manualQueuedPriceDoesNotDependOnExternalFeed() {
+        cfg.armed=true;cfg.pegged=false;
+        cfg.asks.add(new MakerLadder.Level(new BigDecimal("0.05"),new BigDecimal("100")));
+        txn.deferCreates=true;engine.onBook(new HashMap<>(),MY_KEYS,100,m->{});
+        MarketPrice.testSnapshot(0,0);assertTrue(txn.parked.beforePost());finishDeferred();
+    }
+    @Test public void suspectJumpBlocksQueuedOldQuoteBeforeSecondReading() {
+        startDeferredPeg();assertFalse(MarketPrice.acceptMid(1));
+        assertFalse(txn.parked.beforePost());finishDeferred();
+    }
+
+    @Test public void monotonicCycleAllowsImmediateStartThenPacesAtBootZero() {
+        long[] now={0};engine=new MakerEngine(cfg,txn,null,()->now[0]);
+        cfg.armed=true;cfg.pegged=false;cfg.asks.add(new MakerLadder.Level(new BigDecimal("0.05"),new BigDecimal("100")));
+        txn.rejectSynchronously=true;
+        engine.onBook(new HashMap<>(),MY_KEYS,100,m->{});assertEquals(1,txn.calls.size());
+        now[0]=59_999;engine.onBook(new HashMap<>(),MY_KEYS,100,m->{});assertEquals(1,txn.calls.size());
+        now[0]=60_000;engine.onBook(new HashMap<>(),MY_KEYS,100,m->{});assertEquals(2,txn.calls.size());
+    }
+    @Test public void elapsedClockAnomalyDoesNotFreezeStaleWithdrawal()throws Exception {
+        long[] now={100};engine=new MakerEngine(cfg,txn,null,()->now[0]);
+        java.lang.reflect.Field f=MakerEngine.class.getDeclaredField("lastCycleMs");f.setAccessible(true);f.setLong(engine,200);
+        MarketPrice.testSnapshot(0.05,0,()->MarketPrice.WITHDRAW_MS);
+        cfg.armed=true;cfg.pegged=true;seedRungs(cfg.asks,1,"100");
+        cfg.rememberSlot("A1","0xORDER1",new BigDecimal("100"),100);
+        engine.onBook(bookOf(order("0xC1","0xORDER1","0.05","100")),MY_KEYS,100,m->{});
+        assertEquals(1,txn.calls.size());assertTrue(txn.calls.get(0).startsWith("CANCEL"));
+    }
+
+    private static Order5 buyOrder(String coin,String id,String wanted,String locked) {
+        try {
+            org.json.JSONObject c=new org.json.JSONObject(order(coin,id,"0.05",wanted).sourceJson());
+            c.put("tokenid",DexContract.USDT_ID).put("tokenamount",locked);
+            c.getJSONObject("state").put("2",wanted).put("3","0x00").put("5","0").put("8","0.01");
+            return Order5.from(c);
+        }catch(Exception e){throw new RuntimeException(e);}
+    }
+    @Test public void buyRepricingDoesNotTurnUnspentUsdtIntoAPartialFill() {
+        cfg.armed=true;cfg.pegged=false;
+        cfg.bids.add(new MakerLadder.Level(new BigDecimal("0.06"),new BigDecimal("100")));
+        cfg.rememberSlot("B1","0xORDER1",new BigDecimal("100"),100,new BigDecimal("5"),DexContract.USDT_ID);
+        engine.onBook(bookOf(buyOrder("0xc1","0xORDER1","50","5")),MY_KEYS,100,m->{});
+        assertEquals(1,txn.calls.size());assertTrue(txn.calls.get(0).startsWith("RELOCK"));
+        cfg.bids.set(0,new MakerLadder.Level(new BigDecimal("0.07"),new BigDecimal("100")));forceNextCycle();
+        engine.onBook(bookOf(buyOrder("0xc2","0xORDER1","83.33333333","5")),MY_KEYS,105,m->{});
+        assertEquals("later repricing still works without new funding",2,txn.calls.size());
+        assertEquals(new BigDecimal("5"),cfg.slots.get("B1").locked);
+    }
+    @Test public void reducedBuyFundingStillPreservesTheWorkingRemainder() {
+        cfg.armed=true;cfg.pegged=false;cfg.bids.add(new MakerLadder.Level(new BigDecimal("0.06"),new BigDecimal("100")));
+        cfg.rememberSlot("B1","0xORDER1",new BigDecimal("100"),100,new BigDecimal("5"),DexContract.USDT_ID);
+        engine.onBook(bookOf(buyOrder("0xc1","0xORDER1","80","4")),MY_KEYS,100,m->{});assertTrue(txn.calls.isEmpty());
+    }
+    @Test public void unknownLegacyBuyFundingIsNotGuessedFromItsNewPrice() {
+        cfg.armed=true;cfg.pegged=false;cfg.bids.add(new MakerLadder.Level(new BigDecimal("0.06"),new BigDecimal("100")));
+        cfg.rememberSlot("B1","0xORDER1",new BigDecimal("100"),100);
+        engine.onBook(bookOf(buyOrder("0xc1","0xORDER1","50","5")),MY_KEYS,100,m->{});assertTrue(txn.calls.isEmpty());
+        assertNull(MakerPosition.baseline(cfg.slots.get("B1"),buyOrder("0xc1","0xORDER1","50","5")));
+    }
+    @Test public void flatMidpointDoesNotSuppressADueRenewal() {
+        cfg.armed=true;cfg.pegged=true;seedRungs(cfg.asks,1,"100");cfg.lastActedMid=new BigDecimal("0.05");
+        cfg.rememberSlot("A1","0xORDER1",new BigDecimal("100"),100);
+        engine.onBook(bookOf(order("0xc1","0xORDER1","0.0501","100")),MY_KEYS,DexContract.RENEW_AT+10,m->{});
+        assertEquals(1,txn.calls.size());assertTrue(txn.calls.get(0).startsWith("RELOCK"));
+    }
+    @Test public void flatMidpointDoesNotSuppressStaleSpreadWidening() {
+        cfg.armed=true;cfg.pegged=true;seedRungs(cfg.asks,1,"100");cfg.lastActedMid=new BigDecimal("0.05");
+        cfg.rememberSlot("A1","0xORDER1",new BigDecimal("100"),100);
+        MarketPrice.testSnapshot(0.05,System.currentTimeMillis()-10*60_000L);
+        engine.onBook(bookOf(order("0xc1","0xORDER1","0.0501","100")),MY_KEYS,100,m->{});
+        assertEquals(1,txn.calls.size());assertTrue(txn.calls.get(0).startsWith("RELOCK"));
+    }
+
+    @Test public void editPreviewUsesTheSameFundedPositionProtection() {
+        cfg.pegged=false;cfg.bids.add(new MakerLadder.Level(new BigDecimal("0.06"),new BigDecimal("100")));
+        Map<String,Order5> book=bookOf(buyOrder("0xc1","0xORDER1","50","5"));
+        cfg.rememberSlot("B1","0xORDER1",new BigDecimal("100"),100,new BigDecimal("5"),DexContract.USDT_ID);
+        org.junit.Assert.assertArrayEquals(new int[]{1,0,0,0},engine.previewEdits(book,MY_KEYS,100,BigDecimal.ZERO));
+        cfg.rememberSlot("B1","0xORDER1",new BigDecimal("100"),100);
+        org.junit.Assert.assertArrayEquals(new int[]{0,0,0,0},engine.previewEdits(book,MY_KEYS,100,BigDecimal.ZERO));
+        cfg.rememberSlot("B1","0xORDER1",new BigDecimal("100"),100,new BigDecimal("6"),DexContract.USDT_ID);
+        org.junit.Assert.assertArrayEquals(new int[]{0,0,0,0},engine.previewEdits(book,MY_KEYS,100,BigDecimal.ZERO));
+    }
+
     // ---------------- helpers ----------------
 
     private MakerLadder.Action newCreate(MakerLadder.Slot s) throws Exception {
@@ -587,6 +718,7 @@ public class MakerEngineTest {
     }
 
     private void invokeRun(List<MakerLadder.Action> actions, MakerEngine.Listener l) throws Exception {
+        cfg.armed = true; // production run() is entered only by an armed maker cycle
         java.lang.reflect.Method m = MakerEngine.class.getDeclaredMethod("run",
                 List.class, int.class, BigDecimal.class, int.class, long.class,
                 MakerEngine.Listener.class);

@@ -20,6 +20,7 @@ public final class OrdersTab extends LinearLayout {
     private final LinearLayout seg, body;
     private final SimpleDateFormat fmt = new SimpleDateFormat("dd MMM HH:mm", Locale.US);
     private int sel = 0;
+    private OwnerHistoryView operations;
 
     public OrdersTab(MainActivity act) {
         super(act);
@@ -29,7 +30,7 @@ public final class OrdersTab extends LinearLayout {
         setPadding(pad, pad, pad, pad);
 
         seg = new LinearLayout(act);
-        String[] names = {"OPEN", "MY TRADES"};
+        String[] names = {"OPEN", "MY TRADES", "OPERATIONS"};
         for (int i = 0; i < names.length; i++) {
             final int idx = i;
             TextView t = new TextView(act);
@@ -70,7 +71,7 @@ public final class OrdersTab extends LinearLayout {
 
     public void render() {
         body.removeAllViews();
-        if (sel == 0) renderOpen(); else renderTrades();
+        if (sel == 0) renderOpen(); else if(sel==1) renderTrades(); else renderOperations();
     }
 
     private void renderOpen() {
@@ -78,9 +79,8 @@ public final class OrdersTab extends LinearLayout {
         long block = act.chainBlock();
         boolean any = false;
 
-        // ---- in-flight rows first: orders MINING toward the book and cancels CONFIRMING off
-        // it. The confirmed book lags a posted transaction by a block or more — without these
-        // the user stares at an unchanged screen for minutes (the 0.2.6 complaint).
+        // Render the same durable receipt state as the trade screen, including interrupted,
+        // legacy and definitely unsubmitted attempts. A pending row alone is not mining proof.
         java.util.Set<String> cancelling = new java.util.HashSet<>();
         for (Pending.Row r : act.pendingRows()) {
             if (Pending.CANCEL.equals(r.kind)) {
@@ -98,7 +98,7 @@ public final class OrdersTab extends LinearLayout {
             card.addView(line((r.buy ? "BUY " : "SELL ") + PriceMath.fmt(r.minima)
                             + " MINIMA @ " + PriceMath.fmtPrice(r.price),
                     r.buy ? Design.IN() : Design.RED(), 12f));
-            card.addView(line("⏳ MINING — on the book when a block confirms it (~50s)",
+            card.addView(line(r.status(block),
                     Design.ACCENT(), 9.5f));
             LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
             lp.bottomMargin = Design.dp(getContext(), 8);
@@ -168,15 +168,24 @@ public final class OrdersTab extends LinearLayout {
         if (!any) body.addView(line("No open orders", Design.DIM2(), 11f));
     }
 
+    private void renderOperations() {
+        if(operations==null)operations=new OwnerHistoryView(act,act.db().raw()::ownerReceipts,act::exportTradeReconciliation);
+        operations.render();body.addView(operations);
+    }
+
     private void renderTrades() {
         List<Object[]> trades = act.db().raw().myTrades(200);
         if (trades.isEmpty()) {
             body.addView(line("No fills yet", Design.DIM2(), 11f));
             return;
         }
+        body.addView(line("Rows awaiting recheck remain visible but are excluded from volume and P&L. Export for each row’s time basis and chain evidence.", Design.DIM2(), 9.5f));
         BigDecimal mid = act.bookMid();
         BigDecimal vol = BigDecimal.ZERO, notional = BigDecimal.ZERO, pnl = BigDecimal.ZERO;
+        int accounted = 0;
         for (Object[] t : trades) {
+            if (!ChainReview.accounted((String) t[6])) continue;
+            accounted++;
             BigDecimal price = (BigDecimal) t[1];
             BigDecimal size = (BigDecimal) t[2];
             boolean buy = (Boolean) t[3];
@@ -192,7 +201,7 @@ public final class OrdersTab extends LinearLayout {
         summary.setBackground(Design.card(getContext(), 10));
         int p = Design.dp(getContext(), 10);
         summary.setPadding(p, p, p, p);
-        summary.addView(line("Fills " + trades.size() + "   ·   Volume " + PriceMath.fmt(vol) + " MINIMA",
+        summary.addView(line("Rows " + trades.size() + " (" + accounted + " included)   ·   Volume " + PriceMath.fmt(vol) + " MINIMA",
                 Design.TEXT(), 11f));
         summary.addView(line("Notional " + PriceMath.fmt(notional.setScale(6, java.math.RoundingMode.HALF_UP))
                 + " mxUSDT", Design.DIM(), 10f));
@@ -223,7 +232,7 @@ public final class OrdersTab extends LinearLayout {
             boolean maker = (Boolean) t[4];
             LinearLayout row = new LinearLayout(getContext());
             row.setPadding(0, Design.dp(getContext(), 4), 0, Design.dp(getContext(), 4));
-            row.addView(line(fmt.format(new Date(time)), Design.DIM2(), 9.5f),
+            row.addView(line(fmt.format(new Date(time)) + (ChainReview.accounted((String)t[6]) ? "" : (((String)t[6]).startsWith("SUPERSEDED_") ? "\nCorrected — see Corrections" : "\nRecheck required")), Design.DIM2(), 9.5f),
                     new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.1f));
             TextView side = line((buy ? "BUY " : "SELL ") + PriceMath.fmt(size),
                     buy ? Design.IN() : Design.RED(), 10.5f);

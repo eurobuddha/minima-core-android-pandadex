@@ -1,0 +1,22 @@
+FAIL after 678 assertions
+java.lang.AssertionError: main-thread audit failed
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.mainChecked(OwnerReceiptAndroidAudit.java:132)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.ownerAccess(OwnerReceiptAndroidAudit.java:407)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.onStart(OwnerReceiptAndroidAudit.java:36)
+	at android.app.Instrumentation$InstrumentationThread.run(Instrumentation.java:2627)
+Caused by: java.lang.AssertionError: navigation has larger minimum tap target
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.check(OwnerReceiptAndroidAudit.java:13)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.lambda$ownerAccess$10$com-eurobuddha-pandadex-OwnerReceiptAndroidAudit(OwnerReceiptAndroidAudit.java:411)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit$$ExternalSyntheticLambda7.run(D8$$SyntheticClass:0)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.lambda$mainChecked$0(OwnerReceiptAndroidAudit.java:131)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit$$ExternalSyntheticLambda5.run(D8$$SyntheticClass:0)
+	at android.app.Instrumentation$SyncRunnable.run(Instrumentation.java:2647)
+	at android.os.Handler.handleCallback(Handler.java:1070)
+	at android.os.Handler.dispatchMessage(Handler.java:125)
+	at android.os.Looper.dispatchMessage(Looper.java:333)
+	at android.os.Looper.loopOnce(Looper.java:263)
+	at android.os.Looper.loop(Looper.java:367)
+	at android.app.ActivityThread.main(ActivityThread.java:9287)
+	at java.lang.reflect.Method.invoke(Native Method)
+	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:566)
+	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:929)

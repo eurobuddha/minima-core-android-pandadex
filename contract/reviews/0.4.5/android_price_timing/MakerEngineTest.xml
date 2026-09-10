@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MakerEngineTest" tests="42" skipped="0" failures="0" errors="0" timestamp="2026-09-10T08:39:20" hostname="ProMacBuddha.local" time="0.021">
+  <properties/>
+  <testcase name="anIdleEngineRunsQueuedWorkImmediately" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.002"/>
+  <testcase name="reCondemningAnOrderDoesNotRewindItsCancelPacing" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aTombstonedOrderIsNotReCancelledEveryScan" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.001"/>
+  <testcase name="aThrowingTransactionLayerDoesNotStrandTheEngine" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.008"/>
+  <testcase name="manualQueuedPriceDoesNotDependOnExternalFeed" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="eachActionIsAttemptedExactlyOnce" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="oneCreatePerSidePerCycleAvoidsFundingContention" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="anAsyncSendFailureRecordsNothing" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aRelockInFlightIsNotRelockedAgain" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.001"/>
+  <testcase name="anAbsentAcceptedSlotIsRetainedAndPausesRatherThanDuplicatingFunds" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aTombstoneRetiresOnceItsCoinIsGoneForGood" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="staleFeedWhileQueuedBlocksPostingAndRemainingActions" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.001"/>
+  <testcase name="editedSizesWhileQueuedBlockPosting" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="retryingACancelNeverShortensTheProtectionWindow" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aPublishedLadderDoesNotTreatDisappearanceAsPermissionToRebuild" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="anUnpeggedPriceEditIsHonouredExactly" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="anAcceptedCreateRecordsIdSizeAndBlock" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="disarmingWhileQueuedBlocksPosting" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="theRepriceGateOnlyGuardsACompleteLadder" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="changedFeedAfterAcceptedActionDoesNotLoseItOrPostRemainder" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="withdrawTombstonesSentSlotsAndCancelsThemWhenTheyConfirm" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.001"/>
+  <testcase name="theListenerLearnsTheOrderIdThatWasRecorded" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="suspectJumpBlocksQueuedOldQuoteBeforeSecondReading" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="cancellingEveryOrderByHandDoesNotRebuildTheLadder" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.001"/>
+  <testcase name="changedMidWhileQueuedBlocksOldQuote" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aFailedBatchCondemnsEveryOrderInIt" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="theStaleFeedWithdrawAlsoChasesUnconfirmedRungs" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="monotonicCycleAllowsImmediateStartThenPacesAtBootZero" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.001"/>
+  <testcase name="aRejectedCreateIsNotRecordedAsALadderSlot" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aCycleWhereNothingPostedDoesNotClaimToHaveActed" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aDegeneratePeggedConfigNeverTearsTheLadderDown" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aLegacySlotRecordGetsAFreshPatienceWindow" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aWholeLadderWithdrawsInBatchesNotOneTxnPerRung" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.001"/>
+  <testcase name="aCondemnedOrderIsCancelledTheInstantItSurfaces" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="wideningWhileQueuedBlocksPreviouslyTightPrices" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="minRemainderAlwaysLeavesRoomForAPartialFill" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aWithdrawRequestedMidCycleIsNotLost" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.001"/>
+  <testcase name="withdrawCancelsEveryRungAndForgetsThem" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="aCycleThatPostedRecordsTheMidItActedOn" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="SmallMoveInsideExistingThresholdDoesNotStarveQueue" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.001"/>
+  <testcase name="elapsedClockAnomalyDoesNotFreezeStaleWithdrawal" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <testcase name="anUnconfirmedCreateIsNotDuplicatedOnTheNextCycle" classname="com.eurobuddha.pandadex.MakerEngineTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

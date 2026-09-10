@@ -258,7 +258,10 @@ public class CompositeStressTest {
             BigDecimal minima = bd(2 + rnd.nextInt(60));
             BigDecimal price = new BigDecimal(4 + rnd.nextInt(40))
                     .divide(new BigDecimal("1000"), PriceMath.PRICE_DP, RoundingMode.DOWN);
-            out.add(order("0xO" + offset + "_" + i, takerBuys, minima, price));
+            Order5 candidate = order(String.format("0x%08X%02X", offset, i), takerBuys, minima, price);
+            assertNotNull(candidate);
+            assertTrue(candidate.fillable());
+            out.add(candidate);
         }
         return out;
     }
@@ -277,7 +280,7 @@ public class CompositeStressTest {
             st.put("1", PAYOUT);
             st.put("2", sell ? locked.multiply(price).toPlainString() : minima.toPlainString());
             st.put("3", sell ? DexContract.USDT_ID : Util.MINIMA_TOKENID);
-            st.put("4", "0xID" + coinid.substring(2));
+            st.put("4", coinid);
             st.put("5", sell ? "1" : "0");
             st.put("7", "1");
             st.put("8", sell ? "1" : "0.0001");

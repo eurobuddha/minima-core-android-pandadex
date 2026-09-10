@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.CreationEvidenceTest" tests="12" skipped="0" failures="0" errors="0" timestamp="2026-09-10T09:37:10" hostname="ProMacBuddha.local" time="0.02">
+  <properties/>
+  <testcase name="failedDurablePrepareOrPostingTransitionPreventsNextStep" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.002"/>
+  <testcase name="copiedPublicOrderIdCannotResolveLegacyCreation" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.001"/>
+  <testcase name="visibleStatusUsesPersistedEvidenceAndNeverAssumesMining" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.001"/>
+  <testcase name="corruptDuplicateFundingEvidenceNeverMatches" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.0"/>
+  <testcase name="buyWithExactTokenFundingUsesTokenAmountsAndAllowsNoChange" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.001"/>
+  <testcase name="everyInputMustBelongToTheSameIncludedTransaction" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.002"/>
+  <testcase name="exactIncludedFundingAndOutputsResolveWithoutEverSeeingLiveOrder" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.002"/>
+  <testcase name="allPinnedStateAndExactOutputsMustMatch" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.001"/>
+  <testcase name="duplicateOrderIdAndCallerRefusalCannotAuthorizeAnotherSubmission" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.002"/>
+  <testcase name="callerQuoteRefusalIsPreservedThroughCreationReceiptWrapper" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.002"/>
+  <testcase name="archivedDisposableNodeJsonMatchesTheIndependentCreationRequestShape" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.005"/>
+  <testcase name="prePostFailureAndUncertainPostAreDistinguishedAndRetained" classname="com.eurobuddha.pandadex.CreationEvidenceTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

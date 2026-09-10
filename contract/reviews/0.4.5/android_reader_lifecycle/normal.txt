@@ -1,0 +1,7 @@
+PASS 255 assertions
+authentication, malformed payloads, exactly-once delivery and destruction
+actual content provider, oversize and missing files, duplicate floods and bounded queue
+late reply retention, bounded unanswered requests, expiry and send failure
+existing approvals, simulated commit-ack failure and incomplete pairing
+non-interruptible actual provider, twenty reconnects, peer isolation, expiry and recovery
+private Messenger/file bridge, twenty reconnects, peer isolation and cleanup

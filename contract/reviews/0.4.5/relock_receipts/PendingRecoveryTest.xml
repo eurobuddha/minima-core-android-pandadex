@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.PendingRecoveryTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-09-10T09:44:49" hostname="ProMacBuddha.local" time="0.003">
+  <properties/>
+  <testcase name="resolutionCallbackCanAddAnotherReceiptWithoutLosingIt" classname="com.eurobuddha.pandadex.PendingRecoveryTest" time="0.0"/>
+  <testcase name="copiedOrderIdInBookCannotConfirmAnEdit" classname="com.eurobuddha.pandadex.PendingRecoveryTest" time="0.001"/>
+  <testcase name="legacyIdsStayStableAcrossInstancesAndArePersistedOnUpdate" classname="com.eurobuddha.pandadex.PendingRecoveryTest" time="0.0"/>
+  <testcase name="interleavedHostsDoNotOverwriteEachOthersReceipts" classname="com.eurobuddha.pandadex.PendingRecoveryTest" time="0.0"/>
+  <testcase name="editNeedsIncludedLinkedOutputWithExactRequestedAmountsAndPreservedIdentity" classname="com.eurobuddha.pandadex.PendingRecoveryTest" time="0.0"/>
+  <testcase name="failedPersistenceDoesNotAnnounceResolution" classname="com.eurobuddha.pandadex.PendingRecoveryTest" time="0.001"/>
+  <testcase name="delayedReceiptsSurviveReloadAndNotifyOnlyOnce" classname="com.eurobuddha.pandadex.PendingRecoveryTest" time="0.0"/>
+  <testcase name="malformedStoredEvidenceIsNeverOverwritten" classname="com.eurobuddha.pandadex.PendingRecoveryTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

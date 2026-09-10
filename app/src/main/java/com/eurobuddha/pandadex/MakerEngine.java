@@ -18,7 +18,7 @@ import java.util.Set;
  * recorded slot whose order is not visible yet is IN FLIGHT, not missing:
  *
  *   DESIRED → (create sent, node accepted) → SENT → (seen in book) → LIVE
- *      ↑______ (patience expired: forget & retry) ____|      | (relock sent → SETTLING)
+ *      ↑______ (verified resolution or manual review) ____|      | (relock sent → SETTLING)
  *                                                           ↓ (cancel sent → tombstoned)
  *
  * 0.2.6 had no such memory of time: every not-yet-visible order read as "missing", was
@@ -64,18 +64,55 @@ public final class MakerEngine {
         default void onRelockSent(Order5 order, BigDecimal newPrice) {}
     }
 
+    /** As in Notifier.alert, display failure must not own financial completion. Catch only
+     * observer RuntimeExceptions: journal/configuration/transaction failures stay outside. */
+    private static void observe(Listener listener, java.util.function.Consumer<Listener> event) {
+        if (listener == null) return;
+        try { event.accept(listener); }
+        catch (RuntimeException displayUnavailable) { /* Next render reads the retained state. */ }
+    }
+    private static void notifyState(Listener listener, String message) {
+        observe(listener, target -> target.onMakerState(message));
+    }
+    private static void notifyCreate(Listener listener, MakerLadder.Slot slot, String orderId) {
+        observe(listener, target -> target.onCreateSent(slot, orderId));
+    }
+    private static void notifyCancel(Listener listener, Order5 order) {
+        observe(listener, target -> target.onCancelSent(order));
+    }
+    private static void notifyRelock(Listener listener, Order5 order, BigDecimal price) {
+        observe(listener, target -> target.onRelockSent(order, price));
+    }
+
     private final MakerConfig cfg;
     private final DexTxn txn;
-    private long lastCycleMs = 0;
-    private boolean working = false;
+    private long lastCycleMs = -1;
+    private final java.util.function.LongSupplier clock;
+    private static boolean working = false;
     /** Deferred work — a withdraw asked for while a chain was mid-flight. Without this the
      *  request is silently dropped: onBook won't run once disarmed, so the ladder would stay
      *  on the book after the user pressed Withdraw. */
-    private Runnable pendingOnIdle;
+    private static Runnable pendingOnIdle;
+    private static SerialQueue idleQueue = new SerialQueue();
 
-    public MakerEngine(MakerConfig cfg, DexTxn txn) {
+    private final java.util.function.Predicate<Order5> ownership;
+
+    /** Pure test adapter; production hosts supply freshly derived wallet ownership. */
+    MakerEngine(MakerConfig cfg, DexTxn txn) { this(cfg, txn, null, System::currentTimeMillis); }
+
+    public MakerEngine(MakerConfig cfg, DexTxn txn, java.util.function.Predicate<Order5> ownership) {
+        this(cfg,txn,ownership,android.os.SystemClock::elapsedRealtime);
+    }
+    MakerEngine(MakerConfig cfg,DexTxn txn,java.util.function.Predicate<Order5> ownership,
+                java.util.function.LongSupplier clock) {
+        this.clock=clock;
+        this.ownership = ownership;
         this.cfg = cfg;
         this.txn = txn;
+    }
+
+    private boolean owns(Order5 o, Set<String> keys) {
+        return ownership == null ? o.isMine(keys) : ownership.test(o);
     }
 
     public boolean isWorking() { return working; }
@@ -83,7 +120,7 @@ public final class MakerEngine {
     /** Let the next book update act immediately instead of waiting out the cycle gate. For a
      *  DELIBERATE edit only — the gate exists to stop the maker burning proof-of-work on every
      *  tick, so nothing automatic may call this. */
-    public void nudge() { lastCycleMs = 0; }
+    public void nudge() { lastCycleMs = -1; }
 
     /**
      * What applying the current config to the live book would cost, as {relocks, reposts,
@@ -96,22 +133,24 @@ public final class MakerEngine {
                 BigDecimal.ONE);
         Map<String, Order5> byOrderId = new HashMap<>();
         for (Order5 o : book.values()) {
-            if (o.isMine(myKeys) && !cfg.cancelTombstones.containsKey(o.orderId)) {
+            if (owns(o, myKeys) && !cfg.cancelTombstones.containsKey(o.orderId)) {
                 byOrderId.put(o.orderId, o);
             }
         }
         Map<String, Order5> liveBySlot = new HashMap<>();
         Map<String, BigDecimal> postedSizes = new HashMap<>();
+        Set<String> protectedPositions = new HashSet<>();
         for (Map.Entry<String, MakerConfig.SlotRec> e : cfg.slots.entrySet()) {
             Order5 o = byOrderId.get(e.getValue().orderId);
             if (o == null) continue;
             liveBySlot.put(e.getKey(), o);
+            if(MakerPosition.preserve(e.getValue(),o))protectedPositions.add(o.coinid);
             BigDecimal posted = cfg.postedSizeFor(e.getKey());
             if (posted != null) postedSizes.put(e.getKey(), posted);
         }
         BigDecimal threshold = cfg.pegged ? cfg.repricePct : BigDecimal.ZERO;
         List<MakerLadder.Action> actions = MakerLadder.reconcile(desired, liveBySlot, null, null,
-                threshold, new HashSet<>(), postedSizes,
+                threshold, protectedPositions, postedSizes,
                 new MakerLadder.Budget(0, Integer.MAX_VALUE));
         // Count by REASON, not by kind: a resize emits a CANCEL+CREATE pair for one rung, and
         // pairing them by arithmetic would miscount an unrelated new rung against an unrelated
@@ -127,11 +166,22 @@ public final class MakerEngine {
         return new int[]{relocks, reposts, creates, cancels};
     }
 
-    /** Run {@code r} now if idle, otherwise the instant the current chain finishes. */
+    /** Preserve deferred requests across both hosts; each owns the maker until its chain ends. */
     public void runWhenIdle(Runnable r) {
         if (r == null) return;
-        if (!working) { r.run(); return; }
-        pendingOnIdle = r;
+        idleQueue.submit(finish -> {
+            Runnable start = () -> {
+                try { r.run(); }
+                finally {
+                    // A deferred request can start another asynchronous maker chain. Its
+                    // successor must wait for that chain's existing drainIdle boundary.
+                    if (working) pendingOnIdle = finish;
+                    else finish.run();
+                }
+            };
+            if (working) pendingOnIdle = start;
+            else start.run();
+        });
     }
 
     /** Release any work that was waiting for the chain to finish. */
@@ -143,9 +193,17 @@ public final class MakerEngine {
 
     /** Called on every book update. Cheap and returns immediately unless there is work to do. */
     public void onBook(Map<String, Order5> book, Set<String> myKeys, long chainBlock, Listener l) {
-        if (!cfg.armed || working) return;
-        long now = System.currentTimeMillis();
-        if (now - lastCycleMs < MIN_CYCLE_MS) return;
+        if (working) return;
+        cfg.reload();
+        if (working) return;
+        if (!cfg.preparedCreate.isEmpty()) {
+            cfg.armed = false; cfg.save();
+            if (l != null) notifyState(l, "Maker paused: an interrupted create needs review. Withdraw the recorded intent before publishing again.");
+            return;
+        }
+        if (!cfg.armed) return;
+        long now = clock.getAsLong();
+        if (lastCycleMs >= 0 && now >= lastCycleMs && now - lastCycleMs < MIN_CYCLE_MS) return;
 
         BigDecimal mid = BigDecimal.ZERO;
         BigDecimal widen = BigDecimal.ONE;
@@ -169,7 +227,7 @@ public final class MakerEngine {
             if (MarketPrice.mustWithdraw()) {
                 if (!cfg.slots.isEmpty()) {
                     lastCycleMs = now;
-                    if (l != null) l.onMakerState("Price feed stale — withdrawing the ladder");
+                    if (l != null) notifyState(l, "Price feed stale — withdrawing the ladder");
                     withdrawAll(book, myKeys, chainBlock, l);
                 }
                 return;
@@ -179,6 +237,10 @@ public final class MakerEngine {
             if (mid.signum() <= 0) return;
             widen = BigDecimal.valueOf(MarketPrice.widenFactor());
         }
+        if(!MakerConfig.storageHealthy()) {
+            if(l!=null)notifyState(l, "Maker paused: a settings write failed. Check storage, then explicitly Publish or Withdraw again.");
+            return;
+        }
         List<MakerLadder.Slot> desired = MakerLadder.desired(mid, cfg.toLadderConfig(), widen);
 
         // ---- slot bookkeeping: stamp legacy records, expire the patient dead ----
@@ -186,7 +248,7 @@ public final class MakerEngine {
         // has records that must age out honestly, or they linger forever as phantom rungs.
         Map<String, Order5> byOrderId = new HashMap<>();
         for (Order5 o : book.values()) {
-            if (o.isMine(myKeys) && !cfg.cancelTombstones.containsKey(o.orderId)) {
+            if (owns(o, myKeys) && !cfg.cancelTombstones.containsKey(o.orderId)) {
                 byOrderId.put(o.orderId, o);
             }
         }
@@ -203,10 +265,13 @@ public final class MakerEngine {
             }
             if (!byOrderId.containsKey(r.orderId)
                     && chainBlock - r.sentBlock >= PATIENCE_BLOCKS) {
-                // the send died (or the order filled before we ever saw it) — either way the
-                // record is history; the rung reads DESIRED again and is re-created cleanly
-                it.remove();
-                dirty = true;
+                // Absence and elapsed time cannot distinguish a delayed post from a fill.
+                // Keep its identity for withdrawal/recovery and require review before funding
+                // a replacement. Never duplicate an order just because mining was slow.
+                cfg.armed = false;
+                cfg.save();
+                if (l != null) notifyState(l, "Maker paused: a recorded order is absent. Review Orders and Tape before replacing it.");
+                return;
             }
         }
         if (dirty) cfg.save();
@@ -229,9 +294,8 @@ public final class MakerEngine {
             }
         }
 
-        // A rung that has been partly taken is a working position — leave it be.
-        // This MUST compare against the size we posted: an order cannot tell you it shrank,
-        // only what it holds now.
+        // Preserve changed/unknown funded positions. A buy's requested MINIMA amount
+        // changes on repricing; only its actual locked asset is a comparable baseline.
         Set<String> partial = new HashSet<>();
         Set<String> renew = new HashSet<>();
         Map<String, BigDecimal> postedSizes = new HashMap<>();
@@ -239,24 +303,14 @@ public final class MakerEngine {
             BigDecimal posted = cfg.postedSizeFor(e.getKey());
             if (posted != null) {
                 postedSizes.put(e.getKey(), posted);
-                if (e.getValue().minimaAmount().compareTo(posted) < 0) partial.add(e.getValue().coinid);
             }
+            if (MakerPosition.preserve(cfg.slots.get(e.getKey()),e.getValue())) partial.add(e.getValue().coinid);
             // the maker renews its OWN rungs — DexProcessor now skips them, so nothing else will
             if (e.getValue().renewDue(chainBlock)) renew.add(e.getKey());
         }
 
-        // ---- the reprice gate guards COMPLETE ladders only. A half-posted, failed or
-        // settling ladder must keep cycling to finish itself — 0.2.6 gated on "any rung
-        // live", which froze a 1-of-8 ladder until the market moved a whole threshold.
-        boolean complete = settling.isEmpty() && cfg.cancelTombstones.isEmpty();
-        if (complete) {
-            for (MakerLadder.Slot s : desired) {
-                if (!liveBySlot.containsKey(s.id)) { complete = false; break; }
-            }
-        }
-        if (cfg.pegged && complete
-                && !MakerLadder.worthRepricing(cfg.lastActedMid, mid, cfg.repricePct)) return;
-
+        // The per-order reconciler already applies the price threshold and cycle budget.
+        // A midpoint-only shortcut would suppress due renewals and stale-spread widening.
         // Unpegged the rungs are the user's EXPLICIT prices — a zero threshold selects
         // reconcile's exact mode (any difference at display precision relocks).
         BigDecimal threshold = cfg.pegged ? cfg.repricePct : BigDecimal.ZERO;
@@ -266,7 +320,7 @@ public final class MakerEngine {
         if (actions.isEmpty()) return;
 
         lastCycleMs = now;
-        if (l != null) l.onMakerState("Maker: " + actions.size() + " adjustment"
+        if (l != null) notifyState(l, "Maker: " + actions.size() + " adjustment"
                 + (actions.size() == 1 ? "" : "s")
                 + (mid.signum() > 0 ? " at mid " + PriceMath.fmtPrice(mid) : ""));
         // lastActedMid is committed in run()'s terminal branch, and only if something actually
@@ -290,7 +344,13 @@ public final class MakerEngine {
      */
     private void run(List<MakerLadder.Action> actions, int idx, BigDecimal mid, int posted,
                      long chainBlock, Listener l) {
-        if (idx >= actions.size()) {
+        run(actions,idx,mid,posted,chainBlock,l,new MakerQuoteGuard(cfg,mid));
+    }
+
+    private void run(List<MakerLadder.Action> actions, int idx, BigDecimal mid, int posted,
+                     long chainBlock, Listener l, MakerQuoteGuard quoteGuard) {
+        cfg.reload();
+        if (idx >= actions.size() || !cfg.armed) {
             working = false;
             if (posted > 0) {
                 // A manual (unpegged) cycle carries no reference mid — don't record a zero,
@@ -298,7 +358,7 @@ public final class MakerEngine {
                 if (mid != null && mid.signum() > 0) cfg.lastActedMid = mid;
                 cfg.save();
             }
-            if (l != null) l.onMakerState(posted > 0
+            if (l != null) notifyState(l, posted > 0
                     ? "Maker: " + posted + " action" + (posted == 1 ? "" : "s") + " accepted — mining now"
                     : "Maker: no adjustment could be posted — will retry");
             drainIdle();
@@ -306,35 +366,68 @@ public final class MakerEngine {
         }
         working = true;
         MakerLadder.Action a = actions.get(idx);
+        if(!quoteGuard.allows(cfg,a)) {
+            lastCycleMs=-1; // Let the next book update replan or withdraw a stale ladder.
+            run(actions,actions.size(),mid,posted,chainBlock,l,quoteGuard);
+            if(l!=null)notifyState(l, "Maker: prices or settings changed; remaining adjustments were not submitted");
+            return;
+        }
         final String createOid = a.kind == MakerLadder.Kind.CREATE ? DexTxn.newOrderId() : null;
         final boolean[] advanced = {false};
         DexTxn.Result once = new DexTxn.Result() {
+            @Override public boolean beforePost() {
+                cfg.reload();
+                return quoteGuard.allows(cfg,a);
+            }
+            @Override public boolean onPrepared(String handle) {
+                cfg.reload();
+                if(!quoteGuard.allows(cfg,a))return false;
+                return a.kind != MakerLadder.Kind.CREATE
+                        || cfg.prepareCreate(a.slot.id, createOid, a.slot.sizeMinima, chainBlock,
+                                DexTxn.orderLockedAmount(!a.slot.sell,a.slot.sizeMinima,a.slot.price),
+                                a.slot.sell?Util.MINIMA_TOKENID:DexContract.USDT_ID);
+            }
             @Override public void onPosted(String txpowid) {
                 if (advanced[0]) return;
                 advanced[0] = true;
+                cfg.reload();
                 switch (a.kind) {
                     case CREATE:
-                        cfg.rememberSlot(a.slot.id, createOid, a.slot.sizeMinima, chainBlock);
-                        if (l != null) l.onCreateSent(a.slot, createOid);
+                        cfg.preparedCreate = "";
+                        cfg.rememberSlot(a.slot.id, createOid, a.slot.sizeMinima, chainBlock,
+                                DexTxn.orderLockedAmount(!a.slot.sell,a.slot.sizeMinima,a.slot.price),
+                                a.slot.sell?Util.MINIMA_TOKENID:DexContract.USDT_ID);
+                        if (l != null) notifyCreate(l, a.slot, createOid);
                         break;
                     case RELOCK:
                         cfg.noteSlotAction(a.slot.id, chainBlock);
-                        if (l != null) l.onRelockSent(a.order, a.slot.price);
+                        if (l != null) notifyRelock(l, a.order, a.slot.price);
                         break;
                     case CANCEL:
                         cfg.forgetSlotByOrderId(a.order.orderId);
                         cfg.tombstone(a.order.orderId, chainBlock);
-                        if (l != null) l.onCancelSent(a.order);
+                        if (l != null) notifyCancel(l, a.order);
                         break;
                 }
-                run(actions, idx + 1, mid, posted + 1, chainBlock, l);
+                run(actions, idx + 1, mid, posted + 1, chainBlock, l, quoteGuard);
             }
             @Override public void onFailed(String message) {
                 if (advanced[0]) return;
                 advanced[0] = true;
+                // A different host may have persisted a withdrawal while this reply was pending.
+                cfg.reload();
+                if (NodeApi.ERR_WRITE_UNCERTAIN.equals(message)) {
+                    if (a.kind == MakerLadder.Kind.CREATE) cfg.rememberSlot(a.slot.id, createOid, a.slot.sizeMinima, chainBlock,
+                                DexTxn.orderLockedAmount(!a.slot.sell,a.slot.sizeMinima,a.slot.price),
+                                a.slot.sell?Util.MINIMA_TOKENID:DexContract.USDT_ID);
+                    cfg.armed = false; cfg.save();
+                    if (l != null) notifyState(l, "Maker paused: " + message);
+                    working = false; drainIdle(); return;
+                }
+                if (a.kind == MakerLadder.Kind.CREATE) { cfg.preparedCreate = ""; cfg.save(); }
                 // one rung failing must not stall the rest — the next cycle retries it
-                if (l != null) l.onMakerState("Maker: " + a.kind + " failed — " + message);
-                run(actions, idx + 1, mid, posted, chainBlock, l);
+                if (l != null) notifyState(l, "Maker: " + a.kind + " failed — " + message);
+                run(actions, idx + 1, mid, posted, chainBlock, l, quoteGuard);
             }
         };
 
@@ -365,8 +458,8 @@ public final class MakerEngine {
         } catch (Throwable t) {
             if (!advanced[0]) {
                 advanced[0] = true;
-                if (l != null) l.onMakerState("Maker: " + a.kind + " errored — " + t);
-                run(actions, idx + 1, mid, posted, chainBlock, l);
+                if (l != null) notifyState(l, "Maker: " + a.kind + " errored — " + t);
+                run(actions, idx + 1, mid, posted, chainBlock, l, quoteGuard);
             }
         }
     }
@@ -387,6 +480,18 @@ public final class MakerEngine {
         return PriceMath.down(floor.min(half), PriceMath.MINIMA_DP);
     }
 
+    /** Pause and durably track every maker identity before the all-orders cancellation loop.
+     * An active maker callback may add a slot; repeat the tracking step after ownership ends. */
+    public void stopForCancelAll(long block,Listener listener,Runnable ready) {
+        if(!cfg.stopAndTrackWithdrawal(block)) {
+            if(listener!=null)notifyState(listener, "Could not save maker withdrawal tracking. Cancel all was not started; records retained.");
+            return;
+        }
+        if(!working){ready.run();return;}
+        if(listener!=null)notifyState(listener, "Maker pause saved. Waiting for the current adjustment before cancelling; orders remain fillable until confirmation.");
+        runWhenIdle(() -> stopForCancelAll(block,listener,ready));
+    }
+
     // ---------------------------------------------------------------- withdraw
 
     /**
@@ -397,7 +502,27 @@ public final class MakerEngine {
      */
     public void withdrawAll(Map<String, Order5> book, Set<String> myKeys, long chainBlock,
                             Listener l) {
+        if (working) { runWhenIdle(() -> { cfg.reload(); withdrawAll(book, myKeys, chainBlock, l); }); return; }
+        cfg.reload();
         List<Order5> live = liveLadderOrders(book, myKeys);
+        String interrupted = cfg.preparedOrderId();
+        if(!cfg.preparedCreate.isEmpty()&&interrupted.isEmpty()) {
+            if(l!=null)notifyState(l, "Cannot read the interrupted order intent. Records retained; preserve app data for recovery.");
+            return;
+        }
+        Set<String> targets=new HashSet<>();
+        for(Order5 o:live)targets.add(o.orderId);
+        for(MakerConfig.SlotRec r:cfg.slots.values())targets.add(r.orderId);
+        if(!interrupted.isEmpty())targets.add(interrupted);
+        if(!cfg.prepareWithdrawal(targets,chainBlock)) {
+            if(l!=null)notifyState(l, "Could not save withdrawal intent. No cancellation was sent; original records retained.");
+            return;
+        }
+        if (!interrupted.isEmpty()) {
+            for (Order5 o : book.values()) if (owns(o, myKeys) && interrupted.equals(o.orderId)
+                    && !live.contains(o)) live.add(o);
+            cfg.preparedCreate = ""; cfg.save();
+        }
         Set<String> liveIds = new HashSet<>();
         for (Order5 o : live) liveIds.add(o.orderId);
         for (MakerConfig.SlotRec r : cfg.slots.values()) {
@@ -413,28 +538,33 @@ public final class MakerEngine {
         if (idx >= live.size()) {
             working = false;
             cfg.clearSlots();
-            if (l != null) l.onMakerState(live.isEmpty()
-                    ? "Maker: nothing on the book to cancel"
-                    : "Maker: " + live.size() + " cancel" + (live.size() == 1 ? "" : "s")
-                    + " sent — orders leave the book as blocks confirm them");
+            if (l != null) notifyState(l, cfg.hasRecordedOrders()
+                    ? "Withdrawal instructions retained. Check Orders for on-chain outcomes; absent orders are not proof of cancellation."
+                    : "No recorded maker orders were found in this snapshot. Check Orders before assuming funds are free.");
             drainIdle();
             return;
         }
-        working = true;
         // BATCH: the covenant's cancel branch is index-matched, so several rungs go in one
         // transaction — one round of proof-of-work instead of one per rung. A 12-rung ladder
         // withdraws in 3 transactions rather than 12.
         final List<Order5> chunk = new ArrayList<>(
                 live.subList(idx, Math.min(idx + SweepPlanner.MAX_ORDERS, live.size())));
         final int next = idx + chunk.size();
+        List<String> identities=new ArrayList<>();for(Order5 c:chunk)identities.add(c.orderId);
+        if(!cfg.prepareWithdrawal(identities,chainBlock)) {
+            working=false;
+            if(l!=null)notifyState(l, "Could not save withdrawal intent. This cancellation batch was not sent; records retained.");
+            drainIdle();return;
+        }
         for (Order5 c : chunk) cfg.forgetSlotByOrderId(c.orderId);
+        working=true;
         final boolean[] advanced = {false};
         DexTxn.Result once = new DexTxn.Result() {
             @Override public void onPosted(String t) {
                 if (advanced[0]) return; advanced[0] = true;
                 for (Order5 c : chunk) {
                     cfg.tombstone(c.orderId, chainBlock, chainBlock);   // sent — pace the retry
-                    if (l != null) l.onCancelSent(c);
+                    if (l != null) notifyCancel(l, c);
                 }
                 cancelAllLadder(live, next, chainBlock, l);
             }
@@ -465,9 +595,11 @@ public final class MakerEngine {
      */
     public void sweepTombstones(Map<String, Order5> book, Set<String> myKeys, long chainBlock,
                                 Listener l) {
-        if (working || cfg.cancelTombstones.isEmpty()) return;
+        if (working) return;
+        cfg.reload();
+        if (cfg.cancelTombstones.isEmpty()) return;
         Map<String, Order5> mineById = new HashMap<>();
-        for (Order5 o : book.values()) if (o.isMine(myKeys)) mineById.put(o.orderId, o);
+        for (Order5 o : book.values()) if (owns(o, myKeys)) mineById.put(o.orderId, o);
 
         List<String> done = new ArrayList<>();
         Order5 target = null;
@@ -477,7 +609,8 @@ public final class MakerEngine {
             if (o == null) {
                 // absent long enough after CONDEMNATION (not after the last attempt) that the
                 // cancel must have mined — or the order never existed
-                if (chainBlock - t.createdBlock >= TOMBSTONE_EXPIRE_BLOCKS) done.add(e.getKey());
+                // Keep the cancellation instruction for any delayed order that resurfaces.
+                // Only verified spend evidence or explicit user reconciliation can retire it.
             } else if (target == null
                     && (t.lastAttemptBlock <= 0 || chainBlock - t.lastAttemptBlock >= PATIENCE_BLOCKS)) {
                 target = o;                      // never tried, or the last try had its chance
@@ -488,7 +621,7 @@ public final class MakerEngine {
 
         final Order5 o = target;
         cfg.tombstone(o.orderId, chainBlock, chainBlock);   // pace the next attempt
-        if (l != null) l.onMakerState("Maker: cancelling a late order (" +
+        if (l != null) notifyState(l, "Maker: cancelling a late order (" +
                 (o.sell ? "ask" : "bid") + " " + PriceMath.fmtPrice(o.price()) + ")");
         working = true;
         final boolean[] advanced = {false};
@@ -496,7 +629,7 @@ public final class MakerEngine {
             @Override public void onPosted(String t) {
                 if (advanced[0]) return; advanced[0] = true;
                 working = false;
-                if (l != null) l.onCancelSent(o);
+                if (l != null) notifyCancel(l, o);
                 drainIdle();
             }
             @Override public void onFailed(String m) {
@@ -525,7 +658,7 @@ public final class MakerEngine {
         Set<String> ids = new HashSet<>();
         for (MakerConfig.SlotRec r : cfg.slots.values()) ids.add(r.orderId);
         for (Order5 o : book.values()) {
-            if (o.isMine(myKeys) && ids.contains(o.orderId)) out.add(o);
+            if (owns(o, myKeys) && ids.contains(o.orderId)) out.add(o);
         }
         return out;
     }

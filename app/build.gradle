@@ -10,8 +10,8 @@ android {
         applicationId "com.eurobuddha.pandadex"
         minSdk 28
         targetSdk 35
-        versionCode 403
-        versionName "0.4.3"
+        versionCode 405
+        versionName "0.4.5"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -22,7 +22,7 @@ android {
     signingConfigs {
         // Minima family release key. Credentials come from ~/.gradle/gradle.properties
         // (outside every repo), so nothing secret is ever committed. On a machine without
-        // those props this config stays empty and release falls back to debug signing.
+        // those props this config stays empty; a release must not silently use a debug key.
         release {
             def ksFile = project.findProperty('MINIMA_FAMILY_RELEASE_STORE_FILE')
             if (ksFile != null) {
@@ -38,9 +38,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // Sign release with the debug keystore, matching the minima-core-android node app.
-            // IPC is authorized by the MINIMA_ID token, not by signature, so this is sufficient
-            // for sideloading. Swap to a dedicated release keystore if uploading to Play.
+            // Use the dedicated Minima family release key; never substitute debug signing.
             signingConfig signingConfigs.release
         }
     }
@@ -62,7 +60,7 @@ dependencies {
     // Keep-alive relauncher for GTC renewals / fill alerts while the app is closed
     implementation 'androidx.work:work-runtime:2.9.1'
 
-    implementation files('libs/minimaapi.aar')
+    // Auditable, bounded Minima SDK sources are compiled from src/main/java/org/minimarex/minimaapi.
 
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'

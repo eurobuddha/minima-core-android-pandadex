@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MakerListenerFailureTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-09-10T16:08:22" hostname="ProMacBuddha.local" time="0.002">
+  <properties/>
+  <testcase name="batchCancelDisplayFailureCannotSkipRemainingSourcesOrIdleWork" classname="com.eurobuddha.pandadex.MakerListenerFailureTest" time="0.001"/>
+  <testcase name="stopAndCancelAllHandoffSurvivesAThrowingPauseNotification" classname="com.eurobuddha.pandadex.MakerListenerFailureTest" time="0.0"/>
+  <testcase name="lateOrderCancelStillReleasesQueuedWorkWhenDisplayThrows" classname="com.eurobuddha.pandadex.MakerListenerFailureTest" time="0.0"/>
+  <testcase name="rejectedActionStillCompletesWhenFailureMessageThrows" classname="com.eurobuddha.pandadex.MakerListenerFailureTest" time="0.001"/>
+  <testcase name="stateDisplayFailureCannotPreventStartOrCompletion" classname="com.eurobuddha.pandadex.MakerListenerFailureTest" time="0.0"/>
+  <testcase name="asynchronousCreateDisplayFailureCannotStrandEngineOrQueuedWork" classname="com.eurobuddha.pandadex.MakerListenerFailureTest" time="0.0"/>
+  <testcase name="uncertainReplyStillDisarmsAndDrainsWhenPauseMessageThrows" classname="com.eurobuddha.pandadex.MakerListenerFailureTest" time="0.0"/>
+  <testcase name="repriceDisplayFailureCannotStrandEngineAfterSlotBookkeeping" classname="com.eurobuddha.pandadex.MakerListenerFailureTest" time="0.0"/>
+  <testcase name="terminalWithdrawalMessageCannotConsumeDeferredWithdrawal" classname="com.eurobuddha.pandadex.MakerListenerFailureTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.TradeExportFilesTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-09-10T07:44:37" hostname="ProMacBuddha.local" time="1.392">
+  <properties/>
+  <testcase name="largeArchiveStreamsWithoutKeepingRowsOrEvidenceInReport" classname="com.eurobuddha.pandadex.TradeExportFilesTest" time="1.392"/>
+  <system-out><![CDATA[EXPORT_MEMORY_MAX_HEAP=67108864; rows=30000; correction_payloads=60MiB
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

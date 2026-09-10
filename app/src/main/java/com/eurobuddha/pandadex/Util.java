@@ -69,18 +69,21 @@ public final class Util {
     /** Parse a possibly-empty amount string to BigDecimal, defaulting to zero. */
     public static BigDecimal dec(String s) {
         try {
-            if (s == null || s.isEmpty()) return BigDecimal.ZERO;
+            if (s == null || s.length() > 100 || s.isEmpty()) return BigDecimal.ZERO;
             String t = s.trim();
             // Tolerate a locale comma decimal without mangling a grouping comma: if a '.' is present it's
             // the decimal and commas are grouping (strip them); otherwise a lone ',' IS the decimal.
             t = (t.indexOf('.') >= 0) ? t.replace(",", "") : t.replace(',', '.');
-            return new BigDecimal(t);
+            return decOr(t, BigDecimal.ZERO);
         } catch (Exception e) { return BigDecimal.ZERO; }
     }
 
     /** Parse a decimal string, returning {@code fallback} on null/blank/malformed input (never throws). */
     public static BigDecimal decOr(String s, BigDecimal fallback) {
-        if (s == null || s.trim().isEmpty()) return fallback;
-        try { return new BigDecimal(s.trim()); } catch (NumberFormatException e) { return fallback; }
+        if (s == null || s.length() > 100 || s.trim().isEmpty()) return fallback;
+        try {
+            BigDecimal value = new BigDecimal(s.trim());
+            return Math.abs((long) value.scale()) <= 44 && value.precision() <= 44 ? value : fallback;
+        } catch (NumberFormatException e) { return fallback; }
     }
 }

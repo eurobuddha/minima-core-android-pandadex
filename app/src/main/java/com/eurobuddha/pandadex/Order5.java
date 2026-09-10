@@ -26,6 +26,7 @@ public final class Order5 {
     public final BigDecimal locked;   // tokenamount||amount of the coin
     public final String lockedTok;    // coin tokenid
     public final long created;        // block the coin was created in
+    private String sourceJson;       // exact parsed coin, reused by durable recovery
     private boolean relevant;         // node-side ownership belt (coins relevant:true)
 
     private Order5(String coinid, String ownerPk, String wantAddr, BigDecimal wantAmt,
@@ -69,22 +70,28 @@ public final class Order5 {
             if (st[0] == null || st[1] == null || st[2] == null || st[4] == null) return null;
             String tokenid = coin.optString("tokenid", "0x00");
             String amt = coin.optString("tokenamount", "");
-            if (amt.isEmpty() || "0x00".equals(tokenid)) amt = coin.optString("amount", "0");
-            BigDecimal locked = Util.dec(amt);
-            if (locked.signum() <= 0) return null;
-            BigDecimal want = Util.dec(st[2]);
-            if (want.signum() <= 0) return null;
-            boolean sell = !"0".equals(st[5] == null ? "1" : st[5].trim());
-            boolean gtc = "1".equals(st[7] == null ? "" : st[7].trim());
-            BigDecimal minRem = Util.decOr(st[8], BigDecimal.ZERO);
+            if ("0x00".equals(tokenid)) amt = coin.optString("amount", "");
+            BigDecimal locked = Util.decOr(amt, null);
+            if (!DexTxn.amountOk(locked)) return null;
+            BigDecimal want = Util.decOr(st[2], null);
+            if (!DexTxn.amountOk(want)) return null;
+            if (!("0".equals(st[5]) || "1".equals(st[5])) || !("0".equals(st[7]) || "1".equals(st[7]))) return null;
+            boolean sell = "1".equals(st[5]);
+            boolean gtc = "1".equals(st[7]);
+            BigDecimal minRem = Util.decOr(st[8], null);
+            if (minRem == null) return null;
             long created = coin.optLong("created", 0);
             String wantTok = st[3] == null ? "0x00" : st[3];
-            return new Order5(coinid, st[0], st[1], want, wantTok, st[4], sell, gtc, minRem,
+            Order5 order = new Order5(coinid, st[0], st[1], want, wantTok, st[4], sell, gtc, minRem,
                     locked, tokenid, created);
+            order.sourceJson = coin.toString();
+            return order;
         } catch (Throwable t) {
             return null;
         }
     }
+
+    String sourceJson() { return sourceJson; }
 
     public void markRelevant() { relevant = true; }
 
@@ -103,12 +110,11 @@ public final class Order5 {
     /**
      * Ownership for anything that SPENDS or ATTRIBUTES: spend authority (port 0) plus payout
      * (port 1). Port 0 is public, so the key alone proves only that the coin names me — a
-     * stranger can author one. See {@link KeySet#owns}. Empty address set ⇒ falls back to the
-     * key check, because a false negative would be worse than the attack it prevents.
+     * stranger can author one. See {@link KeySet#owns}. An empty address set cannot establish ownership; wait for a fresh wallet identity.
      */
     public boolean isMine(Set<String> myKeys, Set<String> myAddrs) {
         if (!isMine(myKeys)) return false;
-        return myAddrs == null || myAddrs.isEmpty() || myAddrs.contains(wantAddr);
+        return myAddrs != null && myAddrs.contains(wantAddr);
     }
 
     /** True when the node also considers this coin relevant — corroboration for diagnostics. */
@@ -141,6 +147,7 @@ public final class Order5 {
      *  - a locked token that contradicts the side.
      */
     public boolean fillable() {
+        if (!DexTxn.safeOrder(this)) return false;
         String expectedWant = sell ? DexContract.USDT_ID : "0x00";
         if (!expectedWant.equalsIgnoreCase(wantTok)) return false;
         String expectedLocked = sell ? "0x00" : DexContract.USDT_ID;

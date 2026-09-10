@@ -9,17 +9,22 @@ Solo node: java -jar minima-core/jar/minima.jar -solo -data <dir> -port 19101 -r
 """
 import json, os, string, time, urllib.parse, urllib.request
 
-RPC = "http://127.0.0.1:19105/"
+RPC = os.environ.get("PANDADEX_TEST_RPC", "")
 HERE = os.path.dirname(os.path.abspath(__file__))
 V5_TPL = string.Template(open(os.path.join(HERE, "v5script.tpl")).read())
 
 # Mainnet values (frozen at release; tests substitute their own token + short expiry)
 MXUSDT = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90"
-EXPIRY = 1500
+EXPIRY = 600
 
 
 def rpc(cmd, timeout=180):
-    url = RPC + urllib.parse.quote(cmd)
+    if os.environ.get("PANDADEX_DISPOSABLE_SOLO") != "YES" or not RPC:
+        raise RuntimeError("Refusing node access: explicitly set PANDADEX_TEST_RPC and PANDADEX_DISPOSABLE_SOLO=YES for your disposable solo node")
+    parsed = urllib.parse.urlparse(RPC)
+    if parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        raise RuntimeError("Disposable harness requires a loopback RPC endpoint")
+    url = RPC.rstrip("/") + "/" + urllib.parse.quote(cmd)
     with urllib.request.urlopen(url, timeout=timeout) as r:
         return json.load(r)
 

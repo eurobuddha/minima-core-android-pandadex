@@ -1,0 +1,13 @@
+# Automatic completed owner-receipt recovery
+
+Schema13 adds ownerreceipt retry/needs_review fields and indexes using the existing taker queue protocol. Migration preserves original receipts and seeds those with saved missing/moved checks. Accepted rechecks queue owner work in their transaction; adopted full proof updates queue state in the same transaction.
+
+OwnerRecovery reuses TakerRecovery's four-record cap, serial finder callback, duplicate-delivery guard, shared process gate and error behavior. Saved bounded JSON must match its index and original intent; original creation funding inputs or owner source are rechecked through DexHistory.findSpends. Complete fresh evidence uses the existing OwnerReceipt capture/revision checks. DexDb.repairOwner compares the saved snapshot before atomic revision/check/queue retirement. A stale snapshot is ignored; incomplete/error evidence remains queued and visible.
+
+FillSettler runs owner recovery after repeat checks, before the existing taker/public fallback. Durable owner/other alternation prevents starvation across Activity/service recreation; empty owner batches allow existing work immediately. Existing callers are MainActivity's repository fill sink and DexKeepAliveService.scanBook -> FillTape.ingest -> onScanComplete. This operates when those eligible settlement passes run; it does not promise recovery while the app/service is stopped or unpaired.
+
+Eight new JVM tests cover all-input creation recovery, incomplete effects, batch cap/duplicate callbacks, malformed/index-mismatched evidence, simultaneous hosts, failure release, fair scheduling and empty-queue fallback. Full suite625 tests pass, zero failures/errors/skips; lint zero errors/75 warnings. Audit27 passes798 actual Android assertions including schema12-to13 preservation, rollback, queue rotation and different-process recovery.
+
+## Code review
+
+The queue reuses the established transaction/callback protocol, preserves user evidence and supplies the previously missing automatic consumer for completed owner revisions. Scoped tests pass. Production verdict remains request changes: stock Samsung/MinimaCore, production Activity/service lifecycle/Doze, manual composite funds gate and broader malformed/legacy recovery are still unverified. Original data deleted by old builds cannot be reconstructed by this queue. Very large history/long-term storage growth, indefinite unavailable callbacks and simultaneous cross-kind history lookups remain broader performance/lifecycle review items. Same-transaction semantic corruption of old denormalized metadata requires further integrity review; current fresh-proof and snapshot guards do not authenticate local disk contents.

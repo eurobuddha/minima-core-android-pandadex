@@ -17,6 +17,7 @@ public class FillSettlerTest {
     private static final class Row {
         String spentCoin, txpowid, evidence, note;
         FillVerifier.Verdict cancelled;
+        BigDecimal size, price;
     }
 
     private static Order5 ask(String coinid) {
@@ -79,6 +80,7 @@ public class FillSettlerTest {
             resp.put("txpows", arr(txs));
             JSONObject j = new JSONObject();
             j.put("response", resp);
+            j.put("status", true);
             return j;
         } catch (Exception e) { throw new RuntimeException(e); }
     }
@@ -108,13 +110,16 @@ public class FillSettlerTest {
     }
 
     private static FillSettler settler(JSONObject historyPage, JSONObject payoutReply, Row row) {
-        DexHistory history = new DexHistory((command, cb) -> cb.onResult(historyPage));
+        DexHistory history = new DexHistory((command, cb) -> cb.onResult(command.startsWith("txpow ")
+                ? new TestJson().put("status", true).put("response", new TestJson().put("found", true).put("confirmations", 3))
+                : historyPage));
         FillVerifier verifier = new FillVerifier((command, cb) -> cb.onResult(payoutReply));
-        return new FillSettler(history, verifier, () -> 112, new FillSettler.Outcome() {
+        return new FillSettler(history, () -> 112, new FillSettler.Outcome() {
             @Override public void record(String spentCoin, Order5 order, BigDecimal size, BigDecimal price,
                                          boolean takerBuy, boolean partial, String txpowid,
                                          String evidence, String note) {
                 row.spentCoin = spentCoin;
+                row.size = size; row.price = price;
                 row.txpowid = txpowid;
                 row.evidence = evidence;
                 row.note = note;
@@ -123,12 +128,12 @@ public class FillSettlerTest {
             @Override public void cancelled(String spentCoin) {
                 row.cancelled = FillVerifier.Verdict.CANCELLED;
             }
-        });
+        }, new FillRecoveryTest.MemoryStore());
     }
 
     @Test public void chainHistoryVerdictCarriesTxpowidAndChainStatus() {
         Row row = new Row();
-        FillSettler s = settler(page(txpow("0xTX", "0xASK",
+        FillSettler s = settler(page(txpow("0xAABB", "0xASK",
                 arr(out(PAYOUT, DexContract.USDT_ID, "0.0000001545", "15.45")))),
                 new JSONObject(), row);
 
@@ -137,14 +142,14 @@ public class FillSettlerTest {
         s.onScanComplete();
 
         assertEquals("0xASK", row.spentCoin);
-        assertEquals("0xTX", row.txpowid);
+        assertEquals("0xAABB", row.txpowid);
         assertEquals(FillSettler.CHAIN_VERIFIED, row.evidence);
-        assertEquals(FillSettler.NOTE_HISTORY, row.note);
+        org.junit.Assert.assertTrue(row.note.startsWith(FillSettler.NOTE_HISTORY));
     }
 
-    @Test public void fallbackEvidenceIsNotMislabelledAsChainVerified() {
+    @Test public void unrelatedPayoutCannotOverrideTheActualSpendingTransaction() {
         Row row = new Row();
-        FillSettler s = settler(page(txpow("0xTX", "0xASK",
+        FillSettler s = settler(page(txpow("0xAABB", "0xASK",
                 arr(out(PAYOUT, DexContract.USDT_ID, "0.0000001500", "15.00")))),
                 coins(coin("0xPAY", DexContract.USDT_ID, "15.45", 110)),
                 row);
@@ -153,9 +158,92 @@ public class FillSettlerTest {
                 new BigDecimal("0.0515"), true, false, 108);
         s.onScanComplete();
 
-        assertEquals("0xASK", row.spentCoin);
-        assertEquals("", row.txpowid);
-        assertEquals(FillSettler.LOCAL_VERIFIED, row.evidence);
-        assertEquals(FillSettler.NOTE_PAYOUT, row.note);
+        org.junit.Assert.assertNull(row.spentCoin);
+        org.junit.Assert.assertNull(row.evidence);
+    }
+    @Test public void copiedSuccessorDoesNotProvePartialWithoutSpendingHistory() {
+        Row row = new Row();
+        FillSettler s = settler(page(), new JSONObject(), row);
+        s.onFill("0xASK", ask("0xASK"), new BigDecimal("100"),
+                new BigDecimal("0.0515"), true, true, 108);
+        s.onScanComplete();
+        org.junit.Assert.assertNull(row.spentCoin);
+    }
+
+    @Test public void partialMustPayMakerAndLeaveTheActualRemainderAtTheCovenantIndex() {
+        DexHistory.Spend spend = new DexHistory.Spend("0xAABB", 0, arr(
+                out(PAYOUT, DexContract.USDT_ID, "0", "5.15"),
+                out(DexContract.ADDR_V5, "0x00", "200", null)), "0xCCDD", 3);
+        org.junit.Assert.assertTrue(FillSettler.partialMatches(spend, ask("0xASK"), new BigDecimal("100")));
+        org.junit.Assert.assertFalse(FillSettler.partialMatches(spend, ask("0xASK"), new BigDecimal("150")));
+    }
+
+    @Test public void roundedBuyPartialRecordsActualPaymentRatherThanDroppingTheTrade() {
+        Row row=new Row();Order5 buy=order("0xBUY","3",DexContract.USDT_ID,"1","0x00",false);
+        FillSettler s=settler(page(txpow("0xAABB","0xBUY",arr(
+                out(PAYOUT,"0x00","0.33333334",null),
+                out(DexContract.ADDR_V5,DexContract.USDT_ID,"0","2")))),new JSONObject(),row);
+        // ceil(1*2/3) leaves want=.66666667, so the book diff says .33333333.
+        // The actual maker payment is ceil(1*1/3)=.33333334.
+        s.onFill("0xBUY",buy,new BigDecimal("0.33333333"),new BigDecimal("3"),false,true,108);
+        s.onScanComplete();
+        assertEquals("0xBUY",row.spentCoin);
+        assertEquals(0,new BigDecimal("0.33333334").compareTo(row.size));
+        assertEquals(FillSettler.CHAIN_VERIFIED,row.evidence);
+    }
+    @Test public void actualPartialSpendOverridesAFullDisappearanceHint() {
+        Row row=new Row();FillSettler s=settler(page(txpow("0xAABB","0xASK",arr(
+                out(PAYOUT,DexContract.USDT_ID,"0","5.15"),
+                out(DexContract.ADDR_V5,"0x00","200",null)))),new JSONObject(),row);
+        s.onFill("0xASK",ask("0xASK"),new BigDecimal("300"),new BigDecimal("999"),true,false,108);
+        s.onScanComplete();assertEquals(0,new BigDecimal("100").compareTo(row.size));
+        assertEquals(0,new BigDecimal("0.0515").compareTo(row.price));
+    }
+    @Test public void fullRequestedPaymentWithARemainderIsStillAPartialFill() {
+        Row row = new Row();
+        FillSettler s = settler(page(txpow("0xAABB", "0xASK", arr(
+                out(PAYOUT, DexContract.USDT_ID, "0", "15.45"),
+                out(DexContract.ADDR_V5, "0x00", "200", null)))), new JSONObject(), row);
+        s.onFill("0xASK", ask("0xASK"), new BigDecimal("300"), BigDecimal.ONE, true, false, 108);
+        s.onScanComplete();
+        assertEquals(0, new BigDecimal("100").compareTo(row.size));
+        assertEquals(0, new BigDecimal("0.1545").compareTo(row.price));
+        org.junit.Assert.assertTrue(row.note.startsWith(FillSettler.NOTE_PARTIAL));
+    }
+    @Test public void copiedEqualOrLargerSuccessorCannotHideTheOriginalFullFill() throws Exception {
+        for (String copiedAmount : new String[]{"300", "600"}) {
+            Order5 original = ask("0xASK");
+            JSONObject copy = new JSONObject(original.sourceJson()).put("coinid", "0xCOPY")
+                    .put("created", 109).put("amount", copiedAmount);
+            Row row = new Row();
+            FillSettler settler = settler(page(txpow("0xAABB", original.coinid,
+                    arr(out(PAYOUT, DexContract.USDT_ID, "0", "15.45")))), new JSONObject(), row);
+            FillTape tape = new FillTape(null);
+            tape.ingest(java.util.Collections.singletonMap(original.coinid, original), false, 108, settler);
+            tape.ingest(java.util.Collections.singletonMap("0xCOPY", Order5.from(copy)), false, 109, settler);
+            assertEquals("0xASK", row.spentCoin);
+            assertEquals(0, new BigDecimal("300").compareTo(row.size));
+            assertEquals(FillSettler.CHAIN_VERIFIED, row.evidence);
+        }
+    }
+
+    @Test public void includedOwnerRelockRetiresWithoutRecordingAFill() throws Exception {
+        Order5 original = ask("0xASK");
+        JSONObject raw = new JSONObject(original.sourceJson());
+        JSONObject output = new JSONObject(raw.toString()).put("coinid", "0xNEW")
+                .put("address", DexContract.ADDR_V5).put("storestate", true).put("state", new JSONArray());
+        JSONArray state = new JSONArray(); JSONObject source = raw.getJSONObject("state");
+        for (java.util.Iterator<String> it = source.keys(); it.hasNext();) {
+            String key = it.next();
+            state.put(new JSONObject().put("port", Integer.parseInt(key))
+                    .put("data", key.equals("2") ? "12" : source.getString(key)));
+        }
+        JSONObject tx = txpow("0xAABB", original.coinid, arr(output));
+        tx.getJSONObject("body").getJSONObject("txn").put("state", state);
+        Row row = new Row(); FillSettler settler = settler(page(tx), new JSONObject(), row);
+        settler.onFill(original.coinid, original, original.minimaAmount(), original.price(), true, false, 108);
+        settler.onScanComplete();
+        org.junit.Assert.assertNull(row.spentCoin);
+        assertEquals(FillVerifier.Verdict.CANCELLED, row.cancelled);
     }
 }

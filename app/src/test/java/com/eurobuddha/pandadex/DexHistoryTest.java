@@ -164,8 +164,48 @@ public class DexHistoryTest {
             resp.put("txpows", a);
             JSONObject j = new JSONObject();
             j.put("response", resp);
+            j.put("status", true);
             return j;
         } catch (Exception e) { throw new RuntimeException(e); }
+    }
+
+    private static JSONObject obj(Object... pairs) {
+        TestJson result = new TestJson();
+        for (int i = 0; i < pairs.length; i += 2) result.put((String)pairs[i], pairs[i + 1]);
+        return result;
+    }
+
+    private static boolean confirm(String command, NodeApi.Cb cb) {
+        if (!command.startsWith("txpow onchain:")) return false;
+        cb.onResult(obj("status", true, "response", obj("found", true, "confirmations", 0)));
+        return true;
+    }
+
+    @Test public void mempoolEntryIsNotConfirmedAndDoesNotHideMinedReplacement() {
+        DexHistory h = new DexHistory((command, cb) -> {
+            if (command.equals("txpow onchain:0xAAAA"))
+                cb.onResult(obj("status", true, "response", obj("found", false)));
+            else if (confirm(command, cb)) return;
+            else cb.onResult(page(txpow("0xAAAA", "0xC1", new JSONArray()),
+                    txpow("0xBBBB", "0xC1", new JSONArray())));
+        });
+        h.findSpends(Collections.singletonList("0xC1"), found -> {
+            assertEquals("0xBBBB", found.get("0xC1").txpowid);
+            assertEquals(0, found.get("0xC1").confirmations);
+        });
+    }
+
+    @Test public void failedHistoryDoesNotRetryAndFailedInclusionDoesNotProveSpend() {
+        final int[] calls = {0};
+        DexHistory failed = new DexHistory((command, cb) -> { calls[0]++; cb.onError("offline"); });
+        failed.findSpends(Collections.singletonList("0xC1"), found -> assertTrue(found.isEmpty()));
+        assertEquals(1, calls[0]);
+        DexHistory unconfirmed = new DexHistory((command, cb) -> {
+            if (command.startsWith("txpow ")) cb.onResult(obj("status", false,
+                    "response", obj("found", true, "confirmations", 9)));
+            else cb.onResult(page(txpow("0xAAAA", "0xC1", new JSONArray())));
+        });
+        unconfirmed.findSpends(Collections.singletonList("0xC1"), found -> assertTrue(found.isEmpty()));
     }
 
     private static int maxOf(String command) {
@@ -177,24 +217,25 @@ public class DexHistoryTest {
         List<String> issued = new ArrayList<>();
         DexHistory h = new DexHistory((command, cb) -> {
             issued.add(command);
-            cb.onResult(page(txpow("0xTX", "0xC1", outs(out(PAYOUT, "0x00", "300", null)))));
+            if (confirm(command, cb)) return;
+            cb.onResult(page(txpow("0xAABB", "0xC1", outs(out(PAYOUT, "0x00", "300", null)))));
         });
         final Map<String, DexHistory.Spend>[] got = new Map[1];
         h.findSpends(Collections.singletonList("0xC1"), found -> got[0] = found);
 
         assertEquals(1, got[0].size());
-        assertEquals("0xTX", got[0].get("0xC1").txpowid);
+        assertEquals("0xAABB", got[0].get("0xC1").txpowid);
         assertEquals(0, got[0].get("0xC1").inputIndex);
-        assertEquals("one page was enough — it must not keep walking", 1, issued.size());
+        assertEquals("one page and one inclusion check", 2, issued.size());
         assertEquals(FillVerifier.Verdict.CANCELLED,
                 DexHistory.verdictFor(got[0].get("0xC1"), sellOrder()));
     }
 
     @Test public void spendingHistoryUsesTheMatchedInputOutputIndex() {
-        DexHistory h = new DexHistory((command, cb) -> cb.onResult(page(txpow("0xTX",
+        DexHistory h = new DexHistory((command, cb) -> { if (confirm(command, cb)) return; cb.onResult(page(txpow("0xAABB",
                 new String[]{"0xASK", "0xBID"},
                 outs(out(PAYOUT, "0x00", "300", null),
-                     out(PAYOUT, DexContract.USDT_ID, "0.0000001545", "15.45"))))));
+                     out(PAYOUT, DexContract.USDT_ID, "0.0000001545", "15.45"))))); });
 
         final Map<String, DexHistory.Spend>[] got = new Map[1];
         h.findSpends(Arrays.asList("0xASK", "0xBID"), found -> got[0] = found);
@@ -224,8 +265,9 @@ public class DexHistoryTest {
         List<String> issued = new ArrayList<>();
         DexHistory h = new DexHistory((command, cb) -> {
             issued.add(command);
-            if (maxOf(command) > 2) { cb.onError("too long"); return; }   // anything big is undeliverable
-            cb.onResult(page(txpow("0xTX", "0xC1", new JSONArray())));
+            if (confirm(command, cb)) return;
+            if (maxOf(command) > 2) { cb.onError(NodeApi.ERR_TOO_LONG); return; }   // anything big is undeliverable
+            cb.onResult(page(txpow("0xAABB", "0xC1", new JSONArray())));
         });
         h.findSpends(Collections.singletonList("0xC1"), found -> assertEquals(1, found.size()));
 
@@ -241,8 +283,8 @@ public class DexHistoryTest {
         DexHistory h = new DexHistory((command, cb) -> {
             int max = maxOf(command);
             offsets.add(Integer.parseInt(command.substring(command.indexOf("offset:") + 7)));
-            if (max > 1) { cb.onError("too long"); return; }
-            if (offsets.size() < 8) { cb.onError("too long"); return; }   // several huge txns in a row
+            if (max > 1) { cb.onError(NodeApi.ERR_TOO_LONG); return; }
+            if (offsets.size() < 8) { cb.onError(NodeApi.ERR_TOO_LONG); return; }   // several huge txns in a row
             cb.onResult(page());
         });
         final boolean[] done = {false};

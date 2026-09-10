@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.OwnerReceiptTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-09-10T16:54:21" hostname="ProMacBuddha.local" time="0.008">
+  <properties/>
+  <testcase name="failedArchiveKeepsPendingAndSuppressesSuccess" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.002"/>
+  <testcase name="listenerFailureCannotEraseArchivedEvidence" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.0"/>
+  <testcase name="incompleteInclusionCoordinatesOrWrongOutputsCannotArchive" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.0"/>
+  <testcase name="statusShowsOnlyReturnedDepthAndFlagsMissingOrMovedInclusion" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.001"/>
+  <testcase name="oversizedEvidenceNeverDropsThePendingReceipt" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.001"/>
+  <testcase name="changedIntentDuringVerificationCannotBeRemovedByStaleProof" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.001"/>
+  <testcase name="failedCleanupReplaysIdempotentlyAndPreservesFirstArchivedTime" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.001"/>
+  <testcase name="creationCaptureRetainsEveryFundingInputAndOriginalIntent" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.0"/>
+  <testcase name="laterMutationOfHistoryObjectsCannotChangeCapturedProof" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.0"/>
+  <testcase name="completedArchiveExistsBeforeAnySuccessNotification" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.001"/>
+  <testcase name="unconfiguredArchiveCannotSilentlyDiscardVerifiedReceipt" classname="com.eurobuddha.pandadex.OwnerReceiptTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

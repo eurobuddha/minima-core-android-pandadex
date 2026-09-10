@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.OracleAndExportSafetyTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-10T08:23:21" hostname="ProMacBuddha.local" time="0.0">
+  <properties/>
+  <testcase name="jumpNeedsTwoConsistentReadingsAndRejectsNonfiniteValues" classname="com.eurobuddha.pandadex.OracleAndExportSafetyTest" time="0.0"/>
+  <testcase name="unconfirmedLargeMoveQuarantinesOldPriceUntilSuccessfulEvidence" classname="com.eurobuddha.pandadex.OracleAndExportSafetyTest" time="0.0"/>
+  <testcase name="invalidDepthCannotMakeAUsablePrice" classname="com.eurobuddha.pandadex.OracleAndExportSafetyTest" time="0.0"/>
+  <testcase name="spreadsheetTextCannotBecomeAFormula" classname="com.eurobuddha.pandadex.OracleAndExportSafetyTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

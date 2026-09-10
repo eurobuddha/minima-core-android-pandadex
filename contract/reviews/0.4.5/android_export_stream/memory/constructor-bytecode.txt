@@ -1,0 +1,30 @@
+  public com.eurobuddha.pandadex.DexDb(android.content.Context);
+    Code:
+         0: aload_0
+         1: aload_1
+         2: invokevirtual #7                  // Method android/content/Context.getApplicationContext:()Landroid/content/Context;
+         5: ldc           #13                 // String pandadex.db
+         7: aconst_null
+         8: bipush        11
+        10: invokespecial #15                 // Method android/database/sqlite/SQLiteOpenHelper."<init>":(Landroid/content/Context;Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)V
+        13: aload_0
+        14: lconst_0
+        15: putfield      #21                 // Field lastPruneMs:J
+        18: aload_0
+        19: new           #25                 // class android/database/sqlite/SQLiteDatabase$OpenParams$Builder
+        22: dup
+        23: invokespecial #27                 // Method android/database/sqlite/SQLiteDatabase$OpenParams$Builder."<init>":()V
+        26: ldc           #32                 // int 536870912
+        28: invokevirtual #33                 // Method android/database/sqlite/SQLiteDatabase$OpenParams$Builder.addOpenFlags:(I)Landroid/database/sqlite/SQLiteDatabase$OpenParams$Builder;
+        31: ldc           #37                 // String FULL
+        33: invokevirtual #39                 // Method android/database/sqlite/SQLiteDatabase$OpenParams$Builder.setSynchronousMode:(Ljava/lang/String;)Landroid/database/sqlite/SQLiteDatabase$OpenParams$Builder;
+        36: invokevirtual #43                 // Method android/database/sqlite/SQLiteDatabase$OpenParams$Builder.build:()Landroid/database/sqlite/SQLiteDatabase$OpenParams;
+        39: invokevirtual #47                 // Method setOpenParams:(Landroid/database/sqlite/SQLiteDatabase$OpenParams;)V
+        42: aload_0
+        43: new           #51                 // class com/eurobuddha/pandadex/Pending
+        46: dup
+        47: aload_1
+        48: invokespecial #53                 // Method com/eurobuddha/pandadex/Pending."<init>":(Landroid/content/Context;)V
+        51: putfield      #1                  // Field pendingReceipts:Lcom/eurobuddha/pandadex/Pending;
+        54: return
+

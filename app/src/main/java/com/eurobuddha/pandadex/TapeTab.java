@@ -31,7 +31,7 @@ public final class TapeTab extends LinearLayout {
         setPadding(pad, pad, pad, pad);
 
         seg = new LinearLayout(act);
-        String[] names = {"MY TRADES", "MARKET TAPE"};
+        String[] names = {"MY TRADES", "MARKET TAPE", "CORRECTIONS"};
         for (int i = 0; i < names.length; i++) {
             final int idx = i;
             TextView t = tv(names[i], 11f, Design.DIM(), Design.sansBold());
@@ -85,7 +85,7 @@ public final class TapeTab extends LinearLayout {
 
     public void render() {
         rows.removeAllViews();
-        if (sel == 0) renderMine(); else renderMarket();
+        if (sel == 0) renderMine(); else if (sel == 1) renderMarket(); else renderCorrections();
     }
 
     private void renderMine() {
@@ -93,13 +93,14 @@ public final class TapeTab extends LinearLayout {
         LinearLayout summary = card();
         summary.addView(tv("MY TRADES", 10f, Design.DIM(), Design.sansBold()));
         if (mine.isEmpty()) {
-            summary.addView(tv("No confirmed personal trades yet.", 11f, Design.DIM2(), Design.sans()));
+            summary.addView(tv("No personal trade records yet.", 11f, Design.DIM2(), Design.sans()));
         } else {
             Totals totals = totals(mine);
             summary.addView(mono("Rows " + mine.size()
                     + "   Net " + PriceMath.fmt(totals.netM) + " MINIMA"
                     + "   " + PriceMath.fmt(totals.netU) + " mxUSDT", Design.TEXT(), 10.5f));
-            summary.addView(tv("Only wallet-owned confirmed fills are shown here. Market tape rows are excluded.",
+            summary.addView(tv("Rows awaiting recheck stay visible and are excluded from net totals.", 9.5f, Design.DIM2(), Design.sans()));
+            summary.addView(tv("Wallet trade records; older rows may lack chain proof. Times use the inclusion block when verified; otherwise they show this device’s observation.",
                     9.5f, Design.DIM2(), Design.sans()));
         }
 
@@ -125,24 +126,25 @@ public final class TapeTab extends LinearLayout {
             price.setGravity(Gravity.END);
             top.addView(price);
             c.addView(top);
-            c.addView(mono(fmt.format(new Date(r.timeMs)) + "   "
+            c.addView(mono(TradeExport.timeLabel(r) + " " + fmt.format(new Date(r.timeMs)) + "   "
                     + (r.maker ? "MAKER" : "TAKER") + "   "
                     + label(r.sourceKind) + "   " + label(r.verificationStatus),
                     Design.DIM(), 9.5f));
             String evidence = !r.txpowid.isEmpty() ? r.txpowid : r.spentCoin;
             if (!evidence.isEmpty()) c.addView(mono(evidence, Design.DIM2(), 8.5f));
+            if (!r.verificationNote.isEmpty()) c.addView(tv(r.verificationNote, 9.5f, Design.DIM2(), Design.sans()));
         }
     }
 
     private void renderMarket() {
         LinearLayout head = card();
         head.addView(tv("MARKET TAPE", 10f, Design.DIM(), Design.sansBold()));
-        head.addView(tv("Network-observed order-book fills only. Ambiguous full disappearances are not inserted as normal trades.",
+        head.addView(tv("Device-observed order-book records. New fills require a linked on-chain spend; older rows have not all been rechecked.",
                 9.5f, Design.DIM2(), Design.sans()));
 
         List<Object[]> tape = act.db().raw().tapeRows(CAP);
         if (tape.isEmpty()) {
-            rows.addView(tv("No verified market trades observed yet.", 11f, Design.DIM2(), Design.sans()));
+            rows.addView(tv("No market trade records yet.", 11f, Design.DIM2(), Design.sans()));
             return;
         }
         for (Object[] r : tape) {
@@ -164,11 +166,41 @@ public final class TapeTab extends LinearLayout {
             s.setGravity(Gravity.END);
             row.addView(s, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
             rows.addView(row);
+            if (r.length > 5) rows.addView(tv((String) r[5], 9f, Design.DIM2(), Design.sans()));
+        }
+    }
+
+    private void renderCorrections() {
+        LinearLayout head=card();
+        head.addView(tv("RECEIPT CORRECTIONS",10f,Design.DIM(),Design.sansBold()));
+        head.addView(tv("Earlier market and personal records are preserved here. Personal exports include the full correction evidence.",9.5f,Design.DIM2(),Design.sans()));
+        try {
+            org.json.JSONArray corrections=new org.json.JSONArray(act.db().raw().correctionArchive(CAP));
+            if(corrections.length()==0) head.addView(tv("No receipt corrections recorded.",11f,Design.DIM2(),Design.sans()));
+            for(int i=0;i<corrections.length();i++) {
+                org.json.JSONObject correction=corrections.getJSONObject(i);
+                LinearLayout c=card();
+                c.addView(tv(correction.getString("reason"),11f,Design.TEXT(),Design.sansBold()));
+                c.addView(mono("Corrected "+fmt.format(new Date(correction.getLong("corrected_at"))),Design.DIM(),9.5f));
+                org.json.JSONObject evidence=correction.getJSONObject("evidence");
+                org.json.JSONObject original=evidence.optJSONObject("personal_trade");
+                if(original==null) original=evidence.optJSONObject("public_trade");
+                if(original!=null) c.addView(tv("Earlier record: "+original.optString("size","unknown")+" MINIMA @ "+original.optString("price","unknown")
+                        +" · "+(original.optLong("timems",0)>0?fmt.format(new Date(original.optLong("timems"))):"timestamp not recorded"),10f,Design.DIM(),Design.sans()));
+                TextView ids=mono("Source "+correction.getString("coinid")+"\nEarlier TxPoW "+correction.getString("old_txpowid")
+                        +"\nVerified replacement "+correction.getString("new_txpowid"),Design.DIM2(),8.5f);
+                ids.setTextIsSelectable(true);c.addView(ids);
+            }
+        } catch(Exception invalid) {
+            head.addView(tv("Correction history could not be read. Keep app data for recovery.",11f,Design.ACCENT(),Design.sans()));
         }
     }
 
     private static String label(String s) {
-        return s == null || s.isEmpty() ? "LOCAL_VERIFIED" : s;
+        if (s == null || s.isEmpty() || "LOCAL_VERIFIED".equals(s)) return "Legacy — not rechecked";
+        if (s.startsWith("SUPERSEDED_")) return "Corrected earlier record — excluded from totals; see Corrections";
+        if (!ChainReview.accounted(s)) return "Recheck required — excluded from totals";
+        return "CHAIN_VERIFIED".equals(s) ? "On-chain when checked" : s;
     }
 
     private static final class Totals {
@@ -179,6 +211,7 @@ public final class TapeTab extends LinearLayout {
     private static Totals totals(List<TradeExport.TradeRow> rows) {
         Totals t = new Totals();
         for (TradeExport.TradeRow r : rows) {
+            if (!ChainReview.accounted(r.verificationStatus)) continue;
             BigDecimal notional = TradeExport.usdtNotional(r);
             t.netM = t.netM.add(r.buy ? r.sizeMinima : r.sizeMinima.negate());
             t.netU = t.netU.add(r.buy ? notional.negate() : notional);

@@ -1,0 +1,6 @@
+allprojects {
+    tasks.withType(Test).configureEach {
+        maxHeapSize = '64m'
+        systemProperty 'pandadex.memoryaudit', 'true'
+    }
+}
