@@ -407,7 +407,10 @@ public final class TradeView extends LinearLayout {
         LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(6);
         e.setLayoutParams(lp);
-        e.setOnFocusChangeListener((v, has) -> act.setInputFocused(has));
+        e.setOnFocusChangeListener((v, has) -> {
+            act.setInputFocused(has);
+            if (has) post(this::revealEntryAboveKeyboard);
+        });
         return e;
     }
 
@@ -486,6 +489,27 @@ public final class TradeView extends LinearLayout {
                 });
             }
         });
+    }
+
+    /** Salon focus-scroll pattern, extended to keep price, amount and action together
+     * when they fit. In a short landscape viewport the focused input takes priority. */
+    void revealEntryAboveKeyboard() {
+        View focused=findFocus();
+        androidx.core.view.WindowInsetsCompat insets=androidx.core.view.ViewCompat.getRootWindowInsets(this);
+        if (!(focused instanceof EditText) || insets==null || !insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())) return;
+        android.graphics.Rect field=new android.graphics.Rect();focused.getDrawingRect(field);
+        offsetDescendantRectToMyCoords(focused,field);
+        android.graphics.Rect first=new android.graphics.Rect();priceIn.getDrawingRect(first);offsetDescendantRectToMyCoords(priceIn,first);
+        android.graphics.Rect action=new android.graphics.Rect();ctaBtn.getDrawingRect(action);offsetDescendantRectToMyCoords(ctaBtn,action);
+        android.graphics.Rect panel=new android.graphics.Rect(field);
+        panel.top=Math.min(first.top,field.top);panel.bottom=Math.max(action.bottom,field.bottom);
+        android.view.ViewParent parent=getParent();
+        while(parent!=null && !(parent instanceof android.widget.ScrollView))parent=parent.getParent();
+        if(parent instanceof android.widget.ScrollView) {
+            android.widget.ScrollView scroll=(android.widget.ScrollView)parent;
+            int available=scroll.getHeight()-scroll.getPaddingTop()-scroll.getPaddingBottom();
+            requestRectangleOnScreen(panel.height()<=available ? panel : field,true);
+        }
     }
 
     // ------------------------------------------------------------------ open orders

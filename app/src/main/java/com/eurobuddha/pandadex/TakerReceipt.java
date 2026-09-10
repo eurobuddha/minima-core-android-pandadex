@@ -80,6 +80,21 @@ final class TakerReceipt {
             return new TakerReceipt(intent,first,json);
         } catch(JSONException invalid) {throw new IllegalArgumentException("Invalid taker receipt",invalid);}
     }
+    /** Reconstruct only the selected input positions from already captured evidence.
+     * Wallet input gaps stay null; indices must not shift for pool/order covenants. */
+    JSONObject marketTransaction() {
+        try {
+            JSONArray selected = new JSONObject(json).getJSONObject("proof").getJSONArray("inputs");
+            JSONArray inputs = new JSONArray();
+            for (int i=0;i<selected.length();i++) {
+                JSONObject leg=selected.getJSONObject(i);
+                inputs.put(leg.getInt("index"),leg.getJSONObject("coin"));
+            }
+            return new JSONObject().put("txpowid",spend.txpowid).put("body",new JSONObject().put("txn",
+                    new JSONObject().put("inputs",inputs).put("outputs",spend.outputs).put("state",spend.transactionState)));
+        } catch(JSONException invalid) {throw new IllegalStateException("Captured trade evidence could not be indexed",invalid);}
+    }
+
     /** Complete, bounded saved input and an exact supported version are required for repair. */
     static JSONObject stored(String raw) throws JSONException {
         if(raw==null || raw.length()>MAX_BYTES || raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>MAX_BYTES)

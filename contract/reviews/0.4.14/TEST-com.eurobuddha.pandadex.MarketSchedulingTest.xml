@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.MarketSchedulingTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-09-10T21:39:49" hostname="ProMacBuddha.local" time="0.003">
+  <properties/>
+  <testcase name="ownerBacklogCannotStarveFreshPublicHistory" classname="com.eurobuddha.pandadex.MarketSchedulingTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

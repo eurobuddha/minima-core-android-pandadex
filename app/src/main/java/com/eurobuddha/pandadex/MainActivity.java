@@ -425,7 +425,15 @@ public class MainActivity extends AppCompatActivity {
             // MinimaCore KeyboardInsets: recover form space on short landscape screens.
             if (headerChrome != null) headerChrome.setVisibility(compact ? android.view.View.GONE : android.view.View.VISIBLE);
             if (tabBar != null) tabBar.setVisibility(compact ? android.view.View.GONE : android.view.View.VISIBLE);
-            if (logText != null) logText.setMaxLines(compact ? 1 : 4);
+            boolean typing = insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime());
+            // Casino's one-line ticker while typing leaves space for the entry fields.
+            if (logText != null) logText.setMaxLines(typing ? 1 : 4);
+            if (logTitle != null) logTitle.setVisibility(typing ? android.view.View.GONE : android.view.View.VISIBLE);
+            if (ime.bottom > 0 && ime.bottom != keyboardBottom && trade != null) {
+                // Salon's post-layout focus reveal; include the rest of the entry panel.
+                trade.post(trade::revealEntryAboveKeyboard);
+            }
+            keyboardBottom = ime.bottom;
             return insets;
         });
 
@@ -639,6 +647,7 @@ public class MainActivity extends AppCompatActivity {
     private final java.util.ArrayDeque<String> logLines = new java.util.ArrayDeque<>();
     private LinearLayout logBox;
     private android.view.View headerChrome;
+    private int keyboardBottom;
     private TextView logTitle, logText;
     private String lastLogMessage = "";
     private String stage = "";

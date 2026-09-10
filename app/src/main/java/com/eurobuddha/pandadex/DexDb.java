@@ -345,6 +345,7 @@ public final class DexDb extends SQLiteOpenHelper implements FillSettler.Store, 
             registerCheck(db,spend.txpowid,spend.inclusionBlock);adoptIncludedProof(db,spend);
             ContentValues done=new ContentValues();done.put("needs_review",0);
             db.update("takerreceipt",done,"spentcoin=?",new String[]{entry.coinid});
+            indexTakerMarket(receipt);
             db.setTransactionSuccessful();return changed;
         } catch(org.json.JSONException invalid) {throw new ChainReview.Conflict();}
         finally {db.endTransaction();}
@@ -1070,8 +1071,37 @@ public final class DexDb extends SQLiteOpenHelper implements FillSettler.Store, 
             }
             boolean added=recordTakerFill(intent.sources,spend,intent.price,intent.minima,intent.buy,intent.sourceKind);
             db.insertOrThrow("takerreceipt",null,takerValues(receipt));
+            indexTakerMarket(receipt);
             db.setTransactionSuccessful();return added;
         } finally {db.endTransaction();}
+    }
+
+    /** Feed the exact same verified executions to the public read model immediately.
+     * Never use an intent's quoted average as a substitute for per-leg execution evidence. */
+    private void indexTakerMarket(TakerReceipt receipt) {
+        org.json.JSONObject tx=receipt.marketTransaction();
+        java.util.List<PoolMarket.Trade> pools=PoolMarket.trades(tx,marketPoolAddresses());
+        if(!pools.isEmpty())recordPoolTrades(pools,receipt.spend);
+        FillSettler indexer=new FillSettler(null,()->receipt.spend.inclusionBlock,new FillSettler.Outcome(){
+            public void record(String coin,Order5 order,BigDecimal size,BigDecimal price,boolean buy,boolean partial,String txid,String evidence,String note){throw new IllegalStateException("Verified coordinates required");}
+            public void cancelled(String coin){throw new IllegalStateException("Verified coordinates required");}
+            public void recordVerified(FillSettler.Entry entry,DexHistory.Spend proof,Order5 order,BigDecimal size,BigDecimal price,boolean buy,boolean partial,String note,long time,long block){
+                completeFill(entry,proof,order,time,block,price,size,buy,partial,false,FillSettler.CHAIN_VERIFIED,note);
+            }
+            public void cancelledVerified(FillSettler.Entry entry,DexHistory.Spend proof){completeNonTrade(entry,proof);}
+        },this);
+        org.json.JSONArray inputs=DexHistory.coinsOf(tx,"inputs");
+        for(int i=0;i<inputs.length();i++) {
+            org.json.JSONObject input=inputs.optJSONObject(i);
+            if(input==null)continue;
+            Order5 order=DexHistory.historicalOrder(input);if(order==null)continue;
+            DexHistory.Spend original=receipt.spend;
+            DexHistory.Spend leg=new DexHistory.Spend(original.txpowid,i,original.outputs,original.transactionId,original.confirmations);
+            leg.input=input;leg.inputCount=original.inputCount;leg.transactionState=original.transactionState;
+            leg.inclusionBlock=original.inclusionBlock;leg.inclusionBlockId=original.inclusionBlockId;leg.inclusionTimeMs=original.inclusionTimeMs;
+            leg.proofOrder=original.proofOrder;leg.proofTimeMs=original.proofTimeMs;
+            indexer.settle(new FillSettler.Entry(order.coinid,order.sourceJson(),true),leg);
+        }
     }
 
     /** Commit the verified taker row/check before its durable pending receipt may be cleared. */

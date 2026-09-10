@@ -76,4 +76,14 @@ public class TakerReceiptTest {
         TradeExport.Snapshot checked=TradeExport.verifiedCopy(s,id->{throw new AssertionError("no trade rows to check");});
         assertEquals(json,checked.takerReceiptsJson);assertEquals(json,TradeExport.build(checked).takerReceiptsJson);
     }
+    @Test public void marketReconstructionPreservesSelectedInputIndicesAndWalletGaps()throws Exception {
+        Map<String,DexHistory.Spend> found=proof();DexHistory.Spend old=found.get("0xbb");
+        DexHistory.Spend shifted=new DexHistory.Spend(old.txpowid,2,old.outputs,old.transactionId,old.confirmations);
+        shifted.input=old.input;shifted.inputCount=old.inputCount;shifted.inclusionBlock=old.inclusionBlock;shifted.inclusionBlockId=old.inclusionBlockId;
+        shifted.inclusionTimeMs=old.inclusionTimeMs;shifted.proofOrder=old.proofOrder;shifted.proofTimeMs=old.proofTimeMs;found.put("0xbb",shifted);
+        JSONObject tx=TakerReceipt.capture(expected(),found).marketTransaction();JSONArray inputs=DexHistory.coinsOf(tx,"inputs");
+        assertEquals(3,inputs.length());assertTrue(inputs.isNull(1));assertEquals("0xaa",inputs.getJSONObject(0).getString("coinid"));
+        assertEquals("0xbb",inputs.getJSONObject(2).getString("coinid"));assertEquals("100",DexHistory.coinsOf(tx,"outputs").getJSONObject(0).getString("amount"));
+    }
+
 }

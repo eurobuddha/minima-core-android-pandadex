@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.TakerReceiptTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-09-10T21:39:54" hostname="ProMacBuddha.local" time="0.009">
+  <properties/>
+  <testcase name="completeArchiveRetainsExpectationsSelectedInputsAndExactProof" classname="com.eurobuddha.pandadex.TakerReceiptTest" time="0.001"/>
+  <testcase name="wrongDirectionAndUnexpectedPayoutCannotBecomeCompletedEvidence" classname="com.eurobuddha.pandadex.TakerReceiptTest" time="0.002"/>
+  <testcase name="absentOrConflictingLegAndMissingBlockTimeCannotBeArchived" classname="com.eurobuddha.pandadex.TakerReceiptTest" time="0.001"/>
+  <testcase name="mutableCallerDataCannotChangeArchivedBytes" classname="com.eurobuddha.pandadex.TakerReceiptTest" time="0.0"/>
+  <testcase name="sameIntentPermitsNumericFormattingButRejectsChangedEconomicsOrIdentity" classname="com.eurobuddha.pandadex.TakerReceiptTest" time="0.001"/>
+  <testcase name="marketReconstructionPreservesSelectedInputIndicesAndWalletGaps" classname="com.eurobuddha.pandadex.TakerReceiptTest" time="0.0"/>
+  <testcase name="oversizedReceiptLeavesCompletionUnprovedRatherThanTruncatingEvidence" classname="com.eurobuddha.pandadex.TakerReceiptTest" time="0.002"/>
+  <testcase name="exportAndOptionalCorroborationPreserveOriginalTakerEvidence" classname="com.eurobuddha.pandadex.TakerReceiptTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

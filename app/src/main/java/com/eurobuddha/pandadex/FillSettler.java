@@ -72,6 +72,7 @@ public final class FillSettler implements FillTape.Sink {
     private final Outcome outcome;
     private final Store store;
     private boolean checking, discoverNext;
+    private boolean publicTurn = true;
     private String lastError = "";
 
     FillSettler(DexHistory history, BlockSource blocks, Outcome outcome, Store store) {
@@ -100,6 +101,13 @@ public final class FillSettler implements FillTape.Sink {
 
     @Override public void onScanComplete() {
         if (checking || blocks.chainBlock() <= 0) return;
+        // Owner and taker recovery can both stay non-empty indefinitely. Reserve an
+        // independent public-history turn so they cannot starve the current market.
+        if (store instanceof PoolMarket.Store) {
+            boolean discoverNow = publicTurn;
+            publicTurn = !publicTurn;
+            if (discoverNow) { discover(); return; }
+        }
         if (store instanceof ChainReview.Store) {
             checking = true;
             history.review((ChainReview.Store) store, blocks.chainBlock(), error -> {
@@ -204,7 +212,7 @@ public final class FillSettler implements FillTape.Sink {
         } catch (RuntimeException e) { checking = false; reportError(e); }
     }
 
-    private boolean settle(Entry entry, DexHistory.Spend spend) {
+    boolean settle(Entry entry, DexHistory.Spend spend) {
         Order5 order = entry.order();
         if (order == null) { reportError(); return false; }
         if (spend == null || spend.confirmations < 0 || blocks.chainBlock() <= 0) return false;
