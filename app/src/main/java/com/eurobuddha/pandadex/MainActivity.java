@@ -161,7 +161,7 @@ public class MainActivity extends AppCompatActivity {
             if (enabled) onPaired();
         });
         repo = new BookRepository(node, db);
-        poolRepo = new PoolLiquidityRepository(node);
+        poolRepo = new PoolLiquidityRepository(node, db::rememberMarketPool);
         verifier = new FillVerifier(node);
         history = new DexHistory(node, db);
         txn = new DexTxn(node, db);

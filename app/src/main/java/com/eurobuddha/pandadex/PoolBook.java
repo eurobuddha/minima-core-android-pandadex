@@ -16,6 +16,7 @@ public final class PoolBook {
     public interface Listener {
         void onPools(List<Pool> pools);
         void onError(String msg);
+        default void onAddress(Pool pool) {}
     }
 
     interface Commander { void cmd(String command, NodeApi.Cb cb); }
@@ -30,6 +31,7 @@ public final class PoolBook {
     public void scan(Listener listener) {
         final boolean[] completed = {false};
         Listener cb = new Listener() {
+            public void onAddress(Pool pool) { if (!completed[0]) listener.onAddress(pool); }
             public void onPools(List<Pool> pools) { if (!completed[0]) { completed[0] = true; listener.onPools(pools); } }
             public void onError(String message) { if (!completed[0]) { completed[0] = true; listener.onError(message); } }
         };
@@ -79,6 +81,7 @@ public final class PoolBook {
                             if (!FundingCoins.hex(pool.address)) { cb.onError("Invalid pool address reply"); return; }
                             pool.mxaddress = sc.optString("mxaddress", "");
                             pool.covenantScript = script;
+                            cb.onAddress(pool);
                             synchronized (pools) { pools.add(pool); }
                         }
                         else { cb.onError("Pool covenant did not parse"); return; }

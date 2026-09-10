@@ -21,10 +21,10 @@ import java.util.List;
  *   book    — last-good order book snapshot (instant first paint)
  *   meta    — key/value (last block, tracked flag, etc.)
  */
-public final class DexDb extends SQLiteOpenHelper implements FillSettler.Store, DexHistory.ProgressStore, ChainReview.Store, TakerRecovery.Store, OwnerRecovery.Store {
+public final class DexDb extends SQLiteOpenHelper implements FillSettler.Store, DexHistory.ProgressStore, ChainReview.Store, TakerRecovery.Store, OwnerRecovery.Store, PoolMarket.Store {
 
     private static final String DB = "pandadex.db";
-    private static final int V = 13;
+    private static final int V = 14;
     private static final int TAPE_CAP = 8000;
     private static final String MAKER_ROW = "spentcoin=? AND maker=1";
 
@@ -54,6 +54,7 @@ public final class DexDb extends SQLiteOpenHelper implements FillSettler.Store, 
         createReceiptAudit(db);
         createTakerReceipts(db);
         createOwnerReceipts(db);
+        createPoolMarket(db);
         db.execSQL("CREATE TABLE book (coinid TEXT PRIMARY KEY, json TEXT)");
         db.execSQL("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)");
         db.execSQL("CREATE TABLE cancelled (coinid TEXT PRIMARY KEY, timems INTEGER)");
@@ -75,6 +76,7 @@ public final class DexDb extends SQLiteOpenHelper implements FillSettler.Store, 
     @Override public void onDowngrade(SQLiteDatabase db, int oldV, int newV) { }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
+        if (oldV < 14) createPoolMarket(db);
         if (oldV < 2) {
             db.execSQL("CREATE TABLE IF NOT EXISTS cancelled (coinid TEXT PRIMARY KEY, timems INTEGER)");
             db.execSQL("CREATE TABLE IF NOT EXISTS myorder (coinid TEXT PRIMARY KEY, orderid TEXT,"
@@ -1012,7 +1014,7 @@ public final class DexDb extends SQLiteOpenHelper implements FillSettler.Store, 
      *  Drives the "show the last trade while it's still recent" rule. */
     public Object[] lastFill() {
         try (Cursor c = getReadableDatabase().rawQuery(
-                "SELECT t.timems,t.price" + tapeChecks() + " WHERE t.settlement_kind='TRADE' AND (c.state IS NULL OR c.state<>'MISSING') ORDER BY t.timems DESC LIMIT 1", null)) {
+                "SELECT t.timems,t.price" + tapeChecks() + " WHERE t.settlement_kind='TRADE' AND (c.state IS NULL OR c.state<>'MISSING') ORDER BY t.timems DESC,t.block DESC,t.spentcoin DESC LIMIT 1", null)) {
             if (!c.moveToFirst()) return null;
             return new Object[]{c.getLong(0), new BigDecimal(c.getString(1))};
         }
@@ -1132,10 +1134,68 @@ public final class DexDb extends SQLiteOpenHelper implements FillSettler.Store, 
     }
 
     private static String tapeChecks() {
-        return " FROM tape t LEFT JOIN verifiedspend v ON v.coinid=t.spentcoin"
+        return " FROM (SELECT t.spentcoin,t.timems,t.block,t.price,t.size,t.buy,t.partial,t.mine,t.settlement_kind,"
+                + "LOWER(COALESCE(v.txpowid,m.txpowid)) AS proof_txpowid FROM tape t"
+                + " LEFT JOIN verifiedspend v ON v.coinid=t.spentcoin"
                 + " LEFT JOIN mytrade m ON m.spentcoin=t.spentcoin AND m.maker=1"
-                + " LEFT JOIN chaincheck c ON c.txpowid=LOWER(COALESCE(v.txpowid,m.txpowid))";
+                + " UNION ALL SELECT 'POOL:'||p.txpowid||':'||p.pool||':'||p.inputindex,p.timems,p.block,p.price,p.size,p.buy,0,0,'TRADE',p.txpowid"
+                + " FROM pooltrade p JOIN chaincheck pc ON pc.txpowid=p.txpowid"
+                + " WHERE pc.state='CURRENT' AND pc.block=p.block AND pc.blockid=p.blockid COLLATE NOCASE) t"
+                + " LEFT JOIN chaincheck c ON c.txpowid=t.proof_txpowid";
     }
+
+    private static void createPoolMarket(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS marketpool (address TEXT PRIMARY KEY COLLATE NOCASE)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS pooltrade (txpowid TEXT NOT NULL COLLATE NOCASE,pool TEXT NOT NULL COLLATE NOCASE,inputindex INTEGER NOT NULL,timems INTEGER NOT NULL,block INTEGER NOT NULL,blockid TEXT NOT NULL COLLATE NOCASE,price TEXT NOT NULL,size TEXT NOT NULL,buy INTEGER NOT NULL,original_time INTEGER NOT NULL,original_block INTEGER NOT NULL,PRIMARY KEY(txpowid,pool,inputindex))");
+        db.execSQL("CREATE INDEX IF NOT EXISTS pooltrade_time ON pooltrade(timems)");
+    }
+
+    /** Only the address produced by the validated PandaPools covenant enters public discovery. */
+    void rememberMarketPool(Pool pool) {
+        if(pool==null || !FundingCoins.hex(pool.address) || !DexContract.USDT_ID.equalsIgnoreCase(pool.tok)
+                || pool.covenantScript==null || pool.covenantScript.isEmpty())return;
+        SQLiteDatabase db=getWritableDatabase();
+        if(!exists(db,"marketpool","address",pool.address)) {
+            ContentValues v=new ContentValues();v.put("address",pool.address.toLowerCase(java.util.Locale.ROOT));
+            db.insertOrThrow("marketpool",null,v);
+        }
+    }
+    @Override public java.util.Set<String> marketPoolAddresses() {
+        java.util.Set<String> result=new java.util.HashSet<>();
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT address FROM marketpool",null)) {
+            while(c.moveToNext())if(FundingCoins.hex(c.getString(0)))result.add(c.getString(0).toLowerCase(java.util.Locale.ROOT));
+        }
+        return result;
+    }
+    @Override public boolean poolTradeKnown(String txpowid,PoolMarket.Trade trade) {
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT 1 FROM pooltrade p JOIN chaincheck c ON c.txpowid=p.txpowid WHERE p.txpowid=? AND p.pool=? AND p.inputindex=? AND c.state='CURRENT' AND c.block=p.block AND c.blockid=p.blockid",new String[]{txpowid,trade.pool,String.valueOf(trade.inputIndex)})) {return c.moveToFirst();}
+    }
+    @Override public void recordPoolTrades(java.util.List<PoolMarket.Trade> trades,DexHistory.Spend proof) {
+        if(proof==null || !FundingCoins.hex(proof.txpowid) || proof.confirmations<0 || proof.inclusionTimeMs<=0
+                || proof.inclusionBlock<=0 || !FundingCoins.hex(proof.inclusionBlockId))throw new IllegalArgumentException("Incomplete pool trade proof");
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            protectLatestProof(db,proof);registerCheck(db,proof.txpowid,proof.inclusionBlock);adoptIncludedProof(db,proof);
+            for(PoolMarket.Trade trade:trades) {
+                if(!exists(db,"marketpool","address",trade.pool))throw new IllegalArgumentException("Unknown pool covenant");
+                String[] key={proof.txpowid,trade.pool,String.valueOf(trade.inputIndex)};
+                boolean existing;
+                try(Cursor c=db.rawQuery("SELECT price,size,buy FROM pooltrade WHERE txpowid=? AND pool=? AND inputindex=?",key)) {
+                    existing=c.moveToFirst();
+                    if(existing && (new BigDecimal(c.getString(0)).compareTo(trade.price())!=0 || new BigDecimal(c.getString(1)).compareTo(trade.minima)!=0 || c.getInt(2)!=(trade.buy?1:0)))throw new IllegalStateException("Conflicting immutable pool trade");
+                }
+                ContentValues v=new ContentValues();v.put("timems",proof.inclusionTimeMs);v.put("block",proof.inclusionBlock);v.put("blockid",proof.inclusionBlockId);
+                if(existing)db.update("pooltrade",v,"txpowid=? AND pool=? AND inputindex=?",key);
+                else {
+                    v.put("txpowid",proof.txpowid.toLowerCase(java.util.Locale.ROOT));v.put("pool",trade.pool);v.put("inputindex",trade.inputIndex);
+                    v.put("price",trade.price().toPlainString());v.put("size",trade.minima.toPlainString());v.put("buy",trade.buy?1:0);
+                    v.put("original_time",proof.inclusionTimeMs);v.put("original_block",proof.inclusionBlock);db.insertOrThrow("pooltrade",null,v);
+                }
+            }
+            db.setTransactionSuccessful();
+        } finally {db.endTransaction();}
+    }
+
     private static String tradeChecks() {
         return "SELECT m.spentcoin,m.timems,m.block,m.price,m.size,m.buy,m.maker,m.orderid,"
                 + "m.txpowid,m.source_kind,m.source_coinids,m.proceeds_coinid,"

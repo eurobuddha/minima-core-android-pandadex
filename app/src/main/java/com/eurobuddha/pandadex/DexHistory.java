@@ -71,11 +71,13 @@ public final class DexHistory {
 
     private final Cmd cmd;
     private final ProgressStore progress;
+    private final PoolMarket poolMarket;
     private String recoveryError = "";
 
     public DexHistory(NodeApi node, DexDb db) { this(node::cmd, db); }
     DexHistory(Cmd cmd) { this(cmd, null); }
-    DexHistory(Cmd cmd, ProgressStore progress) { this.cmd = cmd; this.progress = progress; }
+    DexHistory(Cmd cmd, ProgressStore progress) { this.cmd = cmd; this.progress = progress;
+        this.poolMarket = progress instanceof PoolMarket.Store ? new PoolMarket((PoolMarket.Store)progress) : null; }
     void review(ChainReview.Store store, long tip, java.util.function.Consumer<String> done) {
         ChainReview review = new ChainReview(cmd, store);
         review.run(tip, () -> done.accept(review.error()));
@@ -114,14 +116,23 @@ public final class DexHistory {
     interface Discovery {
         boolean known(String coinid, String txpowid);
         void found(Order5 order, Spend spend);
+        default boolean interested(JSONObject tx) { return false; }
+        default void transaction(JSONObject tx, Spend proof) {}
     }
     static final String DISCOVERY_CURSOR = "V5_HISTORY_DISCOVERY";
 
     /** Discover included V5 order spends even if no running book scan ever saw their inputs. */
     void discover(Discovery discovery, Runnable complete) {
+        if (poolMarket != null) poolMarket.begin();
+        Discovery combined = poolMarket == null ? discovery : new Discovery() {
+            public boolean known(String coinid, String txpowid) { return discovery.known(coinid, txpowid); }
+            public void found(Order5 order, Spend spend) { discovery.found(order, spend); }
+            public boolean interested(JSONObject tx) { return poolMarket.interested(tx); }
+            public void transaction(JSONObject tx, Spend proof) { poolMarket.found(tx, proof); }
+        };
         Set<String> marker = new HashSet<>(); marker.add(DISCOVERY_CURSOR);
         new Pager(marker, new HashMap<>(), ignored -> complete.run(), false,
-                resume(false, marker), discovery).page(0);
+                resume(false, marker), combined).page(0);
     }
 
     static Order5 historicalOrder(JSONObject input) {
@@ -197,6 +208,8 @@ public final class DexHistory {
                 if (!FundingCoins.hex(txid) || checked.contains(txid)) continue;
                 JSONArray ins = coinsOf(tx, "inputs");
                 boolean relevant = false;
+                try { relevant = discovery != null && discovery.interested(tx); }
+                catch (RuntimeException e) { discoveryFailed(offset); return; }
                 for (int k = 0; k < ins.length(); k++) {
                     JSONObject in = ins.optJSONObject(k);
                     if (discovery == null) {
@@ -264,18 +277,7 @@ public final class DexHistory {
                     if (deliver && discovered >= 32) { finish(offset, false); return false; }
                 }
                 if (deliver) {
-                    Spend spend = new Spend(txid, k, outs, ChainEvidence.transactionId(tx), depth);
-                    spend.input = in;
-                    spend.inputCount = ins.length();
-                    spend.proofOrder = proofOrder;
-                    spend.proofTimeMs = proofTimeMs;
-                    spend.inclusionBlock = ChainEvidence.inclusionBlock(inclusion);
-                    spend.inclusionBlockId = ChainEvidence.inclusionBlockId(inclusion);
-                    spend.inclusionTimeMs = timeMs;
-                    JSONObject body = tx.optJSONObject("body");
-                    JSONObject transaction = body == null ? null : body.optJSONObject("txn");
-                    JSONArray state = transaction == null ? null : transaction.optJSONArray("state");
-                    if (state != null) spend.transactionState = state;
+                    Spend spend = proof(tx, ins, txid, k, depth, inclusion, timeMs, proofOrder, proofTimeMs);
                     if (discovery == null) found.put(id, spend);
                     else {
                         try { discovery.found(historical, spend); discovered++; }
@@ -283,7 +285,25 @@ public final class DexHistory {
                     }
                 }
             }
+            if (discovery != null) {
+                try { discovery.transaction(tx, proof(tx, ins, txid, -1, depth, inclusion, timeMs, proofOrder, proofTimeMs)); }
+                catch (RuntimeException e) { discoveryFailed(offset); return false; }
+            }
             return true;
+        }
+
+        private Spend proof(JSONObject tx, JSONArray ins, String txid, int inputIndex, int depth,
+                            JSONObject inclusion, long timeMs, long proofOrder, long proofTimeMs) {
+            Spend spend = new Spend(txid, inputIndex, coinsOf(tx, "outputs"), ChainEvidence.transactionId(tx), depth);
+            spend.input = inputIndex < 0 ? null : ins.optJSONObject(inputIndex);
+            spend.inputCount = ins.length(); spend.proofOrder = proofOrder; spend.proofTimeMs = proofTimeMs;
+            spend.inclusionBlock = ChainEvidence.inclusionBlock(inclusion);
+            spend.inclusionBlockId = ChainEvidence.inclusionBlockId(inclusion); spend.inclusionTimeMs = timeMs;
+            JSONObject body = tx.optJSONObject("body");
+            JSONObject transaction = body == null ? null : body.optJSONObject("txn");
+            JSONArray state = transaction == null ? null : transaction.optJSONArray("state");
+            if (state != null) spend.transactionState = state;
+            return spend;
         }
 
         private void discoveryFailed(int offset) {

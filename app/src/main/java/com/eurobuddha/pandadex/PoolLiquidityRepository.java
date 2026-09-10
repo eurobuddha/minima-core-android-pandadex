@@ -33,9 +33,15 @@ public final class PoolLiquidityRepository {
     private int emptyScans = 0;
     static final int EMPTY_CONFIRM = 2;
 
-    public PoolLiquidityRepository(NodeApi node) {
+    public PoolLiquidityRepository(NodeApi node) { this(node, pool -> {}); }
+
+    PoolLiquidityRepository(NodeApi node, java.util.function.Consumer<Pool> verifiedAddress) {
         PoolBook book = new PoolBook(node);
-        this.scanner = book::scan;
+        this.scanner = cb -> book.scan(new PoolBook.Listener() {
+            public void onAddress(Pool pool) { verifiedAddress.accept(pool); }
+            public void onPools(List<Pool> pools) { cb.onPools(pools); }
+            public void onError(String error) { cb.onError(error); }
+        });
         Handler ui = new Handler(Looper.getMainLooper());
         this.scheduler = (delayMs, r) -> ui.postDelayed(r, delayMs);
         this.clock = System::currentTimeMillis;
