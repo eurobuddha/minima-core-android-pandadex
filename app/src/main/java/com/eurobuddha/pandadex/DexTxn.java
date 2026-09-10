@@ -34,6 +34,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
     private final NodeApi node;
     private final DexDb db;
+    private final CommandSession commandSession;
     private String myPubkey = "";
     private String myHexAddr = "";
     /** Retained host API. Claims are process-wide and cannot be pruned by a token scan. */
@@ -43,11 +44,22 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     public DexTxn(NodeApi node, DexDb db) {
         this.node = node;
         this.db = db;
+        commandSession = new CommandSession((command, callback, authorized) -> node.cmd(command, callback, authorized), NodeApi::connectionGeneration);
     }
 
     public void setIdentity(String pubkey, String hexAddr) {
-        myPubkey = FundingCoins.hex(pubkey) ? pubkey : "";
-        myHexAddr = FundingCoins.hex(hexAddr) ? hexAddr : "";
+        String key = FundingCoins.hex(pubkey) ? pubkey : "";
+        String address = FundingCoins.hex(hexAddr) ? hexAddr : "";
+        if (!key.isEmpty() && !address.isEmpty()) commandSession.bindConnection();
+        if (!key.equals(myPubkey) || !address.equals(myHexAddr)) commandSession.invalidate();
+        myPubkey = key;
+        myHexAddr = address;
+    }
+
+    /** Explicit disconnect invalidates queued owner work even if identity was already empty. */
+    public void invalidateIdentity() {
+        myPubkey = myHexAddr = "";
+        commandSession.invalidate();
     }
 
     public String pubkey() { return myPubkey; }
@@ -70,6 +82,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
      *  ended up with dead ids for orders that were never funded). */
     public String createOrder(boolean buy, BigDecimal minimaAmount, BigDecimal price,
                               boolean gtc, BigDecimal minRemMinima, String orderId, Result cb) {
+        final CommandSession.Snapshot commands = commandSession.snapshot();
         if (minimaAmount == null || price == null || minRemMinima == null
                 || price.signum() <= 0 || minRemMinima.signum() < 0
                 || Math.abs((long)price.scale()) > 44 || price.precision() > 44
@@ -125,7 +138,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             if (db == null) { cb.onFailed("Order receipt storage is unavailable. Nothing was signed."); return; }
             Pending.Row receipt = CreationEvidence.prepare(buy, minimaAmount, price, token, lock,
                     payout, state, coins, chainBlock);
-            postGated(txid, steps, ids, db.pendingReceipts().creationResult(receipt, cb));
+            postGated(commands, txid, steps, ids, db.pendingReceipts().creationResult(receipt, cb));
         });
         return orderId;
     }
@@ -168,6 +181,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
     /** Funding preparation uses the same bounded, state-free selector as trades. */
     public void splitFunding(String token, BigDecimal amount, Result cb) {
+        final CommandSession.Snapshot commands = commandSession.snapshot();
         final String payout = myHexAddr;
         if (!FundingCoins.hex(payout) || !FundingCoins.hex(token) || !amountOk(amount)
                 || amount.scale() > PriceMath.MINIMA_DP
@@ -179,7 +193,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             String txid = "split_" + System.nanoTime();
             List<String> ids = new ArrayList<>();
             for (JSONObject c : coins) ids.add(c.optString("coinid"));
-            postGated(txid, splitFundingSteps(txid, token, amount, payout, coins), ids, cb);
+            postGated(commands, txid, splitFundingSteps(txid, token, amount, payout, coins), ids, cb);
         });
     }
 
@@ -210,6 +224,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     /** Execute a planned sweep (proven shape: order inputs first, index-matched payments,
      *  single partial last with its remainder at output k). */
     public void fillSweep(SweepPlanner.Plan plan, Result cb) {
+        final CommandSession.Snapshot commands = commandSession.snapshot();
         final String payoutAddress = myHexAddr;
         if (plan == null || plan.isEmpty()) { cb.onFailed("Nothing to fill"); return; }
         for (SweepPlanner.Take t : plan.takes) {
@@ -308,12 +323,13 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             }
             steps.add("txnsign id:" + txid + " publickey:auto");
             steps.add("txnbasics id:" + txid);
-            postGated(txid, steps, fundIds, cb);
+            postGated(commands, txid, steps, fundIds, cb);
         });
     }
 
     /** Execute a blended order-book + PandaPools fill in one atomic transaction. */
     public void fillComposite(CompositeRouter.Plan plan, boolean takerBuys, Result cb) {
+        final CommandSession.Snapshot commands = commandSession.snapshot();
         final String payoutAddress = myHexAddr;
         if (plan == null || plan.isEmpty()) { cb.onFailed("Nothing to fill"); return; }
         for (SweepPlanner.Take t : plan.orderTakes) {
@@ -338,7 +354,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 return;
             }
             ensureTrackedPools(prep.route == null ? new ArrayList<>() : prep.route.allocs, 0,
-                    () -> buildComposite(plan, prep, takerBuys, coins, payoutAddress, cb), message -> {
+                    () -> buildComposite(commands, plan, prep, takerBuys, coins, payoutAddress, cb), message -> {
                         CoinLock.release(coins); cb.onFailed(message);
                     });
         });
@@ -379,10 +395,10 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         return prep;
     }
 
-    private void buildComposite(CompositeRouter.Plan plan, CompositePrep prep, boolean takerBuys,
+    private void buildComposite(CommandSession.Snapshot commands, CompositeRouter.Plan plan, CompositePrep prep, boolean takerBuys,
                                 List<JSONObject> coins, String payoutAddress, Result cb) {
         CompositeBuild built = buildCompositeSteps("combo_" + System.nanoTime(), payoutAddress, plan, prep, takerBuys, coins);
-        postGated(built.txid, built.steps, built.fundIds, cb);
+        postGated(commands, built.txid, built.steps, built.fundIds, cb);
     }
 
     static final class CompositeBuild {
@@ -518,6 +534,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
     /** Cancel: owner-signed refund of the whole coin to the maker wallet (token-aware). */
     public void cancel(Order5 o, Result cb) {
+        final CommandSession.Snapshot commands = commandSession.snapshot();
         if (!safeOrder(o)) { cb.onFailed("Invalid order data. Nothing was signed."); return; }
         // Do NOT mark this as cancelled yet. `txnpost` only means the node accepted it to the
         // mempool; if it loses a double-spend race to a real fill, a premature marker would
@@ -532,7 +549,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 + ("0x00".equals(o.lockedTok) ? "" : " tokenid:" + o.lockedTok) + " storestate:false");
         steps.add("txnsign id:" + txid + " publickey:" + o.ownerPk);
         steps.add("txnbasics id:" + txid);
-        postCancellation(txid,steps,java.util.Collections.singletonList(o),cb);
+        postCancellation(commands,txid,steps,java.util.Collections.singletonList(o),cb);
     }
 
     /**
@@ -553,6 +570,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
      * than a sequential run failing partway and leaving an arbitrary subset cancelled.
      */
     public void cancelBatch(List<Order5> orders, Result cb) {
+        final CommandSession.Snapshot commands = commandSession.snapshot();
         if (orders == null || orders.isEmpty()) { cb.onFailed("Nothing to cancel"); return; }
         if (orders.size() > SweepPlanner.MAX_ORDERS) {
             cb.onFailed("Too many orders for one transaction");
@@ -585,21 +603,22 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             }
         }
         steps.add("txnbasics id:" + txid);
-        postCancellation(txid,steps,orders,cb);
+        postCancellation(commands,txid,steps,orders,cb);
     }
 
-    private void postCancellation(String txid,List<String> steps,List<Order5> orders,Result cb) {
+    private void postCancellation(CommandSession.Snapshot commands,String txid,List<String> steps,List<Order5> orders,Result cb) {
         Result journal;
         try {
             if(db==null)throw new IllegalStateException("Receipt storage unavailable");
             journal=db.pendingReceipts().cancellationResult(orders,chainBlock,cb);
         }catch(RuntimeException failure){cb.onFailed("Could not prepare cancellation receipts. Nothing was signed.");return;}
-        postGated(txid,steps,new ArrayList<>(),journal);
+        postGated(commands,txid,steps,new ArrayList<>(),journal);
     }
 
     /** Atomic in-place re-lock: GTC renew (newWant null) or edit (newWant set). ONE txn —
      *  the coin never leaves the book (the V5 owner branch; proven in Phase B chunk D). */
     public void relock(Order5 o, BigDecimal newWant, Result cb) {
+        final CommandSession.Snapshot commands = commandSession.snapshot();
         if (!safeOrder(o)) { cb.onFailed("Invalid order data. Nothing was signed."); return; }
         // A successful re-lock is recognised from its successor coin by FillTape. Do not add a
         // cancellation marker here: a transaction accepted to the mempool may still lose to a
@@ -632,11 +651,12 @@ public class DexTxn {   // non-final so tests can stub the three order actions
             if(db==null)throw new IllegalStateException("Receipt storage unavailable");
             journal=db.pendingReceipts().relockResult(o,want,chainBlock,cb);
         }catch(RuntimeException failure){cb.onFailed("Could not prepare relock receipt. Nothing was signed.");return;}
-        postGated(txid,steps,new ArrayList<>(),journal);
+        postGated(commands,txid,steps,new ArrayList<>(),journal);
     }
 
     /** Third-party sweep of an expired order back to its maker (book hygiene; COINAGE path). */
     public void collectExpired(Order5 o, Result cb) {
+        final CommandSession.Snapshot commands = commandSession.snapshot();
         if (!safeOrder(o)) { cb.onFailed("Invalid order data. Nothing was signed."); return; }
         String txid = "collect_" + System.nanoTime();
         List<String> steps = new ArrayList<>();
@@ -647,7 +667,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 + ("0x00".equals(o.lockedTok) ? "" : " tokenid:" + o.lockedTok) + " storestate:false");
         steps.add("txnsign id:" + txid + " publickey:auto");
         steps.add("txnbasics id:" + txid);
-        postCancellation(txid, steps, java.util.Collections.singletonList(o), cb);
+        postCancellation(commands, txid, steps, java.util.Collections.singletonList(o), cb);
     }
 
     // ------------------------------------------------------------------ plumbing
@@ -659,7 +679,8 @@ public class DexTxn {   // non-final so tests can stub the three order actions
      * Signing one key concurrently makes the node issue the SAME one-time leaf for two different
      * transactions, which leaks that leaf's private key — confirmed on a live node, 7 of 64 keys.
      */
-    private void postGated(String txid, List<String> steps, List<String> fundIds, Result cb) {
+    private void postGated(CommandSession.Snapshot commands, String txid, List<String> steps, List<String> fundIds, Result cb) {
+        if (!commands.current()) { cb.onFailed(CommandSession.CHANGED); return; }
         List<String> inputs = new ArrayList<>();
         for (String command : steps) {
             String invalid = CommandSafety.failure(command);
@@ -692,43 +713,44 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 public void onPosted(String id) { finish(id, null); }
                 public void onFailed(String message) { finish(null, message); }
             };
-            CmdChain.run(node, new ArrayList<>(steps), "txndelete id:" + txid, new CmdChain.Done() {
-                public void ok(JSONObject last) { checkAndPost(txid, gated); }
+            CmdChain.run(commands, new ArrayList<>(steps), "txndelete id:" + txid, new CmdChain.Done() {
+                public void ok(JSONObject last) { checkAndPost(commands, txid, gated); }
                 public void fail(String message) { gated.onFailed(message); }
             });
         });
     }
 
-    private void checkAndPost(String txid, Result cb) {
-        node.cmd("txncheck id:" + txid, new NodeApi.Cb() {
+    private void checkAndPost(CommandSession.Snapshot commands, String txid, Result cb) {
+        commands.run("txncheck id:" + txid, new NodeApi.Cb() {
             public void onResult(JSONObject checked) {
+                if (!commands.current()) { cb.onFailed(CommandSession.CHANGED); return; }
                 String invalid = TxValidation.checkFailure(checked);
                 if (invalid != null) {
-                    node.cmd("txndelete id:" + txid, null); cb.onFailed(invalid); return;
+                    commands.run("txndelete id:" + txid, null); cb.onFailed(invalid); return;
                 }
                 if (!cb.beforePost()) {
-                    node.cmd("txndelete id:" + txid, null);
+                    commands.run("txndelete id:" + txid, null);
                     cb.onFailed("Could not save submission intent. The transaction was not posted."); return;
                 }
                 // txnexport is NOT the serialized TxPoW, and returning its hex over IPC is costly.
                 // The stock node applies the chain's actual TxPoW size limit at txnpost.
-                node.cmd("txnpost id:" + txid, new NodeApi.Cb() {
+                commands.run("txnpost id:" + txid, new NodeApi.Cb() {
                     public void onResult(JSONObject reply) {
                         if (reply.optBoolean("pending", false)) {
                             cb.onFailed("Awaiting node approval; this transaction has not been submitted."); return;
                         }
-                        node.cmd("txndelete id:" + txid, null);
+                        commands.run("txndelete id:" + txid, null);
                         if (reply.optBoolean("status", false)) cb.onPosted(Util.extractTxpowid(reply, txid));
                         else cb.onFailed(TxValidation.postError(reply));
                     }
                     public void onError(String message) {
-                        if (!NodeApi.ERR_WRITE_UNCERTAIN.equals(message)) node.cmd("txndelete id:" + txid, null);
+                        if (!NodeApi.ERR_WRITE_UNCERTAIN.equals(message)) commands.run("txndelete id:" + txid, null);
                         cb.onFailed(message);
                     }
                 });
             }
             public void onError(String message) {
-                node.cmd("txndelete id:" + txid, null); cb.onFailed(message);
+                commands.run("txndelete id:" + txid, null); cb.onFailed(message);
             }
         });
     }

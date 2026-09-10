@@ -41,18 +41,25 @@ public class NodeApi {
     private static final String WRITE_PREFS = "pandadex_write_safety";
     private boolean destroyRequested;
     private Boolean enabled;
+    private static Object connectionGeneration = new Object();
+    static Object connectionGeneration() { return connectionGeneration; }
+    private Object observedConnectionGeneration = connectionGeneration;
     private long lastOk;
     private int consecutiveTimeouts;
     public boolean isEnabled() { return Boolean.TRUE.equals(enabled); }
     public long lastOkMs() { return lastOk; }
     private void noteEnabled(boolean value) {
-        if (enabled != null && enabled == value) return;
+        boolean changed = enabled == null || enabled != value;
+        if (!changed && observedConnectionGeneration == connectionGeneration) return;
         enabled = value;
+        if (!value && changed) connectionGeneration = new Object();
+        observedConnectionGeneration = connectionGeneration;
         if (!dead() && mPairing != null) mPairing.onEnabled(value);
     }
     public void reRegister() {
         if (mReleased || destroyRequested || queuedCommands != 0 || hasPendingWrite()) return;
         // Run registration through the same process-wide queue. Never discard an active write.
+        noteEnabled(false);
         mApi.onDestroy();
         mApi = new NodeTransport(mContext, reply -> noteEnabled(reply.optBoolean("enabled", false)));
         cmd("__register__", new Cb() {
@@ -141,8 +148,11 @@ public class NodeApi {
         return s.contains("too long") || s.contains("max(256000)");
     }
 
-    public void cmd(String command, Cb cb) {
-        if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, cb)); return; }
+    public void cmd(String command, Cb cb) { cmd(command, cb, () -> true); }
+
+    /** The queue can outlive a wallet change; check the captured identity at dispatch. */
+    void cmd(String command, Cb cb, java.util.function.BooleanSupplier authorized) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, cb, authorized)); return; }
         String invalid = CommandSafety.failure(command);
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         if (mReleased) { if (cb != null) mMain.post(() -> cb.onError("Node connection closed.")); return; }
@@ -175,10 +185,11 @@ public class NodeApi {
                     finishDestroy();
                 }
             }
-        }));
+        }, authorized));
     }
 
-    private void dispatch(String command, Cb cb) {
+    private void dispatch(String command, Cb cb, java.util.function.BooleanSupplier authorized) {
+        if (!CommandSession.authorized(authorized)) { cb.onError(CommandSession.CHANGED); return; }
         if (mReleased) { cb.onError("Node connection closed."); return; }
         final boolean funds = writesFunds(command);
         final String writeId = java.util.UUID.randomUUID().toString();

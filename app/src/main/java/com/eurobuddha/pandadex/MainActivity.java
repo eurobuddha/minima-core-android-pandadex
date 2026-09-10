@@ -105,6 +105,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView pairPill, blockPill, footer;
     private int tab = TAB_TRADE;
     private boolean paired = false;
+    private Object pairingAttempt, pairingConnection;
     private boolean inputFocused = false;
     private long chainBlock = 0;
     private BigDecimal minimaSendable = BigDecimal.ZERO, usdtSendable = BigDecimal.ZERO;
@@ -140,7 +141,7 @@ public class MainActivity extends AppCompatActivity {
         stats = new DexStats(db);
         pending = db.pendingReceipts();
         restoreAwaitingFill();
-        keySet = new KeySet(this, this::repaint);
+        keySet = new KeySet(this, this::onWalletKeysReady);
         tradeExportSession = new androidx.lifecycle.ViewModelProvider(this).get(TradeExportSession.class);
         saveTradeExportLauncher = registerForActivityResult(
                 new ActivityResultContracts.CreateDocument("application/zip"), tradeExportSession::selected);
@@ -152,7 +153,10 @@ public class MainActivity extends AppCompatActivity {
         node = new NodeApi(this, enabled -> {
             paired = enabled;
             scriptReady = false;
-            if (!enabled) keySet.invalidate();
+            pairingAttempt = null;
+            if (txn != null) txn.invalidateIdentity();
+            receiveAddr = "";
+            keySet.invalidate();
             repaint();
             if (enabled) onPaired();
         });
@@ -284,43 +288,65 @@ public class MainActivity extends AppCompatActivity {
 
     private void onPaired() {
         scriptReady = false;
+        pairingAttempt = new Object();
+        pairingConnection = NodeApi.connectionGeneration();
+        txn.invalidateIdentity();
+        receiveAddr = "";
+        keySet.invalidate();
         keySet.refresh(node);
-        node.cmd("getaddress", new NodeApi.Cb() {
-            @Override public void onResult(JSONObject json) {
-                JSONObject r = json.optJSONObject("response");
-                if (!TxValidation.truthy(json, "status") || r == null) return;
-                keySet.addExtra(r.optString("publickey", ""));
-                keySet.addExtraAddr(r.optString("address", ""));
-                txn.setIdentity(r.optString("publickey", ""), r.optString("address", ""));
-                receiveAddr = r.optString("miniaddress", r.optString("address", ""));
-                repaint();
-            }
-            @Override public void onError(String message) {
-                // identity is required before ANY spend — retry rather than leaving the user
-                // with an opaque failure and a stuck optimistic row
-                ui.postDelayed(() -> { if (paired) onPaired(); }, 5_000);
-            }
-        });
-        // Verify + register the covenant on EVERY pairing, not once per install: the flag
-        // lives in the app's DB but the registration lives in the NODE's wallet, so a node
-        // reinstall/resync would otherwise leave the script unregistered — and then cancels,
-        // relocks and sweeps all fail the scripts gate while `send` still happily creates
-        // orders the user cannot cancel. The key is versioned so the trackall:false change
-        // re-registers on existing installs.
-        DexContract.ensureScript(node, new DexContract.Ready() {
-            @Override public void ok() {
-                scriptReady = true;
-                db.putMeta("tracked_v2", "1");
-                repo.refresh();
-                if (poolRepo != null) poolRepo.refresh();
-            }
-            @Override public void failed(String why) {
-                scriptReady = false;
-                toast("Covenant check failed: " + why);
-            }
-        });
+        repaint();
         poll(true);
         maybeStartKeepAlive();
+    }
+
+    private boolean currentPairing(Object attempt) {
+        return attempt != null && pairingAttempt == attempt && paired && pairingConnection == NodeApi.connectionGeneration()
+                && !isFinishing() && !isDestroyed();
+    }
+
+    /** Reuse the watcher's keys -> address -> covenant ordering for this pairing only. */
+    private void onWalletKeysReady() {
+        repaint();
+        final Object attempt = pairingAttempt;
+        if (!currentPairing(attempt) || !keySet.ready()) return;
+        node.cmd("getaddress", new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                if (!currentPairing(attempt)) return;
+                JSONObject r = json.optJSONObject("response");
+                String key = r == null ? "" : r.optString("publickey", "");
+                String address = r == null ? "" : r.optString("address", "");
+                if (!TxValidation.truthy(json, "status") || !FundingCoins.hex(key) || !FundingCoins.hex(address)) {
+                    retryIdentity(attempt); return;
+                }
+                keySet.addExtra(key);
+                keySet.addExtraAddr(address);
+                txn.setIdentity(key, address);
+                receiveAddr = r.optString("miniaddress", address);
+                repaint();
+                // Registration lives in the node, so every new pairing must verify it again.
+                DexContract.ensureScript(node, new DexContract.Ready() {
+                    @Override public void ok() {
+                        if (!currentPairing(attempt)) return;
+                        scriptReady = true;
+                        db.putMeta("tracked_v2", "1");
+                        repo.refresh();
+                        if (poolRepo != null) poolRepo.refresh();
+                        repaint();
+                    }
+                    @Override public void failed(String why) {
+                        if (!currentPairing(attempt)) return;
+                        scriptReady = false;
+                        toast("Covenant check failed: " + why);
+                    }
+                });
+            }
+            @Override public void onError(String message) { retryIdentity(attempt); }
+        });
+    }
+
+    private void retryIdentity(Object attempt) {
+        if (!currentPairing(attempt)) return;
+        ui.postDelayed(() -> { if (currentPairing(attempt)) onPaired(); }, 5_000);
     }
 
     /**
@@ -519,6 +545,7 @@ public class MainActivity extends AppCompatActivity {
         if (busy) { toast("A transaction is already in progress"); return false; }
         if (pending != null && !pending.healthy()) { toast("Receipt storage needs recovery. Preserve app data; do not retry trades."); return false; }
         if (!paired) { toast("Pair with your node first"); return false; }
+        if (!currentPairing(pairingAttempt)) { toast("Node connection changed. Wait for wallet verification before trading."); return false; }
         if (txn == null || txn.pubkey().isEmpty() || txn.hexAddr().isEmpty()) {
             toast("Still reading your wallet identity — try again in a moment");
             return false;
@@ -1262,6 +1289,7 @@ public class MainActivity extends AppCompatActivity {
             for (Order5 o : mine) if (owned.contains(o.orderId)) rungs++;
         }
         final boolean stopMaker = makerWork;
+        final Object connection = pairingAttempt;
 
         String msg = mine.isEmpty()
                 ? "Stop the maker and request withdrawal of its recorded orders? No open orders are visible in this snapshot, but a submission may still be in progress."
@@ -1276,14 +1304,16 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle("Cancel all orders")
                 .setMessage(msg)
                 .setPositiveButton(stopMaker ? "Cancel all & stop" : "Cancel them", (d, w) -> {
+                    if (!currentPairing(connection) || !ready()) { toast("Connection changed or is not ready. Review the order list again."); return; }
                     Runnable start=() -> {
+                        if (!currentPairing(connection)) { toast("Connection changed. Review the order list again."); if(onDone!=null)onDone.run(); return; }
                         repaint();
                         if(mine.isEmpty()) {
                             String status="Maker withdrawal instructions retained. No orders were visible in this snapshot; check Orders for on-chain outcomes.";
                             setStage(status);toast(status);repo.refresh();
                             if(onDone!=null)onDone.run();return;
                         }
-                        cancelSequentially(mine,0,0,0,onDone);
+                        cancelSequentially(connection,mine,0,0,0,onDone);
                     };
                     // Re-check on confirmation; a maker may have started since the dialog opened.
                     if(maker!=null)maker.stopForCancelAll(chainBlock,makerListener,start);
@@ -1293,8 +1323,15 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void cancelSequentially(java.util.List<Order5> list, int idx, int ok, int failed,
+    private void cancelSequentially(Object connection, java.util.List<Order5> list, int idx, int ok, int failed,
                                     Runnable onDone) {
+        if (!currentPairing(connection)) {
+            busy = false;
+            setStage("Connection changed. Remaining cancellation batches stopped; check retained receipts before retrying.");
+            repaint();
+            if (onDone != null) onDone.run();
+            return;
+        }
         if (idx >= list.size()) {
             busy = false;
             // SENT, not done. Every cancel is a transaction: until it mines the order is still
@@ -1326,11 +1363,11 @@ public class MainActivity extends AppCompatActivity {
             @Override public void onPosted(String txpowid) {
                 // Pending already retained the submission. No legacy-table write may
                 // interrupt this batch continuation after the node accepted it.
-                cancelSequentially(list, next, ok + chunk.size(), failed, onDone);
+                cancelSequentially(connection, list, next, ok + chunk.size(), failed, onDone);
             }
             @Override public void onFailed(String message) {
                 // atomic — the whole chunk failed together
-                cancelSequentially(list, next, ok, failed + chunk.size(), onDone);
+                cancelSequentially(connection, list, next, ok, failed + chunk.size(), onDone);
             }
         });
     }
@@ -1631,6 +1668,7 @@ public class MainActivity extends AppCompatActivity {
     /** Atomic in-place reprice — ONE transaction, the order never leaves the book. */
     public void editOrder(Order5 o) {
         if (!ready() || !keySet.owns(o)) return;
+        final Object connection = pairingAttempt;
         EditText in = new EditText(this);
         in.setHint("New price (mxUSDT per MINIMA)");
         in.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
@@ -1644,6 +1682,7 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle("Edit order price")
                 .setView(in)
                 .setPositiveButton("Update", (d, w) -> {
+                    if (!currentPairing(connection) || !ready() || !keySet.owns(o)) { toast("Connection or ownership changed. Reopen this order before editing."); return; }
                     BigDecimal np = Util.dec(in.getText().toString());
                     if (np.signum() <= 0) { toast("Bad price"); return; }
                     BigDecimal newWant = o.sell

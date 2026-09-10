@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.CommandSessionTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-09-10T19:42:41" hostname="ProMacBuddha.local" time="0.003">
+  <properties/>
+  <testcase name="currentSnapshotCanReachDispatch" classname="com.eurobuddha.pandadex.CommandSessionTest" time="0.0"/>
+  <testcase name="disconnectInvalidatesOwnerWorkEvenWhenIdentityWasEmpty" classname="com.eurobuddha.pandadex.CommandSessionTest" time="0.001"/>
+  <testcase name="anotherHostDisconnectInvalidatesBothSessions" classname="com.eurobuddha.pandadex.CommandSessionTest" time="0.001"/>
+  <testcase name="invalidSnapshotNeverEntersTheQueue" classname="com.eurobuddha.pandadex.CommandSessionTest" time="0.0"/>
+  <testcase name="invalidationWhileWaitingPreventsPhysicalDispatch" classname="com.eurobuddha.pandadex.CommandSessionTest" time="0.0"/>
+  <testcase name="changedIdentityCannotReauthorizeAnOldSnapshotAfterChangingBack" classname="com.eurobuddha.pandadex.CommandSessionTest" time="0.0"/>
+  <testcase name="oldChainCannotContinueSigningOrDeleteOnTheNewConnection" classname="com.eurobuddha.pandadex.CommandSessionTest" time="0.0"/>
+  <testcase name="missingOrThrowingDispatchGuardFailsClosed" classname="com.eurobuddha.pandadex.CommandSessionTest" time="0.001"/>
+  <testcase name="unchangedSessionPreservesSequentialConstructionAndCleanup" classname="com.eurobuddha.pandadex.CommandSessionTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

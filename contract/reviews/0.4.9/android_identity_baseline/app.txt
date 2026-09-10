@@ -1,0 +1,22 @@
+FAIL after 99 assertions
+java.lang.AssertionError: main-thread audit failed
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.mainChecked(OwnerReceiptAndroidAudit.java:140)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.offlineActivity(OwnerReceiptAndroidAudit.java:811)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.onStart(OwnerReceiptAndroidAudit.java:42)
+	at android.app.Instrumentation$InstrumentationThread.run(Instrumentation.java:2627)
+Caused by: java.lang.AssertionError: reconnecting cannot authorize spending with the previous wallet identity while getaddress is pending
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.check(OwnerReceiptAndroidAudit.java:19)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.lambda$offlineActivity$47$com-eurobuddha-pandadex-OwnerReceiptAndroidAudit(OwnerReceiptAndroidAudit.java:822)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit$$ExternalSyntheticLambda12.run(D8$$SyntheticClass:0)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.lambda$mainChecked$0(OwnerReceiptAndroidAudit.java:139)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit$$ExternalSyntheticLambda46.run(D8$$SyntheticClass:0)
+	at android.app.Instrumentation$SyncRunnable.run(Instrumentation.java:2647)
+	at android.os.Handler.handleCallback(Handler.java:1070)
+	at android.os.Handler.dispatchMessage(Handler.java:125)
+	at android.os.Looper.dispatchMessage(Looper.java:333)
+	at android.os.Looper.loopOnce(Looper.java:263)
+	at android.os.Looper.loop(Looper.java:367)
+	at android.app.ActivityThread.main(ActivityThread.java:9287)
+	at java.lang.reflect.Method.invoke(Native Method)
+	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:566)
+	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:929)

@@ -50,6 +50,7 @@ public class DexKeepAliveService extends Service {
     private boolean started = false;
     private final WatcherPassGate passGate = new WatcherPassGate(PASS_GAP_MS);
     private long chainBlock = 0;
+    private Object passAttempt, passConnection;
 
     @Override public IBinder onBind(Intent i) { return null; }
 
@@ -110,8 +111,10 @@ public class DexKeepAliveService extends Service {
     /** Registration is asynchronous; resume a cold start when the node becomes available. */
     private void onPaired(boolean enabled) {
         if (!started || node == null) return;
-        if (!enabled) { passGate.invalidate(); keySet.invalidate(); return; }
-        pass();
+        passAttempt = null;
+        txn.invalidateIdentity();
+        passGate.invalidate(); keySet.invalidate();
+        if (enabled) pass();
     }
 
     private boolean canWatch() {
@@ -127,23 +130,27 @@ public class DexKeepAliveService extends Service {
         if (action == WatcherPassGate.Action.NONE) return;
         if (action == WatcherPassGate.Action.REGISTER) { node.reRegister(); return; }
         acquireTimedWakelock();
-
+        passAttempt = new Object();
+        passConnection = NodeApi.connectionGeneration();
         keySet.refresh(node);
     }
 
     /** Read a fresh block/book only after all wallet addresses have been derived. */
     private void onKeysReady() {
         if (!passGate.resumeAfterKeys(canWatch())) return;
+        final Object attempt = passAttempt;
         node.cmd("getaddress", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 JSONObject r = json.optJSONObject("response");
-                if (!json.optBoolean("status", false) || r == null || !canWatch()) return;
+                if (!json.optBoolean("status", false) || r == null || !currentPass(attempt)
+                        || !FundingCoins.hex(r.optString("publickey", "")) || !FundingCoins.hex(r.optString("address", ""))) return;
                 keySet.addExtra(r.optString("publickey", ""));
                 keySet.addExtraAddr(r.optString("address", ""));
                 txn.setIdentity(r.optString("publickey", ""), r.optString("address", ""));
                 DexContract.ensureScript(node, new DexContract.Ready() {
-                    public void ok() { if (canWatch()) readBlockThenBook(); }
+                    public void ok() { if (currentPass(attempt)) readBlockThenBook(attempt); }
                     public void failed(String why) {
+                        if (!currentPass(attempt)) return;
                         Notifier.alert(getApplicationContext(), "Order watcher paused", "Covenant check failed: " + why);
                     }
                 });
@@ -152,23 +159,25 @@ public class DexKeepAliveService extends Service {
         });
     }
 
-    private void readBlockThenBook() {
+    private boolean currentPass(Object attempt) { return attempt != null && passAttempt == attempt && passConnection == NodeApi.connectionGeneration() && canWatch(); }
+
+    private void readBlockThenBook(Object attempt) {
         node.cmd("block", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 JSONObject r = json.optJSONObject("response");
-                if (!json.optBoolean("status", false) || r == null || !canWatch()) return;
+                if (!json.optBoolean("status", false) || r == null || !currentPass(attempt)) return;
                 if (r != null) chainBlock = Util.dec(r.optString("block", "0")).longValue();
                 txn.setChainBlock(chainBlock);
-                scanBook();
+                scanBook(attempt);
             }
             @Override public void onError(String message) {}
         });
     }
 
-    private void scanBook() {
-        if (!canWatch() || chainBlock <= 0) return;
+    private void scanBook(Object attempt) {
+        if (!currentPass(attempt) || chainBlock <= 0) return;
         BookScanner.scan(node, (orders, truncated, raw) -> {
-            if (truncated || !canWatch()) return;                     // never act on a failed scan
+            if (truncated || !currentPass(attempt)) return;                     // never act on a failed scan
             try {
                 tape.ingest(orders, false, chainBlock, settler);
             } catch (RuntimeException e) { return; }

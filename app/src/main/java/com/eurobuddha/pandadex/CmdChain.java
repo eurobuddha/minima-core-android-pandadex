@@ -20,13 +20,17 @@ public final class CmdChain {
     private CmdChain() {}
 
     public static void run(NodeApi node, List<String> cmds, String cleanupOnFail, Done done) {
+        run(node::cmd, cmds, cleanupOnFail, done);
+    }
+
+    static void run(FundingCoins.Command node, List<String> cmds, String cleanupOnFail, Done done) {
         step(node, cmds, 0, cleanupOnFail, done);
     }
 
-    private static void step(NodeApi node, List<String> cmds, int i, String cleanup, Done done) {
+    private static void step(FundingCoins.Command node, List<String> cmds, int i, String cleanup, Done done) {
         if (i >= cmds.size()) { done.ok(null); return; }
         final boolean last = (i == cmds.size() - 1);
-        node.cmd(cmds.get(i), new NodeApi.Cb() {
+        node.run(cmds.get(i), new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 if (!json.optBoolean("status", false)) {
                     fail(node, cleanup, done, shortCmd(cmds.get(i)) + " failed"
@@ -42,9 +46,9 @@ public final class CmdChain {
         });
     }
 
-    private static void fail(NodeApi node, String cleanup, Done done, String msg) {
+    private static void fail(FundingCoins.Command node, String cleanup, Done done, String msg) {
         if (!NodeApi.ERR_WRITE_UNCERTAIN.equals(msg) && cleanup != null && !cleanup.isEmpty()) {
-            node.cmd(cleanup, new NodeApi.Cb() {
+            node.run(cleanup, new NodeApi.Cb() {
                 @Override public void onResult(JSONObject json) {}
                 @Override public void onError(String message) {}
             });
