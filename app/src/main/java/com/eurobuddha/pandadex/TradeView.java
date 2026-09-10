@@ -639,13 +639,18 @@ public final class TradeView extends LinearLayout {
                     exactAt.get(e.getKey())));
         }
 
-        // The centre of the book is ALWAYS the mid — it cannot be anything else, so it
-        // carries no label. Taken from MainActivity.bookMid() (raw order prices) rather than
-        // from the GROUPED level keys, which disagreed with Assets and P&L by up to half a
-        // tick whenever grouping was switched on.
-        BigDecimal mid = act.bookMid();
-        if (mid == null && !pools.isEmpty()) mid = VirtualCurve.aggregatePrice(pools);
-        centerPriceTv.setText(mid == null || mid.signum() == 0 ? "—" : PriceMath.fmtPrice(mid));
+        // Use exactly the best displayed levels and their combined limit + pool MINIMA size.
+        // Until the current pool-depth snapshot is ready, the combined weighting is unknown.
+        Map.Entry<BigDecimal, BigDecimal> bestAsk = askList.isEmpty() ? null : askList.get(0);
+        Map.Entry<BigDecimal, BigDecimal> bestBid = bidList.isEmpty() ? null : bidList.get(0);
+        BigDecimal reference = !pools.isEmpty() && !depthKey.equals(readyDepthKey) ? null
+                : PriceMath.weightedBookPrice(
+                        bestBid == null ? null : bestBid.getKey(),
+                        bestBid == null ? null : bestBid.getValue().add(poolBids.getOrDefault(bestBid.getKey(), BigDecimal.ZERO)),
+                        bestAsk == null ? null : bestAsk.getKey(),
+                        bestAsk == null ? null : bestAsk.getValue().add(poolAsks.getOrDefault(bestAsk.getKey(), BigDecimal.ZERO)));
+        centerPriceTv.setText(reference == null ? "—" : PriceMath.fmtPrice(reference));
+        centerPriceTv.setContentDescription("Size-weighted price of the best displayed bid and offer, including pool and limit liquidity");
         centerPriceTv.setTextColor(Design.TEXT());
     }
 

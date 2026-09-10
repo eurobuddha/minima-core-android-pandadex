@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.WeightedBookPriceTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-09-10T20:27:33" hostname="ProMacBuddha.local" time="0.0">
+  <properties/>
+  <testcase name="equalSizesGiveTheUsersQuotedSpreadAverage" classname="com.eurobuddha.pandadex.WeightedBookPriceTest" time="0.0"/>
+  <testcase name="oneSideUsesThatSideAndEmptyDepthStaysUnknown" classname="com.eurobuddha.pandadex.WeightedBookPriceTest" time="0.0"/>
+  <testcase name="sizesDoNotLosePrecisionBeforeFinalDivision" classname="com.eurobuddha.pandadex.WeightedBookPriceTest" time="0.0"/>
+  <testcase name="combinedLimitAndPoolSizeCountsOnce" classname="com.eurobuddha.pandadex.WeightedBookPriceTest" time="0.0"/>
+  <testcase name="moreBidSizeWeightsTowardBidNotTheOppositeSide" classname="com.eurobuddha.pandadex.WeightedBookPriceTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

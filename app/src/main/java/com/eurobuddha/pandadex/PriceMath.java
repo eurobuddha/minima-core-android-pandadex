@@ -77,6 +77,19 @@ public final class PriceMath {
         return want.divide(locked, PRICE_DP, RoundingMode.HALF_UP);
     }
 
+    /** Same-side size weighting, as requested: sum(price * MINIMA size) / sum(size). */
+    static BigDecimal weightedBookPrice(BigDecimal bid, BigDecimal bidSize,
+                                        BigDecimal ask, BigDecimal askSize) {
+        BigDecimal value = BigDecimal.ZERO, size = BigDecimal.ZERO;
+        if (bid != null && bid.signum() > 0 && bidSize != null && bidSize.signum() > 0) {
+            value = value.add(bid.multiply(bidSize)); size = size.add(bidSize);
+        }
+        if (ask != null && ask.signum() > 0 && askSize != null && askSize.signum() > 0) {
+            value = value.add(ask.multiply(askSize)); size = size.add(askSize);
+        }
+        return size.signum() == 0 ? null : value.divide(size, PRICE_DP, RoundingMode.HALF_UP);
+    }
+
     /** Tidy display for AMOUNTS: strip trailing zeros without exponent form. */
     public static String fmt(BigDecimal v) {
         return Util.tidyAmount(v.stripTrailingZeros().toPlainString());
