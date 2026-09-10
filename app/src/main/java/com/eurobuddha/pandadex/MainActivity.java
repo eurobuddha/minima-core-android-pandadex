@@ -137,6 +137,8 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Design.load(this);
+        restoreActivityLog(savedInstanceState);
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         db = new DexDb(this);
         stats = new DexStats(db);
         pending = db.pendingReceipts();
@@ -277,6 +279,7 @@ public class MainActivity extends AppCompatActivity {
         // Reveal exactly one tab. MUST run — the tab views are added GONE above.
         if (savedInstanceState != null) tab = savedInstanceState.getInt(KEY_TAB, TAB_TRADE);
         selectTab(tab);
+        if (awaitingFill != null) setStage("Trade receipt restored · checking on-chain");
     }
 
     private static final String KEY_TAB = "tab";
@@ -284,6 +287,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
         out.putInt(KEY_TAB, tab);
+        out.putStringArrayList("activity_log", new java.util.ArrayList<>(logLines));
     }
 
     private void onPaired() {
@@ -409,9 +413,24 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Design.BG());
-        root.setFitsSystemWindows(true);
+        // UTXO / MinimaCore KeyboardInsets: reserve the greater of IME and navigation
+        // space, never add both. The weighted ScrollView then shrinks above the keyboard.
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            androidx.core.graphics.Insets bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()
+                    | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+            androidx.core.graphics.Insets ime = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime());
+            v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, ime.bottom));
+            boolean compact = insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())
+                    && getResources().getConfiguration().orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+            // MinimaCore KeyboardInsets: recover form space on short landscape screens.
+            if (headerChrome != null) headerChrome.setVisibility(compact ? android.view.View.GONE : android.view.View.VISIBLE);
+            if (tabBar != null) tabBar.setVisibility(compact ? android.view.View.GONE : android.view.View.VISIBLE);
+            if (logText != null) logText.setMaxLines(compact ? 1 : 4);
+            return insets;
+        });
 
         LinearLayout header = new LinearLayout(this);
+        headerChrome = header;
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(pad, pad, pad, Design.dp(this, 6));
         TextView logo = new TextView(this);
@@ -474,6 +493,22 @@ public class MainActivity extends AppCompatActivity {
             content.addView(v);
         }
 
+        // Casino's bounded, timestamped ticker/log, outside the scrolling form.
+        logBox = new LinearLayout(this);
+        logBox.setOrientation(LinearLayout.VERTICAL);
+        logBox.setPadding(pad, Design.dp(this, 6), pad, Design.dp(this, 6));
+        logBox.setBackgroundColor(Design.SURFACE2());
+        logTitle = new TextView(this);
+        logTitle.setTextSize(10f); logTitle.setTypeface(Design.sansBold()); logTitle.setTextColor(Design.ACCENT());
+        logText = new TextView(this);
+        logText.setTextSize(10f); logText.setTypeface(Design.mono()); logText.setTextColor(Design.TEXT());
+        logText.setMaxLines(4); logText.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        logText.setAccessibilityLiveRegion(android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        logBox.addView(logTitle); logBox.addView(logText);
+        logBox.setOnClickListener(v -> showActivityLog());
+        logBox.setVisibility(android.view.View.GONE);
+        root.addView(logBox);
+
         tabBar = new LinearLayout(this);
         tabBar.setBackgroundColor(Design.SURFACE());
         for (int i = 0; i < TAB_NAMES.length; i++) {
@@ -520,6 +555,7 @@ public class MainActivity extends AppCompatActivity {
     /** Repaint the VISIBLE tab only. */
     private void repaint() {
         if (pairPill == null || isFinishing() || isDestroyed()) return;
+        renderActivityLog();
         pairPill.setText(paired ? "NODE ✓" : "PAIR IN MINIMA → APPS");
         pairPill.setTextColor(paired ? Design.IN() : Design.ACCENT());
         blockPill.setText("# " + (chainBlock > 0 ? chainBlock : "—"));
@@ -600,6 +636,11 @@ public class MainActivity extends AppCompatActivity {
     public void repaintTrade() { repaint(); }
 
     // ---- the one place the app narrates what it is doing -------------------------------
+    private final java.util.ArrayDeque<String> logLines = new java.util.ArrayDeque<>();
+    private LinearLayout logBox;
+    private android.view.View headerChrome;
+    private TextView logTitle, logText;
+    private String lastLogMessage = "";
     private String stage = "";
     private long stageAtMs = 0;
     private static final long STAGE_HOLD_MS = 45_000;
@@ -607,15 +648,70 @@ public class MainActivity extends AppCompatActivity {
     /** Say what is happening RIGHT NOW. Blocks take ~50s, so silence during that wait reads
      *  as a broken app — this is the running commentary for both placing and filling. */
     public void setStage(String s) {
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            runOnUiThread(() -> setStage(s)); return;
+        }
         stage = s == null ? "" : s;
         stageAtMs = System.currentTimeMillis();
+        if (!stage.isEmpty() && !stage.equals(lastLogMessage)) {
+            String stamp = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+                    .format(new java.util.Date(stageAtMs));
+            logLines.addFirst(stamp + "  " + (stage.length() > 512 ? stage.substring(0,512) : stage));
+            while (logLines.size() > 60) logLines.removeLast();
+            lastLogMessage = stage;
+        }
         repaint();
     }
 
     public String stage() {
         if (stage.isEmpty()) return "";
-        if (System.currentTimeMillis() - stageAtMs > STAGE_HOLD_MS) return "";
+        if (!busy && awaitingFill == null && System.currentTimeMillis() - stageAtMs > STAGE_HOLD_MS) return "";
         return stage;
+    }
+
+    private void restoreActivityLog(Bundle saved) {
+        if (saved == null) return;
+        java.util.ArrayList<String> lines = saved.getStringArrayList("activity_log");
+        if (lines == null) return;
+        for (String line : lines) {
+            if (line != null && line.length() <= 530) logLines.addLast(line);
+            if (logLines.size() == 60) break;
+        }
+    }
+
+    private void renderActivityLog() {
+        if (logBox == null) return;
+        logBox.setVisibility(logLines.isEmpty() ? android.view.View.GONE : android.view.View.VISIBLE);
+        logTitle.setText((busy ? "TRANSACTION IN PROGRESS" : awaitingFill != null ? "CHECKING ON-CHAIN" : "ACTIVITY LOG")
+                + " · tap for log");
+        StringBuilder recent = new StringBuilder();
+        int count = 0;
+        for (String line : logLines) {
+            if (count++ == 3) break;
+            if (recent.length() > 0) recent.append('\n');
+            recent.append(line);
+        }
+        logText.setText(recent.toString());
+    }
+
+    private void showActivityLog() {
+        TextView text = new TextView(this);
+        text.setText(android.text.TextUtils.join("\n\n", logLines));
+        text.setTypeface(Design.mono()); text.setTextSize(12f); text.setTextColor(Design.TEXT());
+        text.setTextIsSelectable(true);
+        int pad = Design.dp(this,16); text.setPadding(pad,pad,pad,pad);
+        ScrollView scroll = new ScrollView(this); scroll.addView(text);
+        new AlertDialog.Builder(this,Design.dialogTheme()).setTitle("Activity log")
+                .setView(scroll).setPositiveButton("Close",null).show();
+    }
+
+    private void hideTradeKeyboard() {
+        android.view.View focused = getCurrentFocus();
+        if (focused == null) return;
+        android.view.inputmethod.InputMethodManager keyboard =
+                (android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.hideSoftInputFromWindow(focused.getWindowToken(),0);
+        focused.clearFocus();
     }
 
     // ------------------------------------------------------------------ polling
@@ -746,16 +842,20 @@ public class MainActivity extends AppCompatActivity {
     public void placeOrder(boolean buy, BigDecimal minima, BigDecimal price, boolean gtc, BigDecimal minRem) {
         if (!ready()) return;
         busy = true;
+        hideTradeKeyboard();
+        setStage("Order request accepted · selecting wallet coins");
         String orderId = txn.createOrder(buy, minima, price, gtc, minRem, new DexTxn.Result() {
+            @Override public void onProgress(String message) { setStage(message); }
             @Override public void onPosted(String txpowid) {
                 busy = false;
-                toast("Order posted; checking its creation on-chain");
+                setStage("Order posted · checking its creation on-chain");
                 repo.refresh();
                 repaint();
             }
             @Override public void onFailed(String message) {
                 busy = false;
-                toast("Order status: " + message);
+                setStage("Order status: " + message);
+                toast(message);
                 repaint();
             }
         });
@@ -795,11 +895,13 @@ public class MainActivity extends AppCompatActivity {
                     }
                     final String tradePayout = txn.hexAddr();
                     busy = true;
+                    hideTradeKeyboard();
                     // mark the rows we're taking so the ladder shows them as in-flight
                     filling.clear();
                     for (SweepPlanner.Take t : plan.takes) filling.add(t.order.coinid);
-                    setStage("Building transaction… selecting coins and signing");
+                    setStage((buy ? "Buy" : "Sell") + " request accepted · selecting wallet coins");
                     txn.fillSweep(plan, new DexTxn.Result() {
+                        @Override public void onProgress(String message) { setStage(message); }
                         @Override public boolean onPrepared(String handle) {
                             if (!getSharedPreferences("pandadex_taker", MODE_PRIVATE).getString("pending", "").isEmpty()) return false;
                             awaitingIntent = handle;
@@ -911,10 +1013,12 @@ public class MainActivity extends AppCompatActivity {
                     }
                     final String tradePayout = txn.hexAddr();
                     busy = true;
+                    hideTradeKeyboard();
                     filling.clear();
                     for (SweepPlanner.Take t : plan.orderTakes) filling.add(t.order.coinid);
-                    setStage("Building blended transaction… selecting coins and signing");
+                    setStage((buy ? "Buy" : "Sell") + " request accepted · selecting wallet coins for " + plan.poolCount() + " pool(s) and " + plan.orderTakes.size() + " limit order(s)");
                     txn.fillComposite(plan, buy, new DexTxn.Result() {
+                        @Override public void onProgress(String message) { setStage(message); }
                         @Override public boolean onPrepared(String handle) {
                             if (!getSharedPreferences("pandadex_taker", MODE_PRIVATE).getString("pending", "").isEmpty()) return false;
                             awaitingIntent = handle;

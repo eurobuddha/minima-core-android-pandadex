@@ -79,8 +79,6 @@ public final class TradeView extends LinearLayout {
 
     // open orders
     private LinearLayout ordersBox;
-    // running commentary (placing an order / taking a fill)
-    private TextView stageTv;
 
     public TradeView(MainActivity act) {
         super(act);
@@ -88,7 +86,6 @@ public final class TradeView extends LinearLayout {
         setOrientation(VERTICAL);
         int pad = dp(12);
         setPadding(pad, pad, pad, pad);
-        buildStage();
         buildTicker();
         buildLadder();
         buildOrderPanel();
@@ -128,18 +125,6 @@ public final class TradeView extends LinearLayout {
         lp.bottomMargin = dp(10);
         addView(c, lp);
         return c;
-    }
-
-    /** One always-visible line telling the user what the app is doing right now. Blocks take
-     *  ~50s; without this the app looks frozen between tapping and settling. */
-    private void buildStage() {
-        stageTv = tv("", 11.5f, Design.ACCENT(), Design.sansBold());
-        stageTv.setPadding(dp(12), dp(9), dp(12), dp(9));
-        stageTv.setBackground(Design.roundBg(getContext(), Design.ACCENT_SOFT(), 10));
-        stageTv.setVisibility(GONE);
-        LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = dp(10);
-        addView(stageTv, lp);
     }
 
     // ------------------------------------------------------------------ ticker
@@ -411,6 +396,7 @@ public final class TradeView extends LinearLayout {
         e.setTextSize(13f);
         // Reuse MakerTab/AtomiX's Samsung-safe immediate-commit decimal field.
         e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        e.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         e.setTransformationMethod(null);
         e.setFilters(new android.text.InputFilter[]{(src, start, end, dest, dstart, dend) -> {
             String value = dest.toString().substring(0, dstart) + src.subSequence(start, end) + dest.toString().substring(dend);
@@ -517,10 +503,6 @@ public final class TradeView extends LinearLayout {
     /** Re-render every read-only section. Inputs are NEVER touched here. */
     public void render(Map<String, Order5> book, boolean syncing, long chainBlock,
                        List<Pending.Row> pending) {
-        String st = act.stage();
-        stageTv.setText(st);
-        stageTv.setVisibility(st.isEmpty() ? GONE : VISIBLE);
-
         syncDot.setText(syncing ? "● syncing" : "● live");
         syncDot.setTextColor(syncing ? Design.DIM() : Design.IN());
 

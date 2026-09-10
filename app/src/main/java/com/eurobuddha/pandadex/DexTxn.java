@@ -24,6 +24,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class DexTxn {   // non-final so tests can stub the three order actions
 
     public interface Result {
+        /** Presentation only; never authorizes signing or submission. */
+        default void onProgress(String message) {}
         /** Persist intent before signing. Returning false prevents submission. */
         default boolean onPrepared(String transactionHandle) { return true; }
         /** Persist the transition before asking the node to post. */
@@ -261,6 +263,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
 
         final SweepPlanner.Take fPartial = partial;
         final BigDecimal fRem = partialRem, fNewWant = partialNewWant, fNeeded = needed;
+        progress(cb, "Selecting wallet coins");
         findCoins(payTok, needed, coins -> {
             if (coins == null) {
                 String why = takeFundError();
@@ -347,12 +350,14 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 if (a.pool.oadr != null) exclude.add(a.pool.oadr.toLowerCase());
             }
         }
+        progress(cb, "Selecting wallet coins");
         findCoins(prep.payTok, prep.needed, exclude, 8, coins -> {
             if (coins == null) {
                 String why = takeFundError();
                 cb.onFailed(why != null ? why : "Insufficient funds for trade");
                 return;
             }
+            progress(cb, "Wallet coins selected · checking pool access");
             ensureTrackedPools(prep.route == null ? new ArrayList<>() : prep.route.allocs, 0,
                     () -> buildComposite(commands, plan, prep, takerBuys, coins, payoutAddress, cb), message -> {
                         CoinLock.release(coins); cb.onFailed(message);
@@ -699,7 +704,9 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         if (!CoinLock.claimInputs(inputs)) {
             cb.onFailed("An input is already in another queued transaction or appears twice. Wait and refresh."); return;
         }
+        progress(cb, "Recovery receipt saved · waiting for signing slot");
         SignGate.submit(gate -> {
+            progress(cb, "Building transaction");
             final Result gated = new Result() {
                 private boolean completed;
                 private void finish(String id, String error) {
@@ -709,11 +716,16 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                     try { if (error == null) cb.onPosted(id); else cb.onFailed(error); }
                     finally { gate.free(); }
                 }
+                public void onProgress(String message) { progress(cb, message); }
                 public boolean beforePost() { return cb.beforePost(); }
                 public void onPosted(String id) { finish(id, null); }
                 public void onFailed(String message) { finish(null, message); }
             };
-            CmdChain.run(commands, new ArrayList<>(steps), "txndelete id:" + txid, new CmdChain.Done() {
+            FundingCoins.Command narrated = (command, callback) -> {
+                if (command.startsWith("txnsign ")) progress(gated, "Signing transaction");
+                commands.run(command, callback);
+            };
+            CmdChain.run(narrated, new ArrayList<>(steps), "txndelete id:" + txid, new CmdChain.Done() {
                 public void ok(JSONObject last) { checkAndPost(commands, txid, gated); }
                 public void fail(String message) { gated.onFailed(message); }
             });
@@ -721,6 +733,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     }
 
     private void checkAndPost(CommandSession.Snapshot commands, String txid, Result cb) {
+        progress(cb, "Checking scripts, amounts and input proofs");
         commands.run("txncheck id:" + txid, new NodeApi.Cb() {
             public void onResult(JSONObject checked) {
                 if (!commands.current()) { cb.onFailed(CommandSession.CHANGED); return; }
@@ -734,6 +747,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 }
                 // txnexport is NOT the serialized TxPoW, and returning its hex over IPC is costly.
                 // The stock node applies the chain's actual TxPoW size limit at txnpost.
+                progress(cb, "Checks passed · submitting to your node");
                 commands.run("txnpost id:" + txid, new NodeApi.Cb() {
                     public void onResult(JSONObject reply) {
                         if (reply.optBoolean("pending", false)) {
@@ -753,6 +767,11 @@ public class DexTxn {   // non-final so tests can stub the three order actions
                 commands.run("txndelete id:" + txid, null); cb.onFailed(message);
             }
         });
+    }
+
+    static void progress(Result callback, String message) {
+        try { callback.onProgress(message); }
+        catch (RuntimeException ignored) { /* A presentation failure must not interrupt a funds operation. */ }
     }
 
     static boolean amountOk(BigDecimal value) {

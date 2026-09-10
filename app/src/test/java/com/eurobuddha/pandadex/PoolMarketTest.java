@@ -91,4 +91,12 @@ public class PoolMarketTest {
         Store store=new Store();store.fail=true;List<String> calls=new ArrayList<>();discover(store,InclusionTimeTest.inclusion(),InclusionTimeTest.block(),calls);
         assertEquals(0,store.saved);assertEquals("DONE",calls.get(calls.size()-1));
     }
+    @Test public void addressReadFailureCompletesWithoutAdvancingOrSendingCommands() {
+        Store store=new Store(){public Set<String> marketPoolAddresses(){throw new IllegalStateException("unreadable");}};
+        int[] completed={0};
+        DexHistory history=new DexHistory((command,cb)->fail("must not query with unreadable pool address state"),store);
+        history.discover(null,()->completed[0]++);
+        assertEquals(1,completed[0]);assertTrue(history.recoveryError().contains("could not be read"));
+    }
+
 }

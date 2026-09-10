@@ -289,6 +289,7 @@ public final class Pending {
     private DexTxn.Result intentResult(List<Row> receipts,boolean creation,DexTxn.Result callback) {
         return new DexTxn.Result() {
             private boolean prepared,attempted,finished;
+            public void onProgress(String message) { DexTxn.progress(callback, message); }
             public boolean onPrepared(String handle) {
                 if(prepared||finished)return false;
                 try {

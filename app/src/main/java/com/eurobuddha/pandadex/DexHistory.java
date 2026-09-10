@@ -123,7 +123,11 @@ public final class DexHistory {
 
     /** Discover included V5 order spends even if no running book scan ever saw their inputs. */
     void discover(Discovery discovery, Runnable complete) {
-        if (poolMarket != null) poolMarket.begin();
+        try { if (poolMarket != null) poolMarket.begin(); }
+        catch (RuntimeException failure) {
+            recoveryError = "Pool history addresses could not be read. Existing receipts are retained; this search will retry.";
+            complete.run(); return;
+        }
         Discovery combined = poolMarket == null ? discovery : new Discovery() {
             public boolean known(String coinid, String txpowid) { return discovery.known(coinid, txpowid); }
             public void found(Order5 order, Spend spend) { discovery.found(order, spend); }

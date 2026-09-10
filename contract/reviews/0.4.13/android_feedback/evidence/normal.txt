@@ -1,0 +1,2 @@
+PASS 863 assertions
+Owner receipt Android normal
