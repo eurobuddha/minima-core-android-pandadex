@@ -66,9 +66,8 @@ public final class ChartTab extends LinearLayout {
         addView(chart, new LayoutParams(LayoutParams.MATCH_PARENT, Design.dp(act, 300)));
 
         TextView note = new TextView(act);
-        note.setText("Candles use this device's trade records and observation times, including older records that have not been rechecked. There is no "
-                + "server and no historical backfill, so the chart grows from the moment your "
-                + "node starts watching.");
+        note.setText("Charts use this device's saved trade records. Recovery may add trades from history retained by your node; "
+                + "older or pruned transactions may be missing. Export records for their time basis and chain evidence.");
         note.setTextColor(Design.DIM2());
         note.setTypeface(Design.sans());
         note.setTextSize(10f);

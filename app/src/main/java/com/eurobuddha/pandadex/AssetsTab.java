@@ -85,7 +85,8 @@ public final class AssetsTab extends LinearLayout {
 
         LinearLayout head = card();
         head.addView(t("AVAILABLE TO TRADE", Design.DIM(), 10f, Design.sansBold()));
-        if (mid != null && mid.signum() > 0) {
+        boolean balancesLoaded=act.minimaBalanceAtMs()>0&&act.usdtBalanceAtMs()>0;
+        if (balancesLoaded && act.makerBookReady() && mid != null && mid.signum() > 0) {
             BigDecimal value = freeU.add(freeM.multiply(mid, PriceMath.MC));
             head.addView(t("≈ " + PriceMath.fmt(value.setScale(4, RoundingMode.HALF_UP)) + " mxUSDT",
                     Design.TEXT(), 22f, Design.monoBold()));
@@ -93,7 +94,7 @@ public final class AssetsTab extends LinearLayout {
                     Design.DIM2(), 9.5f, Design.sans()));
         } else {
             head.addView(t("—", Design.TEXT(), 22f, Design.monoBold()));
-            head.addView(t("no book mid yet", Design.DIM2(), 9.5f, Design.sans()));
+            head.addView(t(balancesLoaded ? "Waiting for a current book price." : "Waiting for wallet balances from MinimaCore.", Design.DIM2(), 9.5f, Design.sans()));
         }
 
         assetCard("MINIMA · available to trade", freeM, act.minimaConfirmed(),
@@ -106,18 +107,18 @@ public final class AssetsTab extends LinearLayout {
         LinearLayout recv = card();
         recv.addView(t("RECEIVE", Design.DIM(), 10f, Design.sansBold()));
         String addr = act.receiveAddress();
-        TextView a = t(addr.isEmpty() ? "…" : addr, Design.TEXT(), 10f, Design.mono());
+        TextView a = t(addr.isEmpty() ? "Address not loaded" : addr, Design.TEXT(), 10f, Design.mono());
         recv.addView(a);
-        TextView copy = t("Tap to copy", Design.ACCENT(), 9.5f, Design.sans());
+        TextView copy = t(addr.isEmpty() ? "Connect to MinimaCore to load your receive address." : "Tap to copy", Design.ACCENT(), 9.5f, Design.sans());
         recv.addView(copy);
-        recv.setOnClickListener(v -> {
+        if (!addr.isEmpty()) recv.setOnClickListener(v -> {
             if (addr.isEmpty()) return;
             ClipboardManager cm = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm == null) return;
             cm.setPrimaryClip(ClipData.newPlainText("address", addr));
             act.toast("Address copied");
         });
-        Design.pressable(recv);
+        if (!addr.isEmpty()) Design.pressable(recv);
 
         LinearLayout bridge = card();
         bridge.addView(t("NEED mxUSDT?", Design.DIM(), 10f, Design.sansBold()));
@@ -130,6 +131,10 @@ public final class AssetsTab extends LinearLayout {
                            long updatedAtMs, BigDecimal inDexOrders) {
         LinearLayout c = card();
         c.addView(t(title, Design.DIM(), 10f, Design.sansBold()));
+        if(updatedAtMs<=0) {
+            c.addView(t("—", Design.TEXT(), 18f, Design.monoBold()));
+            c.addView(t("Balance not loaded. Connect to MinimaCore and wait for an update.", Design.DIM2(), 10f, Design.sans()));
+        } else {
         c.addView(t(PriceMath.fmt(sendable), Design.IN(), 18f, Design.monoBold()));
         c.addView(t("confirmed " + PriceMath.fmt(confirmed)
                 + "  ·  locked ≈ " + PriceMath.fmt(locked)
@@ -137,8 +142,9 @@ public final class AssetsTab extends LinearLayout {
                 + "  ·  " + coins + " coins"
                 + "  ·  updated " + age(updatedAtMs),
                 Design.DIM2(), 9.5f, Design.mono()));
+        }
         if (inDexOrders.signum() > 0) {
-            c.addView(t("in PandaDEX orders " + PriceMath.fmt(inDexOrders),
+            c.addView(t((act.makerBookReady() ? "in PandaDEX orders " : "in saved PandaDEX orders ") + PriceMath.fmt(inDexOrders),
                     Design.ACCENT(), 9.5f, Design.mono()));
         }
     }

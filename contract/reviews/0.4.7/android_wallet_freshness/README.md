@@ -1,0 +1,9 @@
+# Wallet freshness — audit32
+
+**913 actual Android assertions pass**:808 normal,16 before deliberate process death,31 after restart and58 full offline Activity checks. All current 0.4.7/407 Java hashes match build/execution. Reuses audit31's full harness and adds 18 UI assertions around cold unknown balances/orders, missing receive-address copy affordance, observed-zero display and retained cached orders.
+
+MinimaCore is absent (host shell checked), no INTERNET permission, and no production keepalive/boot/heartbeat components are declared. The real MainActivity and private NodeTransportService run in their actual separate processes. Six tabs, disconnected ready() spending guards, selected-tab recreation and foreground cleanup still pass. Zero-balance observations and the cached order are injected as test fixtures into the same Activity fields consumed by rendering; they are not real node replies or on-chain transactions. Existing component/SQLite/process-death evidence is rerun unchanged.
+
+Six changed-state screenshots personally reviewed: app-offline-assets.png, app-offline-orders.png, app-offline-trade.png, app-offline-chart.png, app-balance-zero.png and app-saved-orders.png. Unknown balances show dashes/guidance; simulated observed zeros remain numeric; saved orders remain visible with a freshness warning. All nine full-app screenshot hashes are in validation.json. Portrait dark theme only. The long audit-only version label still wraps the app logo; this is not evidence of release-header fit.
+
+APK `/private/tmp/pandadex-android-audit-build-32/pandadex-export-audit-32.apk`, SHA256 `c4e58188f44dcdd4aa1162e78160b3d7bb285e317f70ca01ab225676eeea51fb`, separate audit package/versionCode32/new output. Prior APKs preserved. Exact owned emulator/AVD/path verified before isolated ADB5049 commands; emulator/ADB/data/keys cleaned up. No user phone/node, signing, transaction submission, production release build, push or publication.

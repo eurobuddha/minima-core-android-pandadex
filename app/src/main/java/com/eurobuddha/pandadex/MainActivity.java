@@ -629,7 +629,8 @@ public class MainActivity extends AppCompatActivity {
     private void balances() {
         node.cmd("balance tokenid:0x00", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
-                BalanceMeta b = balanceMeta(json);
+                BalanceMeta b = balanceMeta(json, Util.MINIMA_TOKENID);
+                if(b.atMs<=0)return; // Keep the last valid observation and its original age.
                 minimaSendable = b.sendable;
                 minimaConfirmed = b.confirmed;
                 minimaUnconfirmed = b.unconfirmed;
@@ -642,7 +643,8 @@ public class MainActivity extends AppCompatActivity {
         });
         node.cmd("balance tokenid:" + DexContract.USDT_ID, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
-                BalanceMeta b = balanceMeta(json);
+                BalanceMeta b = balanceMeta(json, DexContract.USDT_ID);
+                if(b.atMs<=0)return; // A failed read is not a fresh zero balance.
                 usdtSendable = b.sendable;
                 usdtConfirmed = b.confirmed;
                 usdtUnconfirmed = b.unconfirmed;
@@ -667,23 +669,36 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    static BalanceMeta balanceMeta(JSONObject json) {
+    static BalanceMeta balanceMeta(JSONObject json) { return balanceMeta(json,null); }
+
+    /** Parse one token-scoped stock balance response, preserving unknown versus observed zero. */
+    static BalanceMeta balanceMeta(JSONObject json,String expectedToken) {
         BalanceMeta out = new BalanceMeta();
         if (json == null || !TxValidation.truthy(json, "status")) return out;
-        Object resp = json.opt("response");
-        JSONObject row = null;
-        if (resp instanceof JSONArray && ((JSONArray) resp).length() > 0) {
-            row = ((JSONArray) resp).optJSONObject(0);
-        } else if (resp instanceof JSONObject) {
-            row = (JSONObject) resp;
-        }
-        if (row == null || !row.has("sendable") || !row.has("confirmed")) return out;
-        // `balance` reports TOKEN units in sendable/confirmed for both native and tokens
-        out.confirmed = Util.dec(row.optString("confirmed", "0"));
-        out.sendable = Util.dec(row.optString("sendable", "0"));
-        out.unconfirmed = Util.dec(row.optString("unconfirmed", "0"));
-        out.coins = row.optInt("coins", row.optInt("coinamount", 0));
-        out.atMs = System.currentTimeMillis();
+        try {
+            if(expectedToken!=null&&!FundingCoins.hex(expectedToken))return out;
+            Object resp=json.opt("response");JSONObject row;
+            if(resp instanceof JSONArray) {
+                JSONArray rows=(JSONArray)resp;
+                // Stock balance always emits native MINIMA. An absent non-native token
+                // emits [] for its scoped query and is a genuine zero observation.
+                if(rows.length()==0) {
+                    if(expectedToken!=null&&!Util.MINIMA_TOKENID.equalsIgnoreCase(expectedToken))out.atMs=System.currentTimeMillis();
+                    return out;
+                }
+                if(rows.length()!=1)return out;
+                row=rows.getJSONObject(0);
+            }else if(resp instanceof JSONObject)row=(JSONObject)resp;
+            else return out;
+            if(expectedToken!=null&&!expectedToken.equalsIgnoreCase(MakerConfig.jsonString(row,"tokenid","")))return out;
+            BigDecimal confirmed=MakerConfig.storedDecimal(row.get("confirmed"));
+            BigDecimal sendable=MakerConfig.storedDecimal(row.get("sendable"));
+            BigDecimal unconfirmed=MakerConfig.storedDecimal(row.has("unconfirmed")?row.get("unconfirmed"):"0");
+            long coins=MakerConfig.storedBlock(row.has("coins")?row.get("coins"):row.has("coinamount")?row.get("coinamount"):0);
+            if(confirmed.signum()<0||sendable.signum()<0||unconfirmed.signum()<0||coins>Integer.MAX_VALUE)return out;
+            out.confirmed=confirmed;out.sendable=sendable;out.unconfirmed=unconfirmed;out.coins=(int)coins;
+            out.atMs=System.currentTimeMillis();
+        }catch(org.json.JSONException|RuntimeException invalid){ /* Unknown, not a fresh zero. */ }
         return out;
     }
 

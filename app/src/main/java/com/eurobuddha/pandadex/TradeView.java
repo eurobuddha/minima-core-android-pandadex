@@ -755,8 +755,9 @@ public final class TradeView extends LinearLayout {
             row.addView(cancel);
             ordersBox.addView(row);
         }
+        if(any&&!act.makerBookReady())ordersBox.addView(tv(OrdersTab.SAVED_ORDERS,10f,Design.DIM2(),Design.sans()));
         if (!any) {
-            ordersBox.addView(tv("No open orders", 11f, Design.DIM2(), Design.sans()));
+            ordersBox.addView(tv(act.makerBookReady() ? "No open orders" : OrdersTab.WAITING_ORDERS, 11f, Design.DIM2(), Design.sans()));
         }
     }
 

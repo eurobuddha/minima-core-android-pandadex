@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.eurobuddha.pandadex.BalanceDisplayTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-09-10T18:46:55" hostname="ProMacBuddha.local" time="0.021">
+  <properties/>
+  <testcase name="ambiguousScopedRowsCannotSelectFirstTokenSilently" classname="com.eurobuddha.pandadex.BalanceDisplayTest" time="0.018"/>
+  <testcase name="balanceMetaTreatsMissingResponseAsZero" classname="com.eurobuddha.pandadex.BalanceDisplayTest" time="0.0"/>
+  <testcase name="scopedBalanceMustMatchItsRequestedToken" classname="com.eurobuddha.pandadex.BalanceDisplayTest" time="0.001"/>
+  <testcase name="balanceMetaKeepsAtomiXSendableConfirmedLockedUnconfirmedSeparation" classname="com.eurobuddha.pandadex.BalanceDisplayTest" time="0.0"/>
+  <testcase name="scopedStockEmptyTokenReplyIsZeroButMissingNativeReplyIsUnknown" classname="com.eurobuddha.pandadex.BalanceDisplayTest" time="0.0"/>
+  <testcase name="fractionalOrOverflowCoinCountsAreNotSilentlyTruncated" classname="com.eurobuddha.pandadex.BalanceDisplayTest" time="0.0"/>
+  <testcase name="failedOrIncompleteBalanceCannotClaimConfirmedFundsAreSpendable" classname="com.eurobuddha.pandadex.BalanceDisplayTest" time="0.0"/>
+  <testcase name="malformedOrNegativeNumbersCannotBecomeFreshZeroBalances" classname="com.eurobuddha.pandadex.BalanceDisplayTest" time="0.001"/>
+  <testcase name="zeroAndLegacyCoinCountRemainValidObservations" classname="com.eurobuddha.pandadex.BalanceDisplayTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

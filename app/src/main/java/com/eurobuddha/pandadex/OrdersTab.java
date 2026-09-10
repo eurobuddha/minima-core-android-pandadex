@@ -74,6 +74,9 @@ public final class OrdersTab extends LinearLayout {
         if (sel == 0) renderOpen(); else if(sel==1) renderTrades(); else renderOperations();
     }
 
+    static final String WAITING_ORDERS = "Open orders have not loaded yet. Connect to MinimaCore and wait for an update.";
+    static final String SAVED_ORDERS = "Saved order list — waiting for a fresh node and wallet check.";
+
     private void renderOpen() {
         Map<String, Order5> book = act.book();
         long block = act.chainBlock();
@@ -165,7 +168,8 @@ public final class OrdersTab extends LinearLayout {
             lp.bottomMargin = Design.dp(getContext(), 8);
             body.addView(card, lp);
         }
-        if (!any) body.addView(line("No open orders", Design.DIM2(), 11f));
+        if (!any) body.addView(line(act.makerBookReady() ? "No open orders" : WAITING_ORDERS, Design.DIM2(), 11f));
+        else if(!act.makerBookReady())body.addView(line(SAVED_ORDERS, Design.DIM2(), 10f));
     }
 
     private void renderOperations() {
