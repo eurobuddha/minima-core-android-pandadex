@@ -18,8 +18,6 @@ public final class Pending {
     public static final String CANCEL = "CANCEL";
     public static final String EDIT = "EDIT";
 
-    /** After this long without the chain showing the result, say so plainly. */
-    private static final long SLOW_MS = 3 * 60_000;
     /** Stop claiming anything is in progress after this long — the chain is the truth and the
      *  book itself will show the real state. */
     private static final long GIVEUP_MS = 20 * 60_000;
@@ -107,6 +105,14 @@ public final class Pending {
             }catch(Exception malformed){return false;}
         }
 
+        /** Shared action identity for both receipt lists, including storage failure placeholders. */
+        public String description() {
+            if ("RECOVERY_ERROR".equals(kind)) return "Receipt storage problem";
+            String action = CANCEL.equals(kind) ? "Cancel order" : EDIT.equals(kind) ? "Update order" : "Place order";
+            return action + " · " + (buy ? "BUY " : "SELL ") + PriceMath.fmt(minima)
+                    + " MINIMA @ " + PriceMath.fmtPrice(price);
+        }
+
         /** Show persisted evidence, never infer submission or rejection from elapsed time. */
         public String status(long chainBlock) {
             if ("RECOVERY_ERROR".equals(kind)) return "Stored receipts could not be read. Trading is paused; preserve app data for recovery.";
@@ -116,24 +122,14 @@ public final class Pending {
                 return "Older order receipt: funding details were not saved. Its creation cannot yet be verified; check live orders and trade history.";
             if ("PREPARED".equals(phase))
                 return "Transaction intent saved; submission is not confirmed. Keep this receipt while recovery checks the chain.";
-            long secs = Math.max(0, (System.currentTimeMillis() - submitMs) / 1000);
-            String verb = PLACE.equals(kind) ? "Sending"
-                        : CANCEL.equals(kind) ? "Cancelling" : "Updating price";
-            // An open-ended "Sending…" tells the user nothing about whether to keep waiting.
-            // Blocks land roughly every 50s, so show the clock AND what we're waiting for —
-            // and once it is clearly overdue, say that plainly instead of spinning forever.
-            String clock = secs < 60 ? secs + "s" : (secs / 60) + "m " + (secs % 60) + "s";
-            if (PLACE.equals(kind)||!phase.isEmpty()) {
-                String evidence = "SUBMITTED".equals(phase) ? "Node accepted submission"
-                        : "POSTING".equals(phase) ? "Submission requested"
-                        : "Submission outcome unknown";
-                return evidence + " · " + clock + ". Checking the exact transaction on-chain; receipt retained.";
-            }
-            if (System.currentTimeMillis() - submitMs > SLOW_MS) {
-                return verb + " — " + clock + ", longer than usual. Its outcome is unknown; "
-                        + "this receipt is retained while the chain is checked.";
-            }
-            return verb + "… waiting for the next block (~50s) · " + clock;
+            long now = System.currentTimeMillis();
+            long secs = submitMs > 0 && submitMs <= now ? (now - submitMs) / 1000 : -1;
+            String clock = secs < 0 ? "time unavailable"
+                    : secs < 60 ? secs + "s" : (secs / 60) + "m " + (secs % 60) + "s";
+            String evidence = "SUBMITTED".equals(phase) ? "Node accepted submission"
+                    : "POSTING".equals(phase) ? "Submission requested"
+                    : "Submission outcome unknown";
+            return evidence + " · " + clock + ". On-chain verification pending; receipt retained.";
         }
     }
 
@@ -221,16 +217,18 @@ public final class Pending {
     }
     /** Durable owner attempts, independent of the processor's temporary pacing markers. */
     java.util.Set<String> unresolvedOwnerCoins() {
-        synchronized (STORE_LOCK) {
-            java.util.Set<String> result = new java.util.HashSet<>();
-            for (Row row : load()) {
-                if (!CANCEL.equals(row.kind) && !EDIT.equals(row.kind)) continue;
-                if ("NOT_SUBMITTED".equals(row.phase)) continue;
-                if (!FundingCoins.hex(row.coinid)) throw new IllegalStateException("Owner receipt source is unreadable");
-                result.add(row.coinid.toLowerCase(java.util.Locale.ROOT));
-            }
-            return result;
+        synchronized (STORE_LOCK) { return unresolvedOwnerCoins(load()); }
+    }
+    /** Same retained-intent rule for spending guards and both order screens. */
+    static java.util.Set<String> unresolvedOwnerCoins(List<Row> rows) {
+        java.util.Set<String> result = new java.util.HashSet<>();
+        for (Row row : rows) {
+            if (!CANCEL.equals(row.kind) && !EDIT.equals(row.kind)) continue;
+            if ("NOT_SUBMITTED".equals(row.phase)) continue;
+            if (!FundingCoins.hex(row.coinid)) throw new IllegalStateException("Owner receipt source is unreadable");
+            result.add(row.coinid.toLowerCase(java.util.Locale.ROOT));
         }
+        return result;
     }
 
     public void add(Row row) {

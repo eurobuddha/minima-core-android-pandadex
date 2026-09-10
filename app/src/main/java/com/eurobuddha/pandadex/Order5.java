@@ -164,6 +164,12 @@ public final class Order5 {
 
     public long age(long chainBlock) { return created <= 0 ? 0 : Math.max(0, chainBlock - created); }
 
+    /** A display label cannot treat a missing or earlier tip as an observed age of zero. */
+    public String ageLabel(long chainBlock, boolean current) {
+        if (created <= 0 || chainBlock <= 0 || chainBlock < created) return "age unavailable";
+        return "age " + age(chainBlock) + " blk" + (current ? "" : " at last check");
+    }
+
     public boolean expired(long chainBlock) { return age(chainBlock) > DexContract.EXPIRY_BLOCKS; }
 
     public boolean renewDue(long chainBlock) { return gtc && age(chainBlock) >= DexContract.RENEW_AT; }

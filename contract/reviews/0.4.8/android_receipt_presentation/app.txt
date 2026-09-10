@@ -1,0 +1,6 @@
+FAIL after 96 assertions
+java.lang.AssertionError: finishing Activity releases foreground ownership
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.check(OwnerReceiptAndroidAudit.java:13)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.offlineActivity(OwnerReceiptAndroidAudit.java:799)
+	at com.eurobuddha.pandadex.OwnerReceiptAndroidAudit.onStart(OwnerReceiptAndroidAudit.java:36)
+	at android.app.Instrumentation$InstrumentationThread.run(Instrumentation.java:2627)

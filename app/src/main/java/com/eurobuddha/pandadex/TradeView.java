@@ -727,15 +727,16 @@ public final class TradeView extends LinearLayout {
         ordersBox.removeAllViews();
         for (Pending.Row r : pending) {
             LinearLayout row = orderRowShell();
-            row.addView(tv("RECOVERY_ERROR".equals(r.kind) ? "Receipt storage problem" : (r.buy ? "BUY " : "SELL ") + PriceMath.fmt(r.minima) + " @ "
-                            + PriceMath.fmtPrice(r.price), 11f,
+            row.setOrientation(VERTICAL);
+            row.addView(tv(r.description(), 11f,
                     r.buy ? Design.IN() : Design.RED(), Design.mono()),
-                    new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+                    new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
             TextView st = tv(r.status(chainBlock), 9.5f, Design.ACCENT(), Design.sans());
             row.addView(st);
             ordersBox.addView(row);
         }
         boolean any = !pending.isEmpty();
+        java.util.Set<String> unresolved = Pending.unresolvedOwnerCoins(pending);
         for (Order5 o : book.values()) {
             if (!o.isMine(act.keys(), act.addrs())) continue;
             any = true;
@@ -745,14 +746,18 @@ public final class TradeView extends LinearLayout {
             row.addView(tv(label, 11f, o.sell ? Design.RED() : Design.IN(), Design.mono()),
                     new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
             if (o.expired(chainBlock)) {
-                row.addView(tv("EXPIRED", 9.5f, Design.DIM2(), Design.sans()));
+                row.addView(tv(act.makerBookReady() ? "EXPIRED" : "Expired at last check", 9.5f, Design.DIM2(), Design.sans()));
             }
-            TextView edit = tv(" ✎ ", 13f, Design.DIM(), Design.sans());
-            edit.setOnClickListener(v -> act.editOrder(o));
-            row.addView(edit);
-            TextView cancel = tv(" ✕ ", 13f, Design.RED(), Design.sans());
-            cancel.setOnClickListener(v -> act.cancelOrder(o));
-            row.addView(cancel);
+            if (unresolved.contains(o.coinid.toLowerCase(java.util.Locale.ROOT))) {
+                row.addView(tv(OrdersTab.UNRESOLVED_ACTION, 9.5f, Design.ACCENT(), Design.sans()));
+            } else {
+                TextView edit = tv(" ✎ ", 13f, Design.DIM(), Design.sans());
+                edit.setOnClickListener(v -> act.editOrder(o));
+                row.addView(edit);
+                TextView cancel = tv(" ✕ ", 13f, Design.RED(), Design.sans());
+                cancel.setOnClickListener(v -> act.cancelOrder(o));
+                row.addView(cancel);
+            }
             ordersBox.addView(row);
         }
         if(any&&!act.makerBookReady())ordersBox.addView(tv(OrdersTab.SAVED_ORDERS,10f,Design.DIM2(),Design.sans()));

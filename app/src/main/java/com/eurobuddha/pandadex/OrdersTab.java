@@ -77,6 +77,8 @@ public final class OrdersTab extends LinearLayout {
     static final String WAITING_ORDERS = "Open orders have not loaded yet. Connect to MinimaCore and wait for an update.";
     static final String SAVED_ORDERS = "Saved order list — waiting for a fresh node and wallet check.";
 
+    static final String UNRESOLVED_ACTION = "Order action unresolved — see its receipt above.";
+
     private void renderOpen() {
         Map<String, Order5> book = act.book();
         long block = act.chainBlock();
@@ -84,13 +86,9 @@ public final class OrdersTab extends LinearLayout {
 
         // Render the same durable receipt state as the trade screen, including interrupted,
         // legacy and definitely unsubmitted attempts. A pending row alone is not mining proof.
-        java.util.Set<String> cancelling = new java.util.HashSet<>();
-        for (Pending.Row r : act.pendingRows()) {
-            if (Pending.CANCEL.equals(r.kind)) {
-                cancelling.add(r.coinid);
-                continue;
-            }
-            if (!Pending.PLACE.equals(r.kind)) continue;
+        List<Pending.Row> receipts = act.pendingRows();
+        java.util.Set<String> unresolved = Pending.unresolvedOwnerCoins(receipts);
+        for (Pending.Row r : receipts) {
             any = true;
             LinearLayout card = new LinearLayout(getContext());
             card.setOrientation(VERTICAL);
@@ -98,8 +96,7 @@ public final class OrdersTab extends LinearLayout {
             int pp = Design.dp(getContext(), 10);
             card.setPadding(pp, pp, pp, pp);
             card.setAlpha(0.75f);
-            card.addView(line((r.buy ? "BUY " : "SELL ") + PriceMath.fmt(r.minima)
-                            + " MINIMA @ " + PriceMath.fmtPrice(r.price),
+            card.addView(line(r.description(),
                     r.buy ? Design.IN() : Design.RED(), 12f));
             card.addView(line(r.status(block),
                     Design.ACCENT(), 9.5f));
@@ -125,22 +122,22 @@ public final class OrdersTab extends LinearLayout {
         for (Order5 o : book.values()) {
             if (!o.isMine(act.keys(), act.addrs())) continue;
             any = true;
-            boolean isCancelling = cancelling.contains(o.coinid);
+            boolean actionUnresolved = unresolved.contains(o.coinid.toLowerCase(Locale.ROOT));
             LinearLayout card = new LinearLayout(getContext());
             card.setOrientation(VERTICAL);
             card.setBackground(Design.card(getContext(), 10));
             int p = Design.dp(getContext(), 10);
             card.setPadding(p, p, p, p);
-            if (isCancelling) card.setAlpha(0.6f);
+            if (actionUnresolved) card.setAlpha(0.6f);
 
             LinearLayout top = new LinearLayout(getContext());
             top.setGravity(Gravity.CENTER_VERTICAL);
             top.addView(line((o.sell ? "SELL " : "BUY ") + PriceMath.fmt(o.minimaAmount())
                             + " MINIMA @ " + PriceMath.fmtPrice(o.price()), o.sell ? Design.RED() : Design.IN(), 12f),
                     new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-            if (!isCancelling) {
-                // no edit/cancel affordances on an order that is already being cancelled —
-                // a second cancel would just burn proof-of-work on a doomed coin
+            if (!actionUnresolved) {
+                // Retained cancellation/edit intents already block duplicate owner writes.
+                // Definitely unsubmitted attempts leave the controls available.
                 TextView edit = line(" ✎ ", Design.DIM(), 14f);
                 edit.setOnClickListener(v -> act.editOrder(o));
                 top.addView(edit);
@@ -150,7 +147,7 @@ public final class OrdersTab extends LinearLayout {
             }
             card.addView(top);
 
-            String meta = (o.gtc ? "GTC ∞" : "expires") + "  ·  age " + o.age(block) + " blk"
+            String meta = (o.gtc ? "GTC ∞" : "expires") + "  ·  " + o.ageLabel(block, act.makerBookReady())
                     + "  ·  min remainder " + PriceMath.fmt(o.minRem)
                     + "  ·  total " + PriceMath.fmt(o.usdtAmount()) + " mxUSDT";
             card.addView(line(meta, Design.DIM2(), 9.5f));
@@ -160,9 +157,9 @@ public final class OrdersTab extends LinearLayout {
                 card.addView(line("MAKER RUNG — the published ladder owns this one",
                         Design.ACCENT(), 9f));
             }
-            if (isCancelling) card.addView(line("⏳ CANCELLING — gone when a block confirms it (~50s)",
+            if (actionUnresolved) card.addView(line(UNRESOLVED_ACTION,
                     Design.ACCENT(), 9.5f));
-            if (o.expired(block)) card.addView(line("EXPIRED — refundable to your wallet", Design.ACCENT(), 9.5f));
+            if (o.expired(block)) card.addView(line(act.makerBookReady() ? "EXPIRED — refundable to your wallet" : "Expired at last check — refresh before refunding", Design.ACCENT(), 9.5f));
 
             LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
             lp.bottomMargin = Design.dp(getContext(), 8);
