@@ -1,0 +1,33 @@
+{
+  "checked_utc": "2026-09-10T21:54:18.093683+00:00",
+  "device": "Z Fold SM-F966B",
+  "version_name": "0.4.14",
+  "version_code": 414,
+  "source_commit": "5fc955fa436729e24ce3cdc7a087a5879da7a42e",
+  "method": "Focused observed empty amount field; no text input, Execute, or manual scroll",
+  "price_bounds": [
+    64,
+    841,
+    1016,
+    939
+  ],
+  "amount_bounds": [
+    64,
+    955,
+    1016,
+    1053
+  ],
+  "buy_button_bounds": [
+    64,
+    1280,
+    1016,
+    1402
+  ],
+  "visible_ime_top": 1548,
+  "automatic_reveal_pass": true,
+  "screenshot_sha256": "18ac006e6b5bb75ea5edff858cc0571eaf4f8b663f22b889a03d4c3199843d50",
+  "last_trade_observed": "0.004452; 1 day ago; global recency not established",
+  "direct_node_commands_issued": false,
+  "funded_action_taken": false,
+  "unfolded_and_rotation_user_validation_pending": true
+}

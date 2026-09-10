@@ -25,3 +25,11 @@ Earlier attempts are not counted as passes: audit 44 had a fixture compilation e
 3. User identifies a recent known book/pool execution; compare its transaction ID, inclusion block/time and executed price on both devices after catch-up. User alone initiates any funded test (10 minutes). Independent incomplete history remains a market-data limitation if agreement is not established; report it, do not extend review indefinitely.
 
 Broader blockers remain in FINAL_TRIAGE_0.4.10.md and contract/COMPOSITE_LIVE_INTEROP.md. No push or publication before user testing/authorization. This is not a claim of complete security.
+
+## Actual stock-device follow-up
+
+Installed signed 0.4.14 (414) on Z Fold SM-F966B and S10+ SM-G975F with app data preserved. Both installed base APK hashes equal `c6445ecf3b50efddcd2df01a79882990458368c7efca8ad85084367b2554220e`; source commit `5fc955fa436729e24ce3cdc7a087a5879da7a42e`. Existing versioned APKs remain unchanged. No push or publication.
+
+Opened PandaDEX on the Fold outer screen, focused the observed empty Amount field, and inspected the actual Samsung-keyboard screenshot and UI bounds. Price bottom 939, Amount bottom 1053, Buy bottom 1402; keyboard top 1548. All are visible after automatic reveal, without manual scrolling or entering/executing a trade. The keyboard was dismissed afterward. Fold unfolded/rotation and S10+ keyboard behavior still require user testing.
+
+Fold header still showed 0.004452, 1 day ago on opening. Existing history convergence and the user's recent transaction remain unverified. This is a remaining market-data blocker, not evidence that all stale historical displays are repaired. The unique signed APK is for the authorized user test; no claim of global price agreement is made.
