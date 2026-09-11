@@ -109,7 +109,7 @@ public final class AssetsTab extends LinearLayout {
         String addr = act.receiveAddress();
         TextView a = t(addr.isEmpty() ? "Address not loaded" : addr, Design.TEXT(), 10f, Design.mono());
         recv.addView(a);
-        TextView copy = t(addr.isEmpty() ? "Connect to MinimaCore to load your receive address." : "Tap to copy", Design.ACCENT(), 9.5f, Design.sans());
+        TextView copy = t(addr.isEmpty() ? act.receiveLoadingMessage() : "Tap to copy", Design.ACCENT(), 9.5f, Design.sans());
         recv.addView(copy);
         if (!addr.isEmpty()) recv.setOnClickListener(v -> {
             if (addr.isEmpty()) return;

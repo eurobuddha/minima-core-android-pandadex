@@ -791,6 +791,10 @@ public class MainActivity extends AppCompatActivity {
         return balanceMessage(paired, pairingKnown, !(minima ? minimaBalanceError : usdtBalanceError).isEmpty());
     }
 
+    String receiveLoadingMessage() {
+        return paired ? "Loading receive address from MinimaCore…" : balanceMessage(false, pairingKnown, false);
+    }
+
     void retryBalances() {
         if (node == null) return;
         if (!paired) { node.reRegister(); return; }

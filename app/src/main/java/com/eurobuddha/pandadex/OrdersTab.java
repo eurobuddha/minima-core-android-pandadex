@@ -74,7 +74,7 @@ public final class OrdersTab extends LinearLayout {
         if (sel == 0) renderOpen(); else if(sel==1) renderTrades(); else renderOperations();
     }
 
-    static final String WAITING_ORDERS = "Open orders have not loaded yet. Connect to MinimaCore and wait for an update.";
+    static final String WAITING_ORDERS = "Open orders are loading from MinimaCore.";
     static final String SAVED_ORDERS = "Saved order list — waiting for a fresh node and wallet check.";
 
     static final String UNRESOLVED_ACTION = "Order action unresolved — see its receipt above.";

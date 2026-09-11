@@ -106,6 +106,7 @@ public class BalanceDisplayTest {
         assertNull(Util.decOr(max,null));
     }
     @Test public void startupAndConnectedLoadingDoNotAskForPairing() {
+        assertEquals("Open orders are loading from MinimaCore.",OrdersTab.WAITING_ORDERS);
         assertEquals("CONNECTING…",MainActivity.nodeLabel(false,false));
         assertEquals("NODE ✓",MainActivity.nodeLabel(true,true));
         assertEquals("PAIR IN MINIMA → APPS",MainActivity.nodeLabel(false,true));
