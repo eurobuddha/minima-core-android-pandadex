@@ -82,4 +82,37 @@ public class BalanceDisplayTest {
         assertEquals(0,MainActivity.balanceMeta(reply,"0x00").atMs);
     }
 
+    @Test public void s10StockNativeDustBalanceMustLoadExactly() throws Exception {
+        // Read-only `balance tokenid:0x00`, stock S10 Plus MinimaCore 1.1.2.3, 2026-09-11.
+        String confirmed="2241.24000043009800000003000000000000099989999929";
+        String sendable="1003.00000043009800000000000000000000099989999929";
+        JSONObject row=new JSONObject().put("tokenid","0x00").put("confirmed",confirmed)
+                .put("sendable",sendable).put("unconfirmed","0").put("coins","38");
+        MainActivity.BalanceMeta b=MainActivity.balanceMeta(new JSONObject().put("status",true)
+                .put("response",new org.json.JSONArray().put(row)),"0x00");
+        assertTrue("A valid stock balance with 44 decimal places must load",b.atMs>0);
+        assertEquals(new BigDecimal(confirmed),b.confirmed);
+        assertEquals(new BigDecimal(sendable),b.sendable);
+        assertEquals(0,new BigDecimal("1238.24000000000000000003").compareTo(b.locked()));
+        assertEquals(38,b.coins);
+        assertNull("Transaction parsing must keep its existing stricter limit",Util.decOr(sendable,null));
+    }
+
+    @Test public void stockBalancePrecisionIsBoundedWithoutRounding() throws Exception {
+        String max="12345678901234567890."+"1".repeat(44);
+        assertEquals(new BigDecimal(max),Util.balanceDecimal(max));
+        for(Object bad:new Object[]{max+"1","1e999999","1e-999999","1".repeat(101),true,new JSONObject(),"NaN"})
+            assertNull(String.valueOf(bad),Util.balanceDecimal(bad));
+        assertNull(Util.decOr(max,null));
+    }
+    @Test public void startupAndConnectedLoadingDoNotAskForPairing() {
+        assertEquals("CONNECTING…",MainActivity.nodeLabel(false,false));
+        assertEquals("NODE ✓",MainActivity.nodeLabel(true,true));
+        assertEquals("PAIR IN MINIMA → APPS",MainActivity.nodeLabel(false,true));
+        assertEquals("Connecting to MinimaCore…",MainActivity.balanceMessage(false,false,false));
+        assertEquals("Loading balance from MinimaCore…",MainActivity.balanceMessage(true,true,false));
+        assertEquals("Could not read this balance. Tap to retry.",MainActivity.balanceMessage(true,true,true));
+        assertTrue(MainActivity.balanceMessage(false,true,false).contains("enabled"));
+    }
+
 }

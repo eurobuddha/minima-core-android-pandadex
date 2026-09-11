@@ -104,7 +104,8 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout tabBar;
     private TextView pairPill, blockPill, footer;
     private int tab = TAB_TRADE;
-    private boolean paired = false;
+    private boolean paired = false, pairingKnown = false;
+    private String minimaBalanceError = "", usdtBalanceError = "";
     private Object pairingAttempt, pairingConnection;
     private boolean inputFocused = false;
     private long chainBlock = 0;
@@ -154,6 +155,7 @@ public class MainActivity extends AppCompatActivity {
         // node wiring AFTER first paint (local-first)
         node = new NodeApi(this, enabled -> {
             paired = enabled;
+            pairingKnown = true;
             scriptReady = false;
             pairingAttempt = null;
             if (txn != null) txn.invalidateIdentity();
@@ -564,7 +566,7 @@ public class MainActivity extends AppCompatActivity {
     private void repaint() {
         if (pairPill == null || isFinishing() || isDestroyed()) return;
         renderActivityLog();
-        pairPill.setText(paired ? "NODE ✓" : "PAIR IN MINIMA → APPS");
+        pairPill.setText(nodeLabel(paired, pairingKnown));
         pairPill.setTextColor(paired ? Design.IN() : Design.ACCENT());
         blockPill.setText("# " + (chainBlock > 0 ? chainBlock : "—"));
         for (int i = 0; i < tabBar.getChildCount(); i++) {
@@ -775,11 +777,33 @@ public class MainActivity extends AppCompatActivity {
         if (includePools && poolRepo != null) poolRepo.refresh();
     }
 
+    static String nodeLabel(boolean paired, boolean known) {
+        return paired ? "NODE ✓" : known ? "PAIR IN MINIMA → APPS" : "CONNECTING…";
+    }
+
+    static String balanceMessage(boolean paired, boolean known, boolean failed) {
+        if (!paired) return known ? "Open MinimaCore → Apps and check that PandaDEX is enabled."
+                : "Connecting to MinimaCore…";
+        return failed ? "Could not read this balance. Tap to retry." : "Loading balance from MinimaCore…";
+    }
+
+    String balanceMessage(boolean minima) {
+        return balanceMessage(paired, pairingKnown, !(minima ? minimaBalanceError : usdtBalanceError).isEmpty());
+    }
+
+    void retryBalances() {
+        if (node == null) return;
+        if (!paired) { node.reRegister(); return; }
+        minimaBalanceError = ""; usdtBalanceError = "";
+        repaint(); balances();
+    }
+
     private void balances() {
         node.cmd("balance tokenid:0x00", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 BalanceMeta b = balanceMeta(json, Util.MINIMA_TOKENID);
-                if(b.atMs<=0)return; // Keep the last valid observation and its original age.
+                if(b.atMs<=0) { minimaBalanceError="Invalid balance reply"; repaint(); return; }
+                minimaBalanceError=""; // Keep exact stock precision; format only at the view.
                 minimaSendable = b.sendable;
                 minimaConfirmed = b.confirmed;
                 minimaUnconfirmed = b.unconfirmed;
@@ -788,12 +812,13 @@ public class MainActivity extends AppCompatActivity {
                 maybeClearMakerSplitPending(Util.MINIMA_TOKENID, b);
                 repaint();
             }
-            @Override public void onError(String message) {}
+            @Override public void onError(String message) { minimaBalanceError=message; repaint(); }
         });
         node.cmd("balance tokenid:" + DexContract.USDT_ID, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 BalanceMeta b = balanceMeta(json, DexContract.USDT_ID);
-                if(b.atMs<=0)return; // A failed read is not a fresh zero balance.
+                if(b.atMs<=0) { usdtBalanceError="Invalid balance reply"; repaint(); return; }
+                usdtBalanceError=""; // A failed read is not a fresh zero balance.
                 usdtSendable = b.sendable;
                 usdtConfirmed = b.confirmed;
                 usdtUnconfirmed = b.unconfirmed;
@@ -802,7 +827,7 @@ public class MainActivity extends AppCompatActivity {
                 maybeClearMakerSplitPending(DexContract.USDT_ID, b);
                 repaint();
             }
-            @Override public void onError(String message) {}
+            @Override public void onError(String message) { usdtBalanceError=message; repaint(); }
         });
     }
 
@@ -840,11 +865,11 @@ public class MainActivity extends AppCompatActivity {
             }else if(resp instanceof JSONObject)row=(JSONObject)resp;
             else return out;
             if(expectedToken!=null&&!expectedToken.equalsIgnoreCase(MakerConfig.jsonString(row,"tokenid","")))return out;
-            BigDecimal confirmed=MakerConfig.storedDecimal(row.get("confirmed"));
-            BigDecimal sendable=MakerConfig.storedDecimal(row.get("sendable"));
-            BigDecimal unconfirmed=MakerConfig.storedDecimal(row.has("unconfirmed")?row.get("unconfirmed"):"0");
+            BigDecimal confirmed=Util.balanceDecimal(row.get("confirmed"));
+            BigDecimal sendable=Util.balanceDecimal(row.get("sendable"));
+            BigDecimal unconfirmed=Util.balanceDecimal(row.has("unconfirmed")?row.get("unconfirmed"):"0");
             long coins=MakerConfig.storedBlock(row.has("coins")?row.get("coins"):row.has("coinamount")?row.get("coinamount"):0);
-            if(confirmed.signum()<0||sendable.signum()<0||unconfirmed.signum()<0||coins>Integer.MAX_VALUE)return out;
+            if(confirmed==null||sendable==null||unconfirmed==null||confirmed.signum()<0||sendable.signum()<0||unconfirmed.signum()<0||coins>Integer.MAX_VALUE)return out;
             out.confirmed=confirmed;out.sendable=sendable;out.unconfirmed=unconfirmed;out.coins=(int)coins;
             out.atMs=System.currentTimeMillis();
         }catch(org.json.JSONException|RuntimeException invalid){ /* Unknown, not a fresh zero. */ }

@@ -99,10 +99,10 @@ public final class AssetsTab extends LinearLayout {
 
         assetCard("MINIMA · available to trade", freeM, act.minimaConfirmed(),
                 act.minimaLockedNode(), act.minimaUnconfirmed(), act.minimaCoins(),
-                act.minimaBalanceAtMs(), lockedMinima);
+                act.minimaBalanceAtMs(), lockedMinima, true);
         assetCard("mxUSDT · available to trade", freeU, act.usdtConfirmed(),
                 act.usdtLockedNode(), act.usdtUnconfirmed(), act.usdtCoins(),
-                act.usdtBalanceAtMs(), lockedUsdt);
+                act.usdtBalanceAtMs(), lockedUsdt, false);
 
         LinearLayout recv = card();
         recv.addView(t("RECEIVE", Design.DIM(), 10f, Design.sansBold()));
@@ -128,12 +128,13 @@ public final class AssetsTab extends LinearLayout {
 
     private void assetCard(String title, BigDecimal sendable, BigDecimal confirmed,
                            BigDecimal locked, BigDecimal unconfirmed, int coins,
-                           long updatedAtMs, BigDecimal inDexOrders) {
+                           long updatedAtMs, BigDecimal inDexOrders, boolean minima) {
         LinearLayout c = card();
         c.addView(t(title, Design.DIM(), 10f, Design.sansBold()));
         if(updatedAtMs<=0) {
             c.addView(t("—", Design.TEXT(), 18f, Design.monoBold()));
-            c.addView(t("Balance not loaded. Connect to MinimaCore and wait for an update.", Design.DIM2(), 10f, Design.sans()));
+            c.addView(t(act.balanceMessage(minima), Design.DIM2(), 10f, Design.sans()));
+            c.setOnClickListener(v -> act.retryBalances());
         } else {
         c.addView(t(PriceMath.fmt(sendable), Design.IN(), 18f, Design.monoBold()));
         c.addView(t("confirmed " + PriceMath.fmt(confirmed)

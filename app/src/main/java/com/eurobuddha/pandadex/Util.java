@@ -80,10 +80,21 @@ public final class Util {
 
     /** Parse a decimal string, returning {@code fallback} on null/blank/malformed input (never throws). */
     public static BigDecimal decOr(String s, BigDecimal fallback) {
+        return boundedDecimal(s, fallback, 44);
+    }
+
+    /** Stock MiniNumber balances allow 64 significant digits, including 44 decimal places.
+     * Keep this separate from the stricter order/transaction input parser. */
+    static BigDecimal balanceDecimal(Object raw) {
+        if (!(raw instanceof String) && !(raw instanceof Number)) return null;
+        return boundedDecimal(raw.toString(), null, 64);
+    }
+
+    private static BigDecimal boundedDecimal(String s, BigDecimal fallback, int precision) {
         if (s == null || s.length() > 100 || s.trim().isEmpty()) return fallback;
         try {
             BigDecimal value = new BigDecimal(s.trim());
-            return Math.abs((long) value.scale()) <= 44 && value.precision() <= 44 ? value : fallback;
+            return Math.abs((long) value.scale()) <= 44 && value.precision() <= precision ? value : fallback;
         } catch (NumberFormatException e) { return fallback; }
     }
 }
