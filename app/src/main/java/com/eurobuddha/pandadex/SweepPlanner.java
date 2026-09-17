@@ -48,7 +48,7 @@ public final class SweepPlanner {
      * @param book        live orders
      * @param takerBuys   true = taker wants to BUY MINIMA (consumes SELL orders)
      * @param wantMinima  MINIMA the taker wants to trade
-     * @param limitPrice  worst acceptable price (mxUSDT per MINIMA); null = pure market
+     * @param limitPrice  worst acceptable price (MxUSD per MINIMA); null = pure market
      * @param chainBlock  for expiry filtering
      */
     public static Plan plan(Collection<Order5> book, boolean takerBuys, BigDecimal wantMinima,
@@ -114,7 +114,7 @@ public final class SweepPlanner {
                 ? PriceMath.payFor(o.wantAmt, o.locked, lockedTake,
                         o.sell ? PriceMath.USDT_DP : PriceMath.MINIMA_DP)
                 : o.wantAmt;
-        // for sells the payment is mxUSDT; for buys (taker selling) the payment is MINIMA —
+        // for sells the payment is MxUSD; for buys (taker selling) the payment is MINIMA —
         // totalUsdt tracks the USDT side either way
         plan.totalUsdt = plan.totalUsdt.add(o.sell ? pay : lockedTake);
     }

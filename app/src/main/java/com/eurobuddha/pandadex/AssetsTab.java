@@ -13,7 +13,7 @@ import java.math.RoundingMode;
 import java.util.Map;
 
 /** ASSETS tab: node wallet balances using sendable / confirmed / locked / unconfirmed,
- *  receive address, and the mxUSDT bridge pointer. */
+ *  receive address, and the MxUSD bridge pointer. */
 @SuppressLint("ViewConstructor")
 public final class AssetsTab extends LinearLayout {
 
@@ -88,7 +88,7 @@ public final class AssetsTab extends LinearLayout {
         boolean balancesLoaded=act.minimaBalanceAtMs()>0&&act.usdtBalanceAtMs()>0;
         if (balancesLoaded && act.makerBookReady() && mid != null && mid.signum() > 0) {
             BigDecimal value = freeU.add(freeM.multiply(mid, PriceMath.MC));
-            head.addView(t("≈ " + PriceMath.fmt(value.setScale(4, RoundingMode.HALF_UP)) + " mxUSDT",
+            head.addView(t("≈ " + PriceMath.fmt(value.setScale(4, RoundingMode.HALF_UP)) + " MxUSD",
                     Design.TEXT(), 22f, Design.monoBold()));
             head.addView(t("sendable funds only, valued at book mid " + PriceMath.fmtPrice(mid),
                     Design.DIM2(), 9.5f, Design.sans()));
@@ -100,7 +100,7 @@ public final class AssetsTab extends LinearLayout {
         assetCard("MINIMA · available to trade", freeM, act.minimaConfirmed(),
                 act.minimaLockedNode(), act.minimaUnconfirmed(), act.minimaCoins(),
                 act.minimaBalanceAtMs(), lockedMinima, true);
-        assetCard("mxUSDT · available to trade", freeU, act.usdtConfirmed(),
+        assetCard("MxUSD · available to trade", freeU, act.usdtConfirmed(),
                 act.usdtLockedNode(), act.usdtUnconfirmed(), act.usdtCoins(),
                 act.usdtBalanceAtMs(), lockedUsdt, false);
 
@@ -120,9 +120,9 @@ public final class AssetsTab extends LinearLayout {
         if (!addr.isEmpty()) Design.pressable(recv);
 
         LinearLayout bridge = card();
-        bridge.addView(t("NEED mxUSDT?", Design.DIM(), 10f, Design.sansBold()));
-        bridge.addView(t("mxUSDT is the wrapped-USDT token on Minima. Bridge in at mxusd.global, "
-                + "or swap ERC20 USDT ↔ mxUSDT with AtomiX.", Design.DIM2(), 10f, Design.sans()));
+        bridge.addView(t("NEED MxUSD?", Design.DIM(), 10f, Design.sansBold()));
+        bridge.addView(t("MxUSD is the wrapped-USDT token on Minima. Bridge in at mxusd.global, "
+                + "or swap ERC20 USDT ↔ MxUSD with AtomiX.", Design.DIM2(), 10f, Design.sans()));
     }
 
     private void assetCard(String title, BigDecimal sendable, BigDecimal confirmed,

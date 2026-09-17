@@ -28,7 +28,7 @@ LET r=STATE(90)
 RETURN r LT @AMOUNT AND r GTE PREVSTATE(8) AND STATE(92)*@AMOUNT GTE w*r AND STATE(92) LTE w AND STATE(91)*@AMOUNT GTE w*(@AMOUNT-r)
 """)
 
-GRAIN = Decimal("0.00000001")   # 8dp mxUSDT token grain
+GRAIN = Decimal("0.00000001")   # 8dp MxUSD token grain
 
 
 def ceil_grain(x):

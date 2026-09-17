@@ -1,6 +1,6 @@
 # PandaDEX
 
-A fully-decentralized, MEXC-style limit-order exchange for **MINIMA ⇄ mxUSDT**, running as a
+A fully-decentralized, MEXC-style limit-order exchange for **MINIMA ⇄ MxUSD**, running as a
 native Android app against your own Minima node.
 
 There is no server. No matching engine, no order-book API, no price feed, no relay. The order

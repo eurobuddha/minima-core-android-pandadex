@@ -32,7 +32,7 @@ public final class Notifier {
     public static void fill(Context c, boolean sold, BigDecimal minima, BigDecimal price, boolean partial) {
         alert(c, (partial ? "Order partially filled" : "Order filled"),
                 (sold ? "Sold " : "Bought ") + PriceMath.fmt(minima) + " MINIMA @ "
-                        + PriceMath.fmtPrice(price) + " mxUSDT");
+                        + PriceMath.fmtPrice(price) + " MxUSD");
     }
 
     public static void alert(Context c, String title, String body) {

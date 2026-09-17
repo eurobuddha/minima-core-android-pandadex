@@ -95,7 +95,7 @@ public class PriceDisplayTest {
     // ---------------- D1: fixed-width price rendering ----------------
 
     @Test public void pricesAlwaysShowSixDecimals() {
-        // six, not five: at ~0.05 mxUSDT a five-decimal tick is too coarse to tell two real
+        // six, not five: at ~0.05 MxUSD a five-decimal tick is too coarse to tell two real
         // orders apart or to show what you're actually about to trade at
         assertEquals(6, PriceMath.DISPLAY_DP);
         assertEquals("0.052000", PriceMath.fmtPrice(new BigDecimal("0.052")));

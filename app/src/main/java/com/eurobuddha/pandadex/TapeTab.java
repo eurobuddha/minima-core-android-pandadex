@@ -98,7 +98,7 @@ public final class TapeTab extends LinearLayout {
             Totals totals = totals(mine);
             summary.addView(mono("Rows " + mine.size()
                     + "   Net " + PriceMath.fmt(totals.netM) + " MINIMA"
-                    + "   " + PriceMath.fmt(totals.netU) + " mxUSDT", Design.TEXT(), 10.5f));
+                    + "   " + PriceMath.fmt(totals.netU) + " MxUSD", Design.TEXT(), 10.5f));
             summary.addView(tv("Rows awaiting recheck stay visible and are excluded from net totals.", 9.5f, Design.DIM2(), Design.sans()));
             summary.addView(tv("Wallet trade records; older rows may lack chain proof. Times use the inclusion block when verified; otherwise they show this device’s observation.",
                     9.5f, Design.DIM2(), Design.sans()));

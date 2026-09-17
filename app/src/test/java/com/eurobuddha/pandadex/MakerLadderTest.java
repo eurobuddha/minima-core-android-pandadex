@@ -220,8 +220,8 @@ public class MakerLadderTest {
         MakerLadder.Commitments cm = MakerLadder.commitments(
                 MakerLadder.desired(null, c, BigDecimal.ONE));
         assertEquals("asks lock MINIMA", 0, new BigDecimal("300").compareTo(cm.askMinima));
-        // bid locks 50 × 0.04 = 2 mxUSDT
-        assertEquals("bids lock mxUSDT", 0, new BigDecimal("2").compareTo(cm.bidUsdt));
+        // bid locks 50 × 0.04 = 2 MxUSD
+        assertEquals("bids lock MxUSD", 0, new BigDecimal("2").compareTo(cm.bidUsdt));
     }
 
     @Test public void crossedMarketIsDetected() {

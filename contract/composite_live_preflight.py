@@ -18,7 +18,7 @@ import urllib.error
 from decimal import Decimal
 
 RPC = os.environ.get("PANDADEX_LIVE_RPC", "http://127.0.0.1:16005/")
-MXUSDT = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90"
+MXUSD = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90"
 SENTINEL = "0x50414E4441504F4F4C53"  # "PANDAPOOLS"
 DEPTH = 1500
 
@@ -140,9 +140,9 @@ def discover():
     print("# PandaDEX + PandaPools live preflight")
     print("rpc:", RPC)
     print("block:", tip)
-    print("mxUSDT:", MXUSDT)
+    print("MxUSD:", MXUSD)
     print("MINIMA balance:", json.dumps(balance("0x00"), sort_keys=True))
-    print("mxUSDT balance:", json.dumps(balance(MXUSDT), sort_keys=True))
+    print("MxUSD balance:", json.dumps(balance(MXUSD), sort_keys=True))
     print()
 
     cmd = "coins simplestate:true order:desc depth:%d address:%s" % (DEPTH, SENTINEL)
@@ -158,7 +158,7 @@ def discover():
         kmin = state_value(c, 5)
         if not (tok and oadr and opk and kmin):
             continue
-        if tok.lower() != MXUSDT.lower():
+        if tok.lower() != MXUSD.lower():
             continue
         key = (opk + "|" + tok + "|" + kmin).lower()
         created = int(c.get("created", "0") or 0)
@@ -167,7 +167,7 @@ def discover():
             grouped[key] = {"opk": opk, "oadr": oadr, "tok": tok, "kmin": kmin,
                             "created": created, "coinid": c.get("coinid", "")}
 
-    print("candidate mxUSDT pool beacons:", len(grouped))
+    print("candidate MxUSD pool beacons:", len(grouped))
     print()
     found = 0
     for i, p in enumerate(grouped.values(), 1):
@@ -188,11 +188,11 @@ def discover():
         if rs["minima"]:
             print("  MINIMA reserve:", rs["minima"].get("coinid"), rs["minima"].get("amount"))
         if rs["token"]:
-            print("  mxUSDT reserve:", rs["token"].get("coinid"), rs["token"].get("tokenamount", rs["token"].get("amount")))
+            print("  MxUSD reserve:", rs["token"].get("coinid"), rs["token"].get("tokenamount", rs["token"].get("amount")))
         print()
     print("funded pools:", found)
     if found == 0:
-        print("status: PREFLIGHT_INCOMPLETE - no funded PandaPools MINIMA/mxUSDT pool visible in the bounded scan")
+        print("status: PREFLIGHT_INCOMPLETE - no funded PandaPools MINIMA/MxUSD pool visible in the bounded scan")
         return 2
     print("status: PREFLIGHT_OK - funded pool(s) visible; live dust posting still requires explicit approval")
     return 0
@@ -204,7 +204,7 @@ def main():
         return 64
     try:
         if len(sys.argv) > 1 and sys.argv[1] == "status":
-            print(json.dumps({"rpc": RPC, "block": ok("block"), "minima": balance("0x00"), "mxusdt": balance(MXUSDT)}, indent=2))
+            print(json.dumps({"rpc": RPC, "block": ok("block"), "minima": balance("0x00"), "mxusd": balance(MXUSD)}, indent=2))
             return 0
         return discover()
     except RuntimeError as e:

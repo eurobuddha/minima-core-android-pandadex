@@ -151,7 +151,7 @@ public class MakerEngineTest {
 
     @Test public void anAsyncSendFailureRecordsNothing() throws Exception {
         // THE 0.2.6 BUG: the slot was recorded as soon as createOrder returned, so a send the
-        // node rejected later (unfunded — the live mxUSDT contention case) left a dead id in
+        // node rejected later (unfunded — the live MxUSD contention case) left a dead id in
         // the map that could never resolve and was re-created + overwritten every cycle.
         txn.failCreates = true;
         invokeRun(Arrays.asList(newCreate(slot("B1", false, "0.05", "100"))));
@@ -517,7 +517,7 @@ public class MakerEngineTest {
 
     @Test public void oneCreatePerSidePerCycleAvoidsFundingContention() {
         // two same-side sends in one cycle fight over the same wallet coins: the second fails
-        // unfunded until the first's change confirms (observed live with mxUSDT bids)
+        // unfunded until the first's change confirms (observed live with MxUSD bids)
         MarketPrice.testSnapshot(0.05, System.currentTimeMillis());
         cfg.armed = true;
         cfg.pegged = true;

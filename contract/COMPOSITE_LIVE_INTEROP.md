@@ -3,7 +3,7 @@
 This is the remaining release-gate proof for composite liquidity. The private-chain harness
 (`contract/composite.py`) already proves pool-only, mixed buy, mixed sell, transaction layout,
 and adversarial stale/race cases. This runbook is only for the final dust test on the real
-mainnet node, where writes spend real MINIMA and mxUSDT.
+mainnet node, where writes spend real MINIMA and MxUSD.
 
 Do not run this from an automated agent session. Use the two Android apps on real devices, or
 explicitly approved live-node commands, and stop before any `txnpost` if a preflight check fails.
@@ -22,10 +22,10 @@ and every write spends real funds. Keep that property for this test.
 
 All of these must be true before marking composite liquidity complete:
 
-1. PandaDEX discovers a PandaPools-created MINIMA/mxUSDT pool through the `PANDAPOOLS`
+1. PandaDEX discovers a PandaPools-created MINIMA/MxUSD pool through the `PANDAPOOLS`
    sentinel using a bounded `depth:1500` scan.
 2. PandaDEX re-derives the pool covenant with `runscript`, requires `parseok:true`, derives the
-   address itself, and uses the largest unspent MINIMA and mxUSDT reserve coins at that address.
+   address itself, and uses the largest unspent MINIMA and MxUSD reserve coins at that address.
 3. A pool-only dust trade is posted by PandaDEX and lands on mainnet.
 4. A mixed dust trade is posted by PandaDEX and lands on mainnet with at least one V5 order coin
    and at least one PandaPools reserve pair consumed in the same transaction.
@@ -46,10 +46,10 @@ Record these values before posting any live trade:
 | chain block before test | |
 | PandaDEX version | |
 | PandaPools version | |
-| mxUSDT token id | `0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90` |
+| MxUSD token id | `0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90` |
 | pool address | |
 | pool MINIMA reserve coin id | |
-| pool mxUSDT reserve coin id | |
+| pool MxUSD reserve coin id | |
 | pool reserves before pool-only trade | |
 | pool reserves before mixed trade | |
 | V5 order coin id used in mixed trade | |
@@ -69,19 +69,19 @@ Or use the read-only helper:
 python3 contract/composite_live_preflight.py
 ```
 
-It performs the bounded sentinel scan, re-derives candidate mxUSDT pool covenants with
+It performs the bounded sentinel scan, re-derives candidate MxUSD pool covenants with
 `runscript`, selects the largest unspent reserve coin for each leg, and prints the pool
 address/reserve evidence. It deliberately does not run any write command.
 
 Abort before posting if the sentinel scan is empty after only one transient read, oversized, or
 contains a beacon whose covenant does not parse or re-derive to the advertised pool address.
-Abort if either reserve leg is missing, spent, or not MINIMA/mxUSDT.
+Abort if either reserve leg is missing, spent, or not MINIMA/MxUSD.
 Abort if the live node cannot return a current `block` response, for example while it reports
 `NO Blocks yet..` or is still syncing.
 
 ## Pool-only dust trade
 
-1. Create or identify a dust PandaPools MINIMA/mxUSDT pool in PandaPools.
+1. Create or identify a dust PandaPools MINIMA/MxUSD pool in PandaPools.
 2. Open PandaDEX and wait for the pool liquidity to appear as labelled `POOL` depth.
 3. Use a dust amount that can be filled entirely by the pool, with the order book empty or priced
    outside the limit.
@@ -98,9 +98,9 @@ Evidence to keep:
 | worst marginal price | |
 | transaction id / TxPoW | |
 | old pool MINIMA coin spent | |
-| old pool mxUSDT coin spent | |
+| old pool MxUSD coin spent | |
 | new pool MINIMA reserve coin id / amount | |
-| new pool mxUSDT reserve coin id / amount | |
+| new pool MxUSD reserve coin id / amount | |
 
 ## Mixed dust trade
 
@@ -128,7 +128,7 @@ Evidence to keep:
 | transaction id / TxPoW | |
 | order full-fill or remainder coin id | |
 | new pool MINIMA reserve coin id / amount | |
-| new pool mxUSDT reserve coin id / amount | |
+| new pool MxUSD reserve coin id / amount | |
 | personal-history row | |
 | public tape / candle impact | order-fill based only |
 

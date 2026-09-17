@@ -941,7 +941,7 @@ public class MainActivity extends AppCompatActivity {
           .append(" MINIMA now from ").append(plan.takes.size())
           .append(plan.takes.size() == 1 ? " order" : " orders").append("\n");
         sb.append("Avg price ").append(PriceMath.fmt(SweepPlanner.avgPrice(plan)))
-          .append("  ·  ").append(PriceMath.fmt(plan.totalUsdt)).append(" mxUSDT\n");
+          .append("  ·  ").append(PriceMath.fmt(plan.totalUsdt)).append(" MxUSD\n");
         for (SweepPlanner.Take t : plan.takes) {
             sb.append("  • ").append(PriceMath.fmt(t.minima)).append(" @ ")
               .append(PriceMath.fmtPrice(t.order.price())).append(t.partial ? "  (partial)" : "").append("\n");
@@ -1039,15 +1039,15 @@ public class MainActivity extends AppCompatActivity {
         sb.append(buy ? "Buying " : "Selling ").append(PriceMath.fmt(plan.totalMinima))
           .append(" MINIMA now\n");
         sb.append("Effective ").append(PriceMath.fmtPrice(plan.effectivePrice))
-          .append("  ·  ").append(PriceMath.fmt(plan.totalUsdt)).append(" mxUSDT\n");
+          .append("  ·  ").append(PriceMath.fmt(plan.totalUsdt)).append(" MxUSD\n");
         if (plan.orderMinima.signum() > 0) {
             sb.append("BOOK ").append(PriceMath.fmt(plan.orderMinima)).append(" MINIMA / ")
-              .append(PriceMath.fmt(plan.orderUsdt)).append(" mxUSDT across ")
+              .append(PriceMath.fmt(plan.orderUsdt)).append(" MxUSD across ")
               .append(plan.orderTakes.size()).append(plan.orderTakes.size() == 1 ? " order\n" : " orders\n");
         }
         if (plan.poolMinima.signum() > 0) {
             sb.append("POOL ").append(PriceMath.fmt(plan.poolMinima)).append(" MINIMA / ")
-              .append(PriceMath.fmt(plan.poolUsdt)).append(" mxUSDT across ")
+              .append(PriceMath.fmt(plan.poolUsdt)).append(" MxUSD across ")
               .append(plan.poolCount()).append(plan.poolCount() == 1 ? " pool\n" : " pools\n");
             String impact = poolImpact(plan);
             if (!impact.isEmpty()) sb.append("Price impact ").append(impact).append("\n");
@@ -1062,7 +1062,7 @@ public class MainActivity extends AppCompatActivity {
             BigDecimal m = buy ? a.quote.outAmount : a.quote.inAmount;
             BigDecimal u = buy ? a.quote.inAmount : a.quote.outAmount;
             sb.append("  • POOL ").append(PriceMath.fmt(m)).append(" MINIMA / ")
-              .append(PriceMath.fmt(u)).append(" mxUSDT\n");
+              .append(PriceMath.fmt(u)).append(" MxUSD\n");
         }
         if (rest.signum() > 0) {
             sb.append("\nResting ").append(PriceMath.fmt(rest)).append(" MINIMA @ ")
@@ -1465,7 +1465,7 @@ public class MainActivity extends AppCompatActivity {
                 ? "Stop the maker and request withdrawal of its recorded orders? No open orders are visible in this snapshot, but a submission may still be in progress."
                 : "Request cancellation of all " + mine.size() + " visible order" + (mine.size()==1?"":"s")
                     + "?\n\nThese orders lock " + PriceMath.fmt(totalMinima) + " MINIMA and "
-                    + PriceMath.fmt(totalUsdt) + " mxUSDT. Funds return after successful cancellation. "
+                    + PriceMath.fmt(totalUsdt) + " MxUSD. Funds return after successful cancellation. "
                     + "Cancellations are submitted in batches; orders can still fill until their cancellation confirms.";
         if(stopMaker)msg+="\n\nThe maker will be paused too"
                 +(rungs>0?" ("+rungs+" visible maker orders)":"")
@@ -1595,7 +1595,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (c.bidUsdt.compareTo(usdtSendable) > 0) {
             lack.append("Bids need ").append(PriceMath.fmt(c.bidUsdt))
-                    .append(" mxUSDT — you have ").append(PriceMath.fmt(usdtSendable))
+                    .append(" MxUSD — you have ").append(PriceMath.fmt(usdtSendable))
                     .append(" sendable");
             appendUnavailable(lack, usdtLockedNode(), usdtUnconfirmed);
             lack.append(".\n");
@@ -1613,7 +1613,7 @@ public class MainActivity extends AppCompatActivity {
                         + PriceMath.fmt(c.askMinima) + " MINIMA" : "no asks")
                 + " and "
                 + (nBids > 0 ? nBids + " bid" + (nBids == 1 ? "" : "s") + " locking "
-                        + PriceMath.fmt(c.bidUsdt) + " mxUSDT" : "no bids");
+                        + PriceMath.fmt(c.bidUsdt) + " MxUSD" : "no bids");
         String fundingHint = makerFundingHint(nAsks, nBids);
         AlertDialog.Builder b = new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle("Publish the ladder")
@@ -1658,7 +1658,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (nBids > 1 && usdtCoins > 0 && usdtCoins < nBids) {
             if (sb.length() > 0) sb.append('\n');
-            sb.append("mxUSDT funding looks thin: ").append(usdtCoins)
+            sb.append("MxUSD funding looks thin: ").append(usdtCoins)
                     .append(" coin").append(usdtCoins == 1 ? "" : "s")
                     .append(" for ").append(nBids).append(" bid rungs.");
         }
@@ -1678,7 +1678,7 @@ public class MainActivity extends AppCompatActivity {
         String[] items = {
                 "MINIMA - " + PriceMath.fmt(minimaSendable) + " sendable, "
                         + minimaCoins + " coin" + (minimaCoins == 1 ? "" : "s"),
-                "mxUSDT - " + PriceMath.fmt(usdtSendable) + " sendable, "
+                "MxUSD - " + PriceMath.fmt(usdtSendable) + " sendable, "
                         + usdtCoins + " coin" + (usdtCoins == 1 ? "" : "s")
         };
         new AlertDialog.Builder(this, Design.dialogTheme())
@@ -1689,7 +1689,7 @@ public class MainActivity extends AppCompatActivity {
                         + "sendable.")
                 .setItems(items, (d, which) -> {
                     if (which == 0) splitMakerFunding(Util.MINIMA_TOKENID, "MINIMA", minimaSendable);
-                    else splitMakerFunding(DexContract.USDT_ID, "mxUSDT", usdtSendable);
+                    else splitMakerFunding(DexContract.USDT_ID, "MxUSD", usdtSendable);
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1840,7 +1840,7 @@ public class MainActivity extends AppCompatActivity {
         if (!ready() || !keySet.owns(o)) return;
         final Object connection = pairingAttempt;
         EditText in = new EditText(this);
-        in.setHint("New price (mxUSDT per MINIMA)");
+        in.setHint("New price (MxUSD per MINIMA)");
         in.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         in.setTransformationMethod(null);
         in.setFilters(new android.text.InputFilter[]{(src, start, end, dest, dstart, dend) -> {

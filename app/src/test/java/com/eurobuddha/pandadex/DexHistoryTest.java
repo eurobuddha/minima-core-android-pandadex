@@ -32,12 +32,12 @@ public class DexHistoryTest {
 
     private static final String PAYOUT = "0xPAYOUT11223344556677889900AABBCCDDEEFF00112233445566778899AABB";
 
-    /** A resting SELL: 300 MINIMA locked, wanting 15.45 mxUSDT. */
+    /** A resting SELL: 300 MINIMA locked, wanting 15.45 MxUSD. */
     private static Order5 sellOrder() {
         return order("0xC1", "300", "0x00", "15.45", DexContract.USDT_ID, true);
     }
 
-    /** A resting BUY: 15.45 mxUSDT locked, wanting 300 MINIMA. */
+    /** A resting BUY: 15.45 MxUSD locked, wanting 300 MINIMA. */
     private static Order5 buyOrder(String coinid) {
         return order(coinid, "15.45", DexContract.USDT_ID, "300", "0x00", false);
     }

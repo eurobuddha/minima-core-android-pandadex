@@ -133,7 +133,7 @@ public final class TradeView extends LinearLayout {
         LinearLayout c = card();
         LinearLayout top = new LinearLayout(getContext());
         top.setGravity(Gravity.CENTER_VERTICAL);
-        top.addView(tv("MINIMA / mxUSDT", 13f, Design.TEXT(), Design.sansBold()),
+        top.addView(tv("MINIMA / MxUSD", 13f, Design.TEXT(), Design.sansBold()),
                 new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         syncDot = tv("● syncing", 10f, Design.DIM(), Design.sans());
         top.addView(syncDot);
@@ -204,7 +204,7 @@ public final class TradeView extends LinearLayout {
         c.addView(head);
 
         LinearLayout legend = new LinearLayout(getContext());
-        legend.addView(tv("Price (mxUSDT)", 9f, Design.DIM2(), Design.sans()),
+        legend.addView(tv("Price (MxUSD)", 9f, Design.DIM2(), Design.sans()),
                 new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.2f));
         TextView a = tv("Amount (MINIMA)", 9f, Design.DIM2(), Design.sans());
         a.setGravity(Gravity.END);
@@ -295,7 +295,7 @@ public final class TradeView extends LinearLayout {
         sellTab.setOnClickListener(v -> setMode(false));
         c.addView(tabs);
 
-        priceIn = input("Price (mxUSDT per MINIMA)");
+        priceIn = input("Price (MxUSD per MINIMA)");
         amountIn = input("Amount (MINIMA)");
         c.addView(priceIn);
         c.addView(amountIn);
@@ -446,7 +446,7 @@ public final class TradeView extends LinearLayout {
         BigDecimal a = Util.dec(amountIn.getText().toString());
         if (p.signum() > 0 && a.signum() > 0) {
             totalTv.setText("Total: " + PriceMath.fmt(
-                    PriceMath.up(a.multiply(p, PriceMath.MC), PriceMath.USDT_DP)) + " mxUSDT");
+                    PriceMath.up(a.multiply(p, PriceMath.MC), PriceMath.USDT_DP)) + " MxUSD");
         } else {
             totalTv.setText("Total: —");
         }

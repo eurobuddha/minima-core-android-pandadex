@@ -41,7 +41,7 @@ public final class MakerLadder {
 
     /** One rung: an absolute price and the MINIMA size to show there. */
     public static final class Level {
-        public final BigDecimal price;        // mxUSDT per MINIMA
+        public final BigDecimal price;        // MxUSD per MINIMA
         public final BigDecimal sizeMinima;
 
         public Level(BigDecimal price, BigDecimal sizeMinima) {
@@ -225,7 +225,7 @@ public final class MakerLadder {
     /** What publishing this ladder locks up, per token side. */
     public static final class Commitments {
         public final BigDecimal askMinima;   // Σ ask sizes — locked MINIMA
-        public final BigDecimal bidUsdt;     // Σ bid size × price — locked mxUSDT
+        public final BigDecimal bidUsdt;     // Σ bid size × price — locked MxUSD
 
         Commitments(BigDecimal askMinima, BigDecimal bidUsdt) {
             this.askMinima = askMinima;
@@ -288,7 +288,7 @@ public final class MakerLadder {
      * noise below display precision, and comparing raw values would relock every cycle forever.
      */
     /** The cycle's action allowance. Creates are additionally capped PER SIDE because they fund
-     *  via wallet `send`s — two bid creates in one cycle fight over the same mxUSDT coins and
+     *  via wallet `send`s — two bid creates in one cycle fight over the same MxUSD coins and
      *  the second fails unfunded until the first's change confirms (observed live). Bids and
      *  asks fund from different tokens, so one of each never contends; relocks and cancels
      *  spend only the order coin itself and never contend at all. */

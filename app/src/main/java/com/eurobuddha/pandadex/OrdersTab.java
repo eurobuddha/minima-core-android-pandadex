@@ -149,7 +149,7 @@ public final class OrdersTab extends LinearLayout {
 
             String meta = (o.gtc ? "GTC ∞" : "expires") + "  ·  " + o.ageLabel(block, act.makerBookReady())
                     + "  ·  min remainder " + PriceMath.fmt(o.minRem)
-                    + "  ·  total " + PriceMath.fmt(o.usdtAmount()) + " mxUSDT";
+                    + "  ·  total " + PriceMath.fmt(o.usdtAmount()) + " MxUSD";
             card.addView(line(meta, Design.DIM2(), 9.5f));
             // the ladder's own orders: cancelling one by hand is a different act from
             // cancelling something you placed yourself — the maker will put this one back
@@ -205,10 +205,10 @@ public final class OrdersTab extends LinearLayout {
         summary.addView(line("Rows " + trades.size() + " (" + accounted + " included)   ·   Volume " + PriceMath.fmt(vol) + " MINIMA",
                 Design.TEXT(), 11f));
         summary.addView(line("Notional " + PriceMath.fmt(notional.setScale(6, java.math.RoundingMode.HALF_UP))
-                + " mxUSDT", Design.DIM(), 10f));
+                + " MxUSD", Design.DIM(), 10f));
         if (mid != null && mid.signum() > 0) {
             summary.addView(line("P&L vs book mid " + (pnl.signum() >= 0 ? "+" : "")
-                            + PriceMath.fmt(pnl.setScale(6, java.math.RoundingMode.HALF_UP)) + " mxUSDT",
+                            + PriceMath.fmt(pnl.setScale(6, java.math.RoundingMode.HALF_UP)) + " MxUSD",
                     pnl.signum() >= 0 ? Design.IN() : Design.RED(), 10f));
         }
         TextView export = line("EXPORT RECONCILIATION ZIP", Design.ACCENT(), 10.5f);

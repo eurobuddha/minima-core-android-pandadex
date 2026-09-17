@@ -20,7 +20,7 @@ public final class DexContract {
 
     private DexContract() {}
 
-    /** mxUSDT — the only non-Minima token the book accepts (whitelisted in-script). */
+    /** MxUSD — the only non-Minima token the book accepts (whitelisted in-script). */
     public static final String USDT_ID =
             "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
 

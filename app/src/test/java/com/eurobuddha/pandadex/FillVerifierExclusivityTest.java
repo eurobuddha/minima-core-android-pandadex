@@ -28,12 +28,12 @@ public class FillVerifierExclusivityTest {
 
     private static final String PAYOUT = "0xPAYOUT11223344556677889900AABBCCDDEEFF00112233445566778899AABB";
 
-    /** sell: locks `minima` MINIMA, wants `usdt` mxUSDT. */
+    /** sell: locks `minima` MINIMA, wants `usdt` MxUSD. */
     private static Order5 ask(String coinid, String minima, String usdt, long created) {
         return order(coinid, minima, "0x00", usdt, DexContract.USDT_ID, true, created);
     }
 
-    /** buy: locks `usdt` mxUSDT, wants `minima` MINIMA. */
+    /** buy: locks `usdt` MxUSD, wants `minima` MINIMA. */
     private static Order5 bid(String coinid, String usdt, String minima, long created) {
         return order(coinid, usdt, DexContract.USDT_ID, minima, "0x00", false, created);
     }

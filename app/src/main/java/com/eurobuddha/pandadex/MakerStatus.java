@@ -89,7 +89,7 @@ public final class MakerStatus {
                     out.add(new Line(s.id,"funding differs from recorded intent — review this order",WAIT));
                 }else if(o.locked.compareTo(funded)<0) {
                     out.add(new Line(s.id,"less funding remains — "+PriceMath.fmt(o.locked)
-                            +" of "+PriceMath.fmt(funded)+(o.sell?" MINIMA":" mxUSDT")+" locked",OK));
+                            +" of "+PriceMath.fmt(funded)+(o.sell?" MINIMA":" MxUSD")+" locked",OK));
                 } else if (r.lastActionBlock > 0
                         && chainBlock - r.lastActionBlock < MakerEngine.PATIENCE_BLOCKS) {
                     out.add(new Line(s.id, "reprice requested — outcome not yet verified", WAIT));

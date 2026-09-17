@@ -71,7 +71,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
     // ------------------------------------------------------------------ create
 
     /**
-     * Place an order. buy=true locks mxUSDT wanting MINIMA; sell locks MINIMA wanting mxUSDT.
+     * Place an order. buy=true locks MxUSD wanting MINIMA; sell locks MINIMA wanting MxUSD.
      * Bounded state-free funding, validated and posted through the shared signing gate.
      */
     public String createOrder(boolean buy, BigDecimal minimaAmount, BigDecimal price,
@@ -113,7 +113,7 @@ public class DexTxn {   // non-final so tests can stub the three order actions
         BigDecimal want = buy ? PriceMath.down(minimaAmount, PriceMath.MINIMA_DP) : usdt;
         // Port 8 is compared on-chain against the remaining LOCKED amount, so a min-remainder
         // the user expressed in MINIMA has to be converted to the locked asset for a buy —
-        // otherwise "1 MINIMA" silently means "1 mxUSDT" (≈200 MINIMA) and small buys become
+        // otherwise "1 MINIMA" silently means "1 MxUSD" (≈200 MINIMA) and small buys become
         // fill-or-nothing without the user ever being told.
         BigDecimal minRem = buy
                 ? PriceMath.up(minRemMinima.multiply(price, PriceMath.MC), PriceMath.USDT_DP)

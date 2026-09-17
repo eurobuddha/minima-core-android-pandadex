@@ -13,7 +13,7 @@ import java.math.RoundingMode;
  *   maker payment:  pay * locked >= want * (locked - rem)     (pay rounded UP to grain)
  *   remainder want: newWant * locked >= want * rem            (newWant rounded UP, capped at want)
  *
- * MINIMA amounts use 8dp here too (book grain), mxUSDT is an 8-decimals token — on-chain
+ * MINIMA amounts use 8dp here too (book grain), MxUSD is an 8-decimals token — on-chain
  * token amounts FLOOR to the token grain, so every outgoing token amount must already be
  * quantized (see [[minima-token-grain-gotcha]]).
  */
@@ -23,7 +23,7 @@ public final class PriceMath {
 
     public static final MathContext MC = new MathContext(40, RoundingMode.DOWN);
 
-    /** mxUSDT token grain (8 decimals). */
+    /** MxUSD token grain (8 decimals). */
     public static final int USDT_DP = 8;
     /** Book grain used for MINIMA legs (well inside the chain's native precision). */
     public static final int MINIMA_DP = 8;
@@ -101,7 +101,7 @@ public final class PriceMath {
         return v.setScale(dp, RoundingMode.DOWN).toPlainString();
     }
 
-    /** Decimals shown for every PRICE in the UI. MINIMA trades around 0.05 mxUSDT, so five
+    /** Decimals shown for every PRICE in the UI. MINIMA trades around 0.05 MxUSD, so five
      *  decimals only resolves to the nearest 0.00001 — enough to make two genuinely different
      *  orders look identical and to misreport what you are about to trade at. Six gives a
      *  real tick at this price level. */

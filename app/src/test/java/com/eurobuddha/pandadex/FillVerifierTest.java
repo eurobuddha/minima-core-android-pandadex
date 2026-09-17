@@ -19,7 +19,7 @@ import java.math.BigDecimal;
  */
 public class FillVerifierTest {
 
-    /** A resting SELL: 300 MINIMA locked, wanting 15.45 mxUSDT. */
+    /** A resting SELL: 300 MINIMA locked, wanting 15.45 MxUSD. */
     private static Order5 sellOrder() {
         try {
             JSONObject c = new JSONObject();

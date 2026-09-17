@@ -1,6 +1,6 @@
 # PandaDEX 0.4.12 — pool-inclusive market history
 
-The public last-trade price, tape and chart now include verified executions at known PandaPools MINIMA/mxUSDT covenants, including another wallet's trades. Execution price is the actual token reserve delta divided by the MINIMA delta for each contract-enforced pair. Liquidity additions, withdrawals, maintenance and unrelated pool donations are excluded. Personal trade receipts remain separate.
+The public last-trade price, tape and chart now include verified executions at known PandaPools MINIMA/MxUSD covenants, including another wallet's trades. Execution price is the actual token reserve delta divided by the MINIMA delta for each contract-enforced pair. Liquidity additions, withdrawals, maintenance and unrelated pool donations are excluded. Personal trade receipts remain separate.
 
 Reuse: PandaPools PoolActivity / TxClassifier opposite-sign reserve flows; PandaDEX DexHistory bounded public pager, ChainEvidence inclusion-block verification, DexDb chaincheck revision/proof guards. No unbounded address-history query. Schema 13 → 14 only adds marketpool/pooltrade and their index; original records are retained. Reorg/missing proof removes a pool trade from the current market view while preserving its original record for correction.
 

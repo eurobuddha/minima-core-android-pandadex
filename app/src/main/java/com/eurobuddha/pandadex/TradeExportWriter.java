@@ -109,6 +109,6 @@ public final class TradeExportWriter {
     public static String describe(TradeExport.Report r) {
         return r.tradeCount + " personal trade record" + (r.tradeCount == 1 ? "" : "s")
                 + " · net " + r.totals.netMinima.stripTrailingZeros().toPlainString()
-                + " MINIMA · net " + r.totals.netUsdt.stripTrailingZeros().toPlainString() + " mxUSDT";
+                + " MINIMA · net " + r.totals.netUsdt.stripTrailingZeros().toPlainString() + " MxUSD";
     }
 }

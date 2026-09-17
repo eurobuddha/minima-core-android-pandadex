@@ -34,7 +34,7 @@ public final class ChartTab extends LinearLayout {
         LinearLayout head = new LinearLayout(act);
         head.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = new TextView(act);
-        title.setText("MINIMA / mxUSDT");
+        title.setText("MINIMA / MxUSD");
         title.setTextColor(Design.TEXT());
         title.setTypeface(Design.sansBold());
         title.setTextSize(13f);

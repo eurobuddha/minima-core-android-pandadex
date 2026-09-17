@@ -263,7 +263,7 @@ public final class FillTape {
         if (old.sell) {
             return old.locked.subtract(successor.locked);            // MINIMA locked shrank
         }
-        // buy: locked is mxUSDT; convert the taken usdt to MINIMA at the order price
+        // buy: locked is MxUSD; convert the taken usdt to MINIMA at the order price
         BigDecimal usdtDelta = old.locked.subtract(successor.locked);
         BigDecimal price = old.price();
         if (price.signum() == 0) return BigDecimal.ZERO;

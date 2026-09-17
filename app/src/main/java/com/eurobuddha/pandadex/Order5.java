@@ -18,7 +18,7 @@ public final class Order5 {
     public final String ownerPk;      // port 0
     public final String wantAddr;     // port 1
     public final BigDecimal wantAmt;  // port 2
-    public final String wantTok;      // port 3 (0x00 or mxUSDT)
+    public final String wantTok;      // port 3 (0x00 or MxUSD)
     public final String orderId;      // port 4
     public final boolean sell;        // port 5 "1" = sell (MINIMA locked)
     public final boolean gtc;         // port 7
@@ -123,10 +123,10 @@ public final class Order5 {
     /** MINIMA side of the order (locked for sells, wanted for buys). */
     public BigDecimal minimaAmount() { return sell ? locked : wantAmt; }
 
-    /** mxUSDT side of the order (wanted for sells, locked for buys). */
+    /** MxUSD side of the order (wanted for sells, locked for buys). */
     public BigDecimal usdtAmount() { return sell ? wantAmt : locked; }
 
-    /** Price in mxUSDT per MINIMA — derived from enforced amounts only. */
+    /** Price in MxUSD per MINIMA — derived from enforced amounts only. */
     public BigDecimal price() {
         return PriceMath.price(usdtAmount(), minimaAmount().signum() == 0 ? BigDecimal.ONE : minimaAmount());
     }

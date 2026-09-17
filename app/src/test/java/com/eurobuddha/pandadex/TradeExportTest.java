@@ -42,10 +42,10 @@ public class TradeExportTest {
         assertTrue(r.tradesCsv.contains("SELL,MAKER"));
         assertTrue(r.tradesCsv.contains("verification_status"));
         assertTrue(r.verificationCsv.contains("verification_status"));
-        assertTrue(r.reconciliationCsv.contains("\"mxUSDT paid for buys\""));
+        assertTrue(r.reconciliationCsv.contains("\"MxUSD paid for buys\""));
     }
 
-    @Test public void mxusdtNotionalIsCutDownSoItNeverOverstates() {
+    @Test public void mxusdNotionalIsCutDownSoItNeverOverstates() {
         TradeExport.TradeRow row = new TradeExport.TradeRow("0xCUT", 0, 0,
                 new BigDecimal("0.333333333"), new BigDecimal("3"), true, false, "");
         assertEquals(0, new BigDecimal("0.99999999").compareTo(TradeExport.usdtNotional(row)));

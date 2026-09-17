@@ -8,14 +8,14 @@ import java.util.TreeMap;
 /**
  * OHLC bucketer: folds the on-chain fill tape into candles for the chart. Pure math — no
  * Android, no node — so it's fully JVM-unit-testable. Buckets are aligned to epoch-millis
- * boundaries of the interval; fills are token-priced (mxUSDT per MINIMA).
+ * boundaries of the interval; fills are token-priced (MxUSD per MINIMA).
  */
 public final class Candles {
 
     /** One observed fill (one spend of a book coin). */
     public static final class Fill {
         public final long timeMs;
-        public final BigDecimal price;    // mxUSDT per MINIMA
+        public final BigDecimal price;    // MxUSD per MINIMA
         public final BigDecimal size;     // MINIMA
         public final boolean buy;         // taker side: true = taker bought MINIMA
 

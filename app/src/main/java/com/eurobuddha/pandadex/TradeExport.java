@@ -271,17 +271,17 @@ public final class TradeExport {
         metric(sb, "records excluded pending node recheck", String.valueOf(t.excludedRechecks), "rows");
         metric(sb, "MINIMA bought", amount(t.minimaBought), "MINIMA");
         metric(sb, "MINIMA sold", amount(t.minimaSold), "MINIMA");
-        metric(sb, "mxUSDT paid for buys", amount(t.usdtPaid), "mxUSDT");
-        metric(sb, "mxUSDT received from sells", amount(t.usdtReceived), "mxUSDT");
+        metric(sb, "MxUSD paid for buys", amount(t.usdtPaid), "MxUSD");
+        metric(sb, "MxUSD received from sells", amount(t.usdtReceived), "MxUSD");
         metric(sb, "net MINIMA from trades", amount(t.netMinima), "MINIMA");
-        metric(sb, "net mxUSDT from trades", amount(t.netUsdt), "mxUSDT");
+        metric(sb, "net MxUSD from trades", amount(t.netUsdt), "MxUSD");
         metric(sb, "current MINIMA holding", amount(t.holdingsMinima), "MINIMA");
-        metric(sb, "current mxUSDT holding", amount(t.holdingsUsdt), "mxUSDT");
+        metric(sb, "current MxUSD holding", amount(t.holdingsUsdt), "MxUSD");
         if (s.bookMid != null && s.bookMid.signum() > 0) {
-            metric(sb, "book mid used for value", s.bookMid.toPlainString(), "mxUSDT/MINIMA");
-            metric(sb, "current holding value", amount(t.holdingsValueUsdt), "mxUSDT");
-            metric(sb, "net trade value at book mid", amount(t.tradeValueUsdt), "mxUSDT");
-            metric(sb, "implied non-trade balance delta", amount(t.impliedExternalUsdt), "mxUSDT");
+            metric(sb, "book mid used for value", s.bookMid.toPlainString(), "MxUSD/MINIMA");
+            metric(sb, "current holding value", amount(t.holdingsValueUsdt), "MxUSD");
+            metric(sb, "net trade value at book mid", amount(t.tradeValueUsdt), "MxUSD");
+            metric(sb, "implied non-trade balance delta", amount(t.impliedExternalUsdt), "MxUSD");
         } else {
             metric(sb, "book mid used for value", "unavailable", "");
         }
@@ -325,23 +325,23 @@ public final class TradeExport {
         if (t.excludedRechecks > 0) sb.append("Reconciliation is provisional while rows are unresolved; the implied non-trade balance delta is not proof of transfers.\n");
         sb.append("MINIMA bought: ").append(amount(t.minimaBought)).append('\n');
         sb.append("MINIMA sold: ").append(amount(t.minimaSold)).append('\n');
-        sb.append("mxUSDT paid: ").append(amount(t.usdtPaid)).append('\n');
-        sb.append("mxUSDT received: ").append(amount(t.usdtReceived)).append('\n');
+        sb.append("MxUSD paid: ").append(amount(t.usdtPaid)).append('\n');
+        sb.append("MxUSD received: ").append(amount(t.usdtReceived)).append('\n');
         sb.append("Net MINIMA from trades: ").append(amount(t.netMinima)).append('\n');
-        sb.append("Net mxUSDT from trades: ").append(amount(t.netUsdt)).append('\n');
+        sb.append("Net MxUSD from trades: ").append(amount(t.netUsdt)).append('\n');
         sb.append('\n');
         sb.append("Current holding snapshot:\n");
         sb.append("MINIMA: ").append(amount(t.holdingsMinima)).append(" (available ")
                 .append(amount(s.freeMinima)).append(", confirming ").append(amount(s.pendingMinima))
                 .append(", in orders ").append(amount(s.lockedMinima)).append(")\n");
-        sb.append("mxUSDT: ").append(amount(t.holdingsUsdt)).append(" (available ")
+        sb.append("MxUSD: ").append(amount(t.holdingsUsdt)).append(" (available ")
                 .append(amount(s.freeUsdt)).append(", confirming ").append(amount(s.pendingUsdt))
                 .append(", in orders ").append(amount(s.lockedUsdt)).append(")\n");
         if (s.bookMid != null && s.bookMid.signum() > 0) {
-            sb.append("Book mid: ").append(s.bookMid.toPlainString()).append(" mxUSDT/MINIMA\n");
-            sb.append("Holding value: ").append(amount(t.holdingsValueUsdt)).append(" mxUSDT\n");
-            sb.append("Net trade value: ").append(amount(t.tradeValueUsdt)).append(" mxUSDT\n");
-            sb.append("Implied non-trade balance delta: ").append(amount(t.impliedExternalUsdt)).append(" mxUSDT\n");
+            sb.append("Book mid: ").append(s.bookMid.toPlainString()).append(" MxUSD/MINIMA\n");
+            sb.append("Holding value: ").append(amount(t.holdingsValueUsdt)).append(" MxUSD\n");
+            sb.append("Net trade value: ").append(amount(t.tradeValueUsdt)).append(" MxUSD\n");
+            sb.append("Implied non-trade balance delta: ").append(amount(t.impliedExternalUsdt)).append(" MxUSD\n");
         } else {
             sb.append("Book mid unavailable, so holding value reconciliation is omitted.\n");
         }

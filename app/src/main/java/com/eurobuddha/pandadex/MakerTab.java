@@ -182,7 +182,7 @@ public final class MakerTab extends LinearLayout {
         // ---- the ladder editor (AtomiX editOrderDialog, inline) ----
         LinearLayout lc = card();
         lc.addView(tv("MY MARKET / LADDER", 10f, Design.DIM(), Design.sansBold()));
-        TextView hint = tv("Your depth ladder for MINIMA / mxUSDT  (price = mxUSDT per MINIMA):\n"
+        TextView hint = tv("Your depth ladder for MINIMA / MxUSD  (price = MxUSD per MINIMA):\n"
                 + "•  ASKS — where YOU SELL MINIMA (higher).   BIDS — where YOU BUY (lower).\n"
                 + "•  Each rung is a separate on-chain order. Leave rows blank to skip them.",
                 9.5f, Design.DIM2(), Design.sans());

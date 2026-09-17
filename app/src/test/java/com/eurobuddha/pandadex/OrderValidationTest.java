@@ -21,7 +21,7 @@ public class OrderValidationTest {
     private static final String GOOD_ADDR =
             "0xBB11223344556677889900AABBCCDDEEFF00112233445566778899AABBCCDDEE";
 
-    /** A well-formed SELL: MINIMA locked, mxUSDT wanted. */
+    /** A well-formed SELL: MINIMA locked, MxUSD wanted. */
     private static Order5 order(String coinid, boolean sell, String locked, String lockedTok,
                                 String want, String wantTok, String wantAddr, String minRem) {
         try {

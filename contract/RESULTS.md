@@ -5,7 +5,7 @@ CORRECTION at the end. The EXPIRY-1500 contract at `0xCE5A0A3C…` is ABANDONED.
 
 ## FROZEN MAINNET CONTRACT
 
-- Template: `v5script.tpl` with `$TOK` = mxUSDT
+- Template: `v5script.tpl` with `$TOK` = MxUSD
   `0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90`, **`$EXP` = 600**.
 - **Mainnet script: 1127 chars, parseok true.**
 - **Mainnet address: `0x2D43279DD85DABCA3EA90C9997DAB9169D8B7A0E8CB594236AF44542489774A5`**
@@ -105,7 +105,7 @@ the app issues was measured against a live node:
 | `block` | 218 | 0.09% |
 | book scan `coins simplestate:true order:desc depth:1700 address:<V5>` | 2,811 | 1.10% |
 | ownership belt `coins relevant:true address:<V5>` | 3,606 | 1.41% |
-| `balance tokenid:0x00` / `tokenid:<mxUSDT>` | 289 / 351 | 0.14% |
+| `balance tokenid:0x00` / `tokenid:<MxUSD>` | 289 / 351 | 0.14% |
 | `keys` | 1,424 | 0.56% |
 | `getaddress` | 444 | 0.17% |
 | funding `coins relevant:true sendable:true tokenid:` | 6,610 | 2.58% |
@@ -187,7 +187,7 @@ alone.
 The covenant has now been exercised with **real funds between two independent devices**:
 
 - Maker (Galaxy Z Fold, v0.1.0): posted a bid and a **300 MINIMA** sell offer.
-- Taker (Galaxy S10, v0.1.0): **partially filled it — bought 150 MINIMA for 0.151 mxUSDT**.
+- Taker (Galaxy S10, v0.1.0): **partially filled it — bought 150 MINIMA for 0.151 MxUSD**.
 - The trade settled and the funds transferred correctly on both sides.
 
 This is live confirmation on mainnet of the partial-fill path end to end: the sweep
@@ -268,7 +268,7 @@ Two more trades settled correctly, including a taker hitting a bid. Defects foun
 2. **"Sending…" was open-ended** with no sense of how long to wait. Now shows an elapsed clock
    and what it is waiting for ("waiting for the next block (~50s) · 12s"), and says plainly
    when it is overdue rather than spinning. A 1s UI tick keeps it moving.
-3. **Five decimals was too coarse for this pair.** MINIMA trades near 0.05 mxUSDT, so 5dp could
+3. **Five decimals was too coarse for this pair.** MINIMA trades near 0.05 MxUSD, so 5dp could
    not separate genuinely different orders or show what a tap would actually trade at. Prices
    now display at **6 decimals**, and tapping a ladder row prefills the EXACT best price behind
    that level rather than the rounded label.
@@ -378,7 +378,7 @@ Implementation surfaces added:
 - PandaPools core vendored into PandaDEX: `Pool`, `PoolCovenant`, `VirtualCurve`, `PoolRouter`.
 - Bounded discovery/cache: `PoolBook` and `PoolLiquidityRepository`, scanning the
   `PANDAPOOLS` sentinel with `depth:1500`, re-deriving every pool script with `runscript`,
-  requiring `parseok`, deriving the address locally, and retaining only funded MINIMA/mxUSDT
+  requiring `parseok`, deriving the address locally, and retaining only funded MINIMA/MxUSD
   reserve pairs.
 - Display depth: `SyntheticDepth`, sampled as labelled `POOL` liquidity alongside book depth.
 - Routing: `CompositeRouter.Plan`, deterministic 128-slice best-price blending, marginal limit
@@ -454,7 +454,7 @@ Router regression found during local coverage expansion:
 - Added direct composite-router tests for near-expiry order exclusion, max-five order cap, and
   the single final partial invariant.
 - Pool discovery now treats owner payout address as part of the canonical beacon identity. Two
-  users adding MINIMA/mxUSDT liquidity can therefore remain distinct PandaPools positions
+  users adding MINIMA/MxUSD liquidity can therefore remain distinct PandaPools positions
   instead of being collapsed just because owner key, token, and KMIN match.
 
 Second read-only live preflight attempt on 2026-07-31:
@@ -468,13 +468,13 @@ Third read-only live preflight attempt on 2026-07-31:
 
 - `python3 contract/composite_live_preflight.py status` reached `http://127.0.0.1:16005/` at
   block `2217564` (`0x0000BBF66A7919CAB96EFC633AB60662EDF6C470FBEFAB5A3D0957CCFE7AB14C`).
-- The wallet reported MINIMA `sendable:0`, `confirmed:0`, `unconfirmed:0`, and no mxUSDT
+- The wallet reported MINIMA `sendable:0`, `confirmed:0`, `unconfirmed:0`, and no MxUSD
   balance entries.
 - `python3 contract/composite_live_preflight.py` ran the bounded sentinel command
   `coins simplestate:true order:desc depth:1500 address:0x50414E4441504F4F4C53`.
-- The sentinel scan returned `0` coins, yielding `0` candidate mxUSDT pool beacons and
+- The sentinel scan returned `0` coins, yielding `0` candidate MxUSD pool beacons and
   `0` funded pools.
-- Result: `PREFLIGHT_INCOMPLETE - no funded PandaPools MINIMA/mxUSDT pool visible in the
+- Result: `PREFLIGHT_INCOMPLETE - no funded PandaPools MINIMA/MxUSD pool visible in the
   bounded scan`.
 - No transaction construction, signing, posting, `send`, `newscript`, or `coinnotify` command
   was run.
@@ -562,7 +562,7 @@ Deep APK review after pool-only live testing found and fixed these issues:
   beyond aggregate reserve capacity; exact MINIMA-out routes now fail unless the requested
   MINIMA can actually be delivered.
 - Composite capacity trimming now drops the smallest MINIMA-contributing pool, including on
-  sell-side routes where mxUSDT output is not the right contribution metric.
+  sell-side routes where MxUSD output is not the right contribution metric.
 - Synthetic pool ladder rows now fall back to `0.00001` instead of the removed exact
   `0.000001` resolution, and each displayed row is capped by the same composite planner used
   by submission so displayed pool depth does not exceed executable depth for fragmented pools.
