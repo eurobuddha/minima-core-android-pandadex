@@ -165,7 +165,7 @@ public final class OrdersTab extends LinearLayout {
             lp.bottomMargin = Design.dp(getContext(), 8);
             body.addView(card, lp);
         }
-        if (!any) body.addView(line(act.makerBookReady() ? "No open orders" : WAITING_ORDERS, Design.DIM2(), 11f));
+        if (!any) body.addView(line(act.makerBookReady() ? "No open orders" : act.ordersWaitingMessage(), Design.DIM2(), 11f));
         else if(!act.makerBookReady())body.addView(line(SAVED_ORDERS, Design.DIM2(), 10f));
     }
 

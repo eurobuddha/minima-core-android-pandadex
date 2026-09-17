@@ -106,7 +106,6 @@ public class BalanceDisplayTest {
         assertNull(Util.decOr(max,null));
     }
     @Test public void startupAndConnectedLoadingDoNotAskForPairing() {
-        assertEquals("Open orders are loading from MinimaCore.",OrdersTab.WAITING_ORDERS);
         assertEquals("CONNECTING…",MainActivity.nodeLabel(false,false));
         assertEquals("NODE ✓",MainActivity.nodeLabel(true,true));
         assertEquals("PAIR IN MINIMA → APPS",MainActivity.nodeLabel(false,true));
@@ -114,6 +113,20 @@ public class BalanceDisplayTest {
         assertEquals("Loading balance from MinimaCore…",MainActivity.balanceMessage(true,true,false));
         assertEquals("Could not read this balance. Tap to retry.",MainActivity.balanceMessage(true,true,true));
         assertTrue(MainActivity.balanceMessage(false,true,false).contains("enabled"));
+    }
+
+    /** 0.4.17 fixed the paired-but-loading wording and silently broke its neighbour: an unpaired
+     *  user was told orders were "loading". Every placeholder must walk the whole pairing matrix. */
+    @Test public void emptyPlaceholdersOnlyClaimLoadingWhilePaired() {
+        String pair=MainActivity.balanceMessage(false,true,false), connecting=MainActivity.balanceMessage(false,false,false);
+        assertTrue(pair.contains("enabled")); assertEquals("Connecting to MinimaCore…",connecting);
+        assertEquals(connecting,MainActivity.ordersWaitingMessage(false,false));
+        assertEquals(pair,MainActivity.ordersWaitingMessage(false,true));
+        assertEquals(OrdersTab.WAITING_ORDERS,MainActivity.ordersWaitingMessage(true,true));
+        assertFalse(OrdersTab.WAITING_ORDERS.toLowerCase().contains("connect"));
+        assertEquals(connecting,MainActivity.receiveLoadingMessage(false,false));
+        assertEquals(pair,MainActivity.receiveLoadingMessage(false,true));
+        assertEquals("Loading receive address from MinimaCore…",MainActivity.receiveLoadingMessage(true,true));
     }
 
 }

@@ -112,7 +112,6 @@ public final class AssetsTab extends LinearLayout {
         TextView copy = t(addr.isEmpty() ? act.receiveLoadingMessage() : "Tap to copy", Design.ACCENT(), 9.5f, Design.sans());
         recv.addView(copy);
         if (!addr.isEmpty()) recv.setOnClickListener(v -> {
-            if (addr.isEmpty()) return;
             ClipboardManager cm = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm == null) return;
             cm.setPrimaryClip(ClipData.newPlainText("address", addr));

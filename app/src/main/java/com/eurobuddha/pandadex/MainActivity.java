@@ -791,9 +791,20 @@ public class MainActivity extends AppCompatActivity {
         return balanceMessage(paired, pairingKnown, !(minima ? minimaBalanceError : usdtBalanceError).isEmpty());
     }
 
-    String receiveLoadingMessage() {
-        return paired ? "Loading receive address from MinimaCore…" : balanceMessage(false, pairingKnown, false);
+    /** Placeholder for an empty receive address: only claims "loading" while actually paired. */
+    static String receiveLoadingMessage(boolean paired, boolean known) {
+        return paired ? "Loading receive address from MinimaCore…" : balanceMessage(false, known, false);
     }
+
+    String receiveLoadingMessage() { return receiveLoadingMessage(paired, pairingKnown); }
+
+    /** Placeholder for an empty open-orders list while makerBookReady() is false: the book
+     *  can be "loading" only once paired — an unpaired user is told to pair, not to wait. */
+    static String ordersWaitingMessage(boolean paired, boolean known) {
+        return paired ? OrdersTab.WAITING_ORDERS : balanceMessage(false, known, false);
+    }
+
+    String ordersWaitingMessage() { return ordersWaitingMessage(paired, pairingKnown); }
 
     void retryBalances() {
         if (node == null) return;
