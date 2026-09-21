@@ -83,8 +83,9 @@ public final class Util {
         return boundedDecimal(s, fallback, 44);
     }
 
-    /** Stock MiniNumber balances allow 64 significant digits, including 44 decimal places.
-     * Keep this separate from the stricter order/transaction input parser. */
+    /** Stock MiniNumber balances AND coin amounts allow 64 significant digits, including 44
+     * decimal places. Every amount the node reports is parsed here; order/transaction amounts the
+     * app builds keep the stricter 44-digit decOr/DexTxn.amountOk limit. */
     static BigDecimal balanceDecimal(Object raw) {
         if (!(raw instanceof String) && !(raw instanceof Number)) return null;
         return boundedDecimal(raw.toString(), null, 64);

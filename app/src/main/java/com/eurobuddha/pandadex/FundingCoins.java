@@ -124,7 +124,7 @@ final class FundingCoins {
                             for (int k = 0; k < arr.length(); k++) {
                                 JSONObject row = arr.optJSONObject(k);
                                 if (token.equalsIgnoreCase(row.optString("tokenid"))) {
-                                    BigDecimal amount = Util.decOr(row.optString("sendable"), null);
+                                    BigDecimal amount = Util.balanceDecimal(row.opt("sendable"));
                                     if (amount == null) { fail("Could not read the available balance."); return; }
                                     if (amount.signum() > 0) slices.add(new Slice(addr, amount));
                                 }
@@ -191,9 +191,10 @@ final class FundingCoins {
         if (amount == null || amount.signum() <= 0) throw new IllegalArgumentException("Invalid coin amount.");
         return raw;
     }
+    /** Node-reported coin amounts carry stock MiniNumber precision, not the stricter order limit. */
     static BigDecimal coinValue(JSONObject c) {
         String field = Util.MINIMA_TOKENID.equals(c.optString("tokenid")) ? "amount" : "tokenamount";
-        return Util.decOr(c.optString(field, ""), null);
+        return Util.balanceDecimal(c.opt(field));
     }
     private boolean canCover() {
         candidates.sort((a, b) -> coinValue(b).compareTo(coinValue(a)));

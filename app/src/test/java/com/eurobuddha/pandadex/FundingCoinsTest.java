@@ -82,4 +82,32 @@ public class FundingCoinsTest {
         coin.put("state", "unexpected");
         assertThrows(IllegalArgumentException.class, () -> FundingCoins.fundingCoin(coin));
     }
+
+    /** S10 regression, second half: stock MiniNumber balances and coin amounts carry up to 64
+     * significant digits and 44 decimal places. 0.4.16 taught the display path that; the funding
+     * path still used the stricter order parser and refused to trade. */
+    @Test public void stockPrecisionBalancesAndCoinsFundATrade() throws Exception {
+        String dp44 = "12345678901234567890123456789012345678901234"; // 44 decimal places
+        String sendable = "1234." + dp44;                             // 48 significant digits
+        String coinAmount = "617." + dp44;                            // 47 significant digits
+        Result result = new Result();
+        FundingCoins.select((cmd, cb) -> {
+            if (cmd.equals("balance tokenid:0x00")) cb.onResult(balance(10));
+            else if (cmd.equals("keys")) cb.onResult(ok(new TestJson().put("keys",
+                    new JSONArray().put(new TestJson().put("publickey", "0xaa")))));
+            else if (cmd.startsWith("runscript")) cb.onResult(ok(new TestJson().put("parseok", true)
+                    .put("script", new TestJson().put("address", "0x11"))));
+            else if (cmd.startsWith("balance")) cb.onResult(ok(new JSONArray().put(new TestJson()
+                    .put("tokenid", "0x00").put("coins", 3).put("sendable", sendable))));
+            else if (cmd.startsWith("coins")) cb.onResult(ok(new JSONArray().put(coin("0xaa", "0x11", coinAmount))));
+            else fail("Unexpected command: " + cmd);
+        }, "0x00", BigDecimal.ONE, null, 20, result);
+        assertNull(result.error);
+        assertEquals(1, result.coins.size());
+        assertEquals(new BigDecimal(coinAmount), result.sum);
+        assertEquals(new BigDecimal(coinAmount), FundingCoins.coinValue(result.coins.get(0)));
+        // The neighbour state must NOT move: order/transaction amounts keep the 44-digit limit.
+        assertFalse(DexTxn.amountOk(new BigDecimal(sendable)));
+        assertTrue(DexTxn.amountOk(new BigDecimal("1.5")));
+    }
 }
