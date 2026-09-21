@@ -652,6 +652,7 @@ public class MainActivity extends AppCompatActivity {
     private int keyboardBottom;
     private TextView logTitle, logText, logDialogText;
     private AlertDialog activityLogDialog;
+    private ScrollView logDialogScroll;
     private String lastLogMessage = "";
     private String stage = "";
     private long stageAtMs = 0;
@@ -705,19 +706,41 @@ public class MainActivity extends AppCompatActivity {
         }
         logText.setText(recent.toString());
         if (logDialogText != null) {
-            String full = android.text.TextUtils.join("\n\n", logLines);
-            if (!android.text.TextUtils.equals(logDialogText.getText(), full)) logDialogText.setText(full);
+            String full = fullLogText();
+            if (!android.text.TextUtils.equals(logDialogText.getText(), full)) {
+                logDialogText.setText(full);
+                stickLogToBottom();
+            }
         }
+    }
+
+    /** The pill shows three lines newest-first, because the newest is the one you need to see.
+     *  The expanded log is a TERMINAL: oldest at the top, newest at the bottom, scrolled to the
+     *  end. logLines is newest-first, so the dialog reads it backwards. */
+    private String fullLogText() {
+        java.util.List<String> chronological = new java.util.ArrayList<>(logLines);
+        java.util.Collections.reverse(chronological);
+        return android.text.TextUtils.join("\n\n", chronological);
+    }
+
+    /** Follow the newest line, unless the reader has scrolled up — then leave them where they are. */
+    private void stickLogToBottom() {
+        final ScrollView scroll = logDialogScroll;
+        if (scroll == null) return;
+        boolean atEnd = scroll.getChildAt(0) == null
+                || scroll.getChildAt(0).getBottom() - scroll.getHeight() - scroll.getScrollY() < Design.dp(this, 24);
+        if (atEnd) scroll.post(() -> scroll.fullScroll(android.view.View.FOCUS_DOWN));
     }
 
     private void showActivityLog() {
         if (activityLogDialog != null && activityLogDialog.isShowing()) return;
         TextView text = new TextView(this);
-        text.setText(android.text.TextUtils.join("\n\n", logLines));
+        text.setText(fullLogText());
         text.setTypeface(Design.mono()); text.setTextSize(12f); text.setTextColor(Design.TEXT());
         text.setTextIsSelectable(true);
         int pad = Design.dp(this,16); text.setPadding(pad,pad,pad,pad);
         ScrollView scroll = new ScrollView(this); scroll.addView(text);
+        logDialogScroll = scroll;
         text.setAccessibilityLiveRegion(android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE);
         AlertDialog dialog = new AlertDialog.Builder(this,Design.dialogTheme()).setTitle("Activity log")
                 .setView(scroll).setPositiveButton("Close",null).create();
@@ -727,9 +750,11 @@ public class MainActivity extends AppCompatActivity {
             if (activityLogDialog == dialog) {
                 activityLogDialog = null;
                 logDialogText = null;
+                logDialogScroll = null;
             }
         });
         dialog.show();
+        stickLogToBottom();   /* open at the newest line, not the oldest */
     }
 
     private void hideTradeKeyboard() {
