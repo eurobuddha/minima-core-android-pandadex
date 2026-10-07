@@ -4,7 +4,7 @@ import android.app.Service;
 import android.content.Intent;
 import android.os.*;
 import org.json.JSONObject;
-import org.minimarex.minimaapi.MinimaAPI;
+import com.eurobuddha.minimaapi.MinimaAPI;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -52,7 +52,7 @@ public final class NodeTransportService extends Service {
             @Override public void onReceive(android.content.Context context, Intent intent) {
                 try {
                     if (!MinimaAPI.checkMinimaID(context, intent)) return;
-                    String data = intent.getStringExtra(org.minimarex.minimaapi.MinimaAPIMessages.MINIMA_API_NOTIFY_DATA);
+                    String data = intent.getStringExtra(com.eurobuddha.minimaapi.MinimaAPIMessages.MINIMA_API_NOTIFY_DATA);
                     if (data == null || data.length() > NodeTransport.MAX_BYTES) return;
                     String event = new JSONObject(data).optString("event", "");
                     if (!"NEWBLOCK".equals(event) && !"NEWBALANCE".equals(event)) return;
@@ -64,7 +64,7 @@ public final class NodeTransportService extends Service {
             }
         };
         androidx.core.content.ContextCompat.registerReceiver(this, notifications,
-                new android.content.IntentFilter(org.minimarex.minimaapi.MinimaAPIMessages.MINIMA_API_NOTIFY),
+                new android.content.IntentFilter(com.eurobuddha.minimaapi.MinimaAPIMessages.MINIMA_API_NOTIFY),
                 androidx.core.content.ContextCompat.RECEIVER_EXPORTED);
         File[] files = NodeTransport.directory(this).listFiles();
         if (files != null) for (File f : files)

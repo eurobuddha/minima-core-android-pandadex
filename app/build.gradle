@@ -10,8 +10,8 @@ android {
         applicationId "com.eurobuddha.pandadex"
         minSdk 28
         targetSdk 35
-        versionCode 421
-        versionName "0.4.21"
+        versionCode 422
+        versionName "0.4.22"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -60,8 +60,9 @@ dependencies {
     // Keep-alive relauncher for GTC renewals / fill alerts while the app is closed
     implementation 'androidx.work:work-runtime:2.9.1'
 
-    // Auditable, bounded Minima SDK sources are compiled from src/main/java/org/minimarex/minimaapi.
+    // Auditable, bounded Minima SDK sources are compiled from src/main/java/com/eurobuddha/minimaapi.
 
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.mockito:mockito-core:5.12.0'
     testImplementation 'org.json:json:20240303'
 }

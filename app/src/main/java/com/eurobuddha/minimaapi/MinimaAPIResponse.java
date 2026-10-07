@@ -1,4 +1,4 @@
-package org.minimarex.minimaapi;
+package com.eurobuddha.minimaapi;
 
 import org.json.JSONObject;
 import org.json.JSONTokener;

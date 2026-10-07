@@ -1,11 +1,11 @@
-package org.minimarex.minimaapi;
+package com.eurobuddha.minimaapi;
 
 public class MinimaAPIMessages {
 
     /**
      * BASE MINIMA CLASS
      */
-    public static final String MINIMA_BASE_CLASS = "org.minimarex.minimacore";
+    public static final String MINIMA_BASE_CLASS = "com.eurobuddha.minimacore";
 
     /**
      * BASE MESSAGES

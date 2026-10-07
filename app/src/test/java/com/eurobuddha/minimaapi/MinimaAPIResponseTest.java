@@ -1,4 +1,4 @@
-package org.minimarex.minimaapi;
+package com.eurobuddha.minimaapi;
 import org.junit.Test;
 import org.json.JSONObject;
 import java.io.*;

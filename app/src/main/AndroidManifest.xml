@@ -19,10 +19,11 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
 
     <!-- Android 11+ package visibility: needed to launch the node app and to deliver
-         our targeted (setPackage) IPC broadcasts to it. Same package name on the upstream
-         Spartacus Rex node and the fork — this app targets the UPSTREAM node. -->
+         our targeted (setPackage) IPC broadcasts to it. The SDK discovers all three Minima Core builds and pins one responder. -->
     <queries>
-        <package android:name="org.minimarex.minimacore" />
+        <package android:name="com.eurobuddha.minimacore" />
+        <package android:name="com.eurobuddha.minimablock" />
+        <package android:name="com.eurobuddha.pandamonium" />
     </queries>
 
     <!-- allowBackup=false is a FUND-SAFETY setting here, not a preference. With the scaffold default

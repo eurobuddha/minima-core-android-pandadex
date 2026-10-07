@@ -3,7 +3,7 @@ package com.eurobuddha.pandadex;
 import android.content.*;
 import android.os.*;
 import org.json.JSONObject;
-import org.minimarex.minimaapi.MinimaAPIListener;
+import com.eurobuddha.minimaapi.MinimaAPIListener;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -11,7 +11,7 @@ import java.util.concurrent.*;
 
 /** Same SDK callback contract as MinimaAPI, with small internal Binder messages. */
 final class NodeTransport {
-    static final int MAX_BYTES = org.minimarex.minimaapi.MinimaAPIResponse.MAX_BYTES;
+    static final int MAX_BYTES = com.eurobuddha.minimaapi.MinimaAPIResponse.MAX_BYTES;
     static final int MAX_PENDING = 128;
     static final long REPLY_RETENTION_MS = 10 * 60_000L + 5_000;
     private Context context;
@@ -37,7 +37,7 @@ final class NodeTransport {
         File file = file(context, id, ".json");
         FutureTask<Void> task = new FutureTask<>(() -> {
             JSONObject reply;
-            try { reply = error == null ? org.minimarex.minimaapi.MinimaAPIResponse.parse(read(file)) : failure(error); }
+            try { reply = error == null ? com.eurobuddha.minimaapi.MinimaAPIResponse.parse(read(file)) : failure(error); }
             catch (Exception bad) { reply = failure("Node transport could not read the reply."); }
             finally { file.delete(); }
             final JSONObject answer = reply;

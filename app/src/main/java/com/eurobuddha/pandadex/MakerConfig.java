@@ -445,7 +445,7 @@ public final class MakerConfig {
         // Same complete-input/NUL check as MinimaAPIResponse, adapted for local arrays too.
         if(raw.indexOf(0)>=0)throw new IllegalArgumentException("Invalid maker JSON");
         org.json.JSONTokener input=new org.json.JSONTokener(raw);Object value=input.nextValue();
-        if(!org.minimarex.minimaapi.MinimaAPIResponse.hasOnlyTrailingWhitespace(input))throw new IllegalArgumentException("Trailing maker JSON");return value;
+        if(!com.eurobuddha.minimaapi.MinimaAPIResponse.hasOnlyTrailingWhitespace(input))throw new IllegalArgumentException("Trailing maker JSON");return value;
     }
     static JSONObject storedObject(String raw) throws org.json.JSONException {
         Object value=storedJson(raw);if(!(value instanceof JSONObject))throw new IllegalArgumentException("Invalid maker object");return (JSONObject)value;
