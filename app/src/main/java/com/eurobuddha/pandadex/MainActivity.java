@@ -440,7 +440,14 @@ public class MainActivity extends AppCompatActivity {
         });
 
         LinearLayout header = new LinearLayout(this);
-        headerChrome = header;
+        LinearLayout headerGroup = new LinearLayout(this);
+        headerGroup.setOrientation(LinearLayout.VERTICAL);
+        headerChrome = headerGroup;
+        headerGroup.addView(header);
+        LinearLayout nodeRow = new LinearLayout(this);
+        nodeRow.setGravity(Gravity.CENTER_VERTICAL);
+        nodeRow.setPadding(pad, 0, pad, Design.dp(this, 6));
+        headerGroup.addView(nodeRow);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(pad, pad, pad, Design.dp(this, 6));
         TextView logo = new TextView(this);
@@ -464,6 +471,9 @@ public class MainActivity extends AppCompatActivity {
         // called Design.toggle, so the light mode was unreachable.
         TextView themePill = Design.pill(this, Design.isDark() ? "☀" : "☾",
                 Design.SURFACE2(), Design.DIM());
+        themePill.setMinWidth(Design.dp(this, 48));
+        themePill.setMinHeight(Design.dp(this, 48));
+        themePill.setContentDescription(Design.isDark() ? "Switch to light theme" : "Switch to dark theme");
         themePill.setOnClickListener(v -> toggleTheme());
         Design.pressable(themePill);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
@@ -472,13 +482,13 @@ public class MainActivity extends AppCompatActivity {
         header.addView(themePill, tp);
 
         pairPill = Design.pill(this, "PAIRING…", Design.SURFACE2(), Design.DIM());
-        header.addView(pairPill);
+        nodeRow.addView(pairPill, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         blockPill = Design.pill(this, "# —", Design.SURFACE2(), Design.DIM());
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         bp.leftMargin = Design.dp(this, 6);
-        header.addView(blockPill, bp);
-        root.addView(header);
+        nodeRow.addView(blockPill, bp);
+        root.addView(headerGroup);
 
         ScrollView scroller = new ScrollView(this);
         content = new FrameLayout(this);
@@ -528,11 +538,22 @@ public class MainActivity extends AppCompatActivity {
             t.setTextSize(10f);
             t.setTypeface(Design.sansBold());
             t.setGravity(Gravity.CENTER);
-            t.setPadding(0, Design.dp(this, 11), 0, Design.dp(this, 11));
+            t.setPadding(Design.dp(this, 12), Design.dp(this, 11), Design.dp(this, 12), Design.dp(this, 11));
+            t.setMinHeight(Design.dp(this, 48));
+            t.setMinWidth(Design.dp(this, 72));
+            t.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
+                    view.post(() -> {
+                        if (view.isAttachedToWindow() && tab == idx)
+                            view.requestRectangleOnScreen(new android.graphics.Rect(0, 0, view.getWidth(), view.getHeight()), true);
+                    }));
             t.setOnClickListener(v -> selectTab(idx));
-            tabBar.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            tabBar.addView(t, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         }
-        root.addView(tabBar);
+        android.widget.HorizontalScrollView tabScroll = new android.widget.HorizontalScrollView(this);
+        tabScroll.setHorizontalScrollBarEnabled(false);
+        tabScroll.setFillViewport(true);
+        tabScroll.addView(tabBar, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(tabScroll);
 
         footer = new TextView(this);
         footer.setText("v" + BuildConfig.VERSION_NAME);
@@ -547,6 +568,11 @@ public class MainActivity extends AppCompatActivity {
 
     private void selectTab(int idx) {
         tab = idx;
+        android.view.View selected = tabBar.getChildAt(idx);
+        selected.post(() -> {
+            if (selected.isAttachedToWindow() && tab == idx)
+                selected.requestRectangleOnScreen(new android.graphics.Rect(0, 0, selected.getWidth(), selected.getHeight()), true);
+        });
         inputFocused = false;
         for (int i = 0; i < tabBar.getChildCount(); i++) {
             TextView t = (TextView) tabBar.getChildAt(i);

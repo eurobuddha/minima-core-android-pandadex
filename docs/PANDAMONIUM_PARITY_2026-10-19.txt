@@ -1,0 +1,22 @@
+PandaDEX standalone repair checkpoint: 0.4.23/code423
+
+Reuses the shell fixes from the Pandamonium integration's
+scripts/adapt-pandamonium-dex-languages.py: separate connection/block status row,
+48dp accessible theme control, and scrollable tabs that reveal the selected tab.
+Standalone IPC, trading, consent and transaction paths retain their existing code.
+
+Review: inspected buildChrome/selectTab/theme repaint and Design dependencies,
+compared the complete changed blocks with the integrated adapter, and reviewed
+this diff. No new correctness finding in this bounded presentation port.
+
+Validation: offline testDebugUnitTest, assembleRelease and lintRelease passed.
+712 existing JVM tests passed; release lint: 0 errors, 73 warnings.
+Actual signed APK package/version/certificate verified. Local candidate:
+dist/pandadex-0.4.23-candidate.apk
+SHA256: 3cf589592c7dc6aa45188ffa746574befed77dc9957bdb63c0240600d09f36c9
+Signing certificate SHA256:
+eca1383c9d27683a281fbe6355356267877dc2dd14d963d7cc289ca0700e517f
+
+This is partial parity. Financial context/evidence/consent comparisons and the
+full feature review remain open. No live funds tested, installation or publication.
+Final Pandamonium 2.0.0 release remains pending the Fold check.
