@@ -10,8 +10,8 @@ android {
         applicationId "com.eurobuddha.pandadex"
         minSdk 28
         targetSdk 35
-        versionCode 423
-        versionName "0.4.23"
+        versionCode 424
+        versionName "0.4.24"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

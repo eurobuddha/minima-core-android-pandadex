@@ -16,6 +16,9 @@ import static org.mockito.Mockito.*;
 public class NodeRoutingTest {
     static final String CLASSIC = MinimaAPIMessages.MINIMA_BASE_CLASS;
     static final String BLOCK = MinimaAPI.BLOCK_PACKAGE;
+    static final String OFFICIAL = MinimaAPIMessages.OFFICIAL_PACKAGE;
+    static final String LEGACY = MinimaAPIMessages.LEGACY_PACKAGE;
+    static final int NODES = MinimaAPIMessages.NODES.length;
 
     @Test public void pandamoniumOnlyReceivesQueuedCommand() throws Exception { route(Collections.singleton(MinimaAPI.PANDAMONIUM_PACKAGE), MinimaAPI.PANDAMONIUM_PACKAGE); }
     @Test public void pandamoniumAndClassicRefuseCommand() throws Exception { route(new HashSet<>(Arrays.asList(CLASSIC, MinimaAPI.PANDAMONIUM_PACKAGE)), null); }
@@ -24,6 +27,9 @@ public class NodeRoutingTest {
     @Test public void classicOnlyReceivesQueuedCommand() throws Exception { route(Collections.singleton(CLASSIC), CLASSIC); }
     @Test public void twoNodesRefuseCommand() throws Exception { route(new HashSet<>(Arrays.asList(CLASSIC, BLOCK)), null); }
     @Test public void noNodesRefuseCommand() throws Exception { route(Collections.emptySet(), null); }
+    @Test public void officialOnlyReceivesQueuedCommand() throws Exception { route(Collections.singleton(OFFICIAL), OFFICIAL); }
+    @Test public void legacyOnlyReceivesQueuedCommand() throws Exception { route(Collections.singleton(LEGACY), LEGACY); }
+    @Test public void officialAndClassicRefuseCommand() throws Exception { route(new HashSet<>(Arrays.asList(CLASSIC, OFFICIAL)), null); }
 
     private void route(Set<String> responders, String expected) throws Exception {
         List<Runnable> timers = new ArrayList<>();
@@ -59,31 +65,34 @@ public class NodeRoutingTest {
             try {
                 List<JSONObject> replies = new ArrayList<>();
                 api.Command("send address:TEST amount:1", replies::add);
-                assertEquals("Only registration may fan out", 3, broadcasts.size());
+                assertEquals("Only registration may fan out", NODES, broadcasts.size());
                 for (Intent request : new ArrayList<>(broadcasts)) {
-                    assertEquals(MinimaAPIMessages.MINIMA_API_REGISTER, request.getAction());
+                    String p = MinimaAPIMessages.prefixOf(request.getPackage());
+                    assertEquals(MinimaAPIMessages.key(p, "REGISTER"), request.getAction());
                     if (responders.contains(request.getPackage())) {
-                        Intent reply = new Intent("reply");
-                        reply.putExtra(MinimaAPIMessages.MINIMA_API_REGISTER_MINIMAID, "0x"+"cd".repeat(16));
-                        reply.putExtra(MinimaAPIMessages.MINIMA_API_RESPONSE_ID, request.getStringExtra(MinimaAPIMessages.MINIMA_API_RESPONSE_ID));
-                        reply.putExtra(MinimaAPIMessages.MINIMA_API_RESPONSE_RESULT, "{\"status\":true}");
+                        Intent reply = new Intent(MinimaAPIMessages.key(p, "RESPONSE"));
+                        reply.putExtra(MinimaAPIMessages.key(p, "REGISTER_MINIMAID"), "0x"+"cd".repeat(16));
+                        reply.putExtra(MinimaAPIMessages.key(p, "RESPONSE_ID"), request.getStringExtra(MinimaAPIMessages.key(p, "RESPONSE_ID")));
+                        reply.putExtra(MinimaAPIMessages.key(p, "RESPONSE_RESULT"), "{\"status\":true}");
                         api.ResponseReceived(reply);
                     }
                 }
                 timers.remove(0).run();
                 if (expected == null) {
-                    assertEquals(3, broadcasts.size());
+                    assertEquals(NODES, broadcasts.size());
                     assertEquals(1, replies.size());
                     assertFalse(replies.get(0).has("status"));
                     assertTrue(replies.get(0).has("transporterror"));
                 } else {
-                    assertEquals(4, broadcasts.size());
-                    assertEquals(expected, broadcasts.get(3).getPackage());
-                    assertEquals(MinimaAPIMessages.MINIMA_API_CMD, broadcasts.get(3).getAction());
+                    String p = MinimaAPIMessages.prefixOf(expected);
+                    assertEquals(NODES + 1, broadcasts.size());
+                    assertEquals(expected, broadcasts.get(NODES).getPackage());
+                    assertEquals(MinimaAPIMessages.key(p, "CMD"), broadcasts.get(NODES).getAction());
+                    assertEquals("send address:TEST amount:1", broadcasts.get(NODES).getStringExtra(MinimaAPIMessages.key(p, "CMD_ACTION")));
                     api.FileCommand("list", "/", null, null, replies::add);
-                    assertEquals(5, broadcasts.size());
-                    assertEquals(expected, broadcasts.get(4).getPackage());
-                    assertEquals(MinimaAPIMessages.MINIMA_API_FILE, broadcasts.get(4).getAction());
+                    assertEquals(NODES + 2, broadcasts.size());
+                    assertEquals(expected, broadcasts.get(NODES + 1).getPackage());
+                    assertEquals(MinimaAPIMessages.key(p, "FILE"), broadcasts.get(NODES + 1).getAction());
                 }
                 int count = broadcasts.size();
                 api.onDestroy();
